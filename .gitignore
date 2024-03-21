@@ -7,6 +7,14 @@
 /Temp/*
 /Tools/*
 
+# Keep any empty directories
+!/Apps/.gitkeep
+!/BuildSpace/.gitkeep
+!/Icons/.gitkeep
+!/Scripts/.gitkeep
+!/Temp/.gitkeep
+!/Tools/.gitkeep
+
 # Exclude any files that might contain sensitive data
 /Recipes/sccmclient.yaml
 /Preferences.yaml
