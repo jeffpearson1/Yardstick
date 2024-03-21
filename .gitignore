@@ -13,3 +13,7 @@
 
 # Exclude miscellaneous editor files
 /.vscode
+/.DS_Store
+
+# Exclude .gitignore
+/.gitignore
