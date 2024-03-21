@@ -1,0 +1,24 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $Content = $(Invoke-WebRequest "https://keepass.info/download.html")
+  $URL = ($Content.links | where href -like "*sourceforge*KeePass-2*Setup.exe*").href
+  $Version = $URL.split("/")[-3]
+  $filename = $URL.Split("/")[-2]
+  $fileDetectionVersion = "$Version.0.0"
+installScript: <filename> /VERYSILENT /NORESTART
+uninstallScript: '"%ProgramFiles(x86)%\KeePass Password Safe 2\unins000.exe" /VERYSILENT /NORESTART'
+version: 
+fileName:
+iconFile: keepass.png
+id: keepass
+displayName: Keepass
+publisher: Dominik Reichl
+description: KeePass is a free open source password manager, which helps you to manage your passwords in a secure way.
+softwareName: "KeePass*"
+detectionType: file
+fileDetectionPath: C:\Program Files\KeePass Password Safe 2
+fileDetectionName: KeePass.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: equal

@@ -1,0 +1,20 @@
+url: 
+urlredirects: false
+preDownloadScript: |
+  $Content = $(Invoke-WebRequest "https://www.thunderbird.net/en-US/" -UseBasicParsing)
+  $url = ($Content.links | where href -match "https:\/\/download\.mozilla\.org\/\?product=thunderbird-[0-9]{1,3}\.[0-9]{1,2}\.{0,1}[0-9]{0,2}-msi-SSL\&os=win64&lang=en-US").href | Get-Unique
+  $version = ($url -split "-")[1]
+  $url = "https://download.mozilla.org/?product=thunderbird-$version-msi-SSL&os=win64&lang=en-US"
+  $filename = "Thunderbird Setup $version.msi"
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+version:
+fileName: 
+iconFile: thunderbird.png
+id: thunderbird
+displayName: Mozilla Thunderbird
+publisher: "Mozilla"
+description: "Thunderbird is a free email application that's easy to set up and customize - and it's loaded with great features!"
+detectionType: registry
+registryDetectionMethod: exists
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Thunderbird <version> (x64 en-US)'

@@ -1,0 +1,21 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $Products = Invoke-RestMethod -Method Get -Uri https://api.articulate.com/product-artifacts -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36" -Headers @{"accept"="application/vnd.articulate+json; version=2"}
+  $url = ($Products.products | where name -eq "Articulate 360")[0].package.url
+  $version = ($products.products | where name -eq "Articulate 360")[0].version
+installScript: <filename> /s
+uninstallScript: \"C:\ProgramData\Package Cache\{a9ce4422-1e6f-448a-aeba-2f1cb5454478}\Articulate.360.Bundle.exe\" /uninstall /quiet
+version:
+fileName: articulate-360.exe
+iconFile: articulate360.jpg
+id: articulate360
+displayName: Articulate 360
+publisher: Articulate
+description: Articulate 360 is a subscription that has everything e-learning pros need for course development. It includes award-winning authoring apps Storyline 360 and Rise 360, 5+ million course assets, an easy-to-use project review app, and live and on-demand training webinars with industry experts.
+softwareName: "Articulate 360"
+detectionType: file
+fileDetectionPath: 'C:\Program Files (x86)\Articulate\360\Desktop Application'
+fileDetectionName: Articulate 360 Desktop App.exe
+fileDetectionMethod: exists
+

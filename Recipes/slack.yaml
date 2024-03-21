@@ -1,0 +1,16 @@
+url: https://slack.com/ssb/download-win64-msi
+urlredirects: true
+preDownloadScript: |
+  $url -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3}"
+  $version = $matches[0]
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+version:
+fileName: SlackSetup.msi
+iconFile: slack.png
+id: slack
+displayName: Slack
+publisher: Slack
+description: Connect the right people, find anything you need and automate the rest. That's work in Slack, your productivity platform.
+softwareName: "Slack*"
+detectionType: msi

@@ -1,0 +1,28 @@
+url: https://dl.google.com/drive-file-stream/GoogleDriveSetup.exe
+urlredirects: false
+preDownloadScript: |
+  $VURL = "https://support.google.com/a/answer/7577057"
+  $Content = Invoke-WebRequest -Uri $VURL
+  $Content.content -match "<p><em><strong>Windows and macOS:</strong> Version [0-9]{2,3}\.[0-9]{1,4}</em></p>" | Out-Null
+  $VString = $matches[0]
+  $VString -match "[0-9]{2,3}\.[0-9]{1,4}" | Out-Null
+  $Version = $matches[0]
+postDownloadScript:
+  $fileDetectionVersion = (Get-Item $filename).VersionInfo.FileVersion;
+  $fileDetectionPath = "C:\Program Files\Google\Drive File Stream\$fileDetectionVersion"
+installScript: <filename> --silent --skip_launch_new --gsuite_shortcuts=false
+uninstallScript: '"C:\Program Files\Google\Drive File Stream\<version>\uninstall.exe" --silent'
+version:
+fileName: GoogleDriveSetup.exe
+iconFile: googledrive.png
+id: GoogleDrive
+displayName: Google Drive for Desktop
+publisher: Google
+description: Google Drive for Desktop lets you sync your Google Drive files to your computer so that you can work with files offline and in the cloud.
+softwareName: Google Drive
+detectionType: file
+fileDetectionPath: 
+fileDetectionName: GoogleDriveFS.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: equal

@@ -1,0 +1,18 @@
+url: 
+urlredirects: false
+preDownloadScript: |
+  $URL = "https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html"
+  $Content = Invoke-WebRequest -Uri $URL
+  $URL = ($Content.links | Where-Object href -match "putty-64bit-[0-9]{1}\.[0-9]{1,3}-installer.msi$").href
+  $filename = $URL.split("/")[-1]
+  $Version = $filename.split("-")[2]
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+version:
+fileName: 
+iconFile: putty.png
+id: putty
+displayName: PuTTY
+publisher: The PuTTY Project
+description: PuTTY is a free and open-source terminal emulator, serial console and network file transfer application. It supports several network protocols, including SCP, SSH, Telnet, rlogin, and raw socket connection. It can also connect to a serial port.
+detectionType: msi

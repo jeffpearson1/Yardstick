@@ -1,0 +1,22 @@
+url: https://posit.co/download/rstudio-desktop/
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL
+  $URL = ($Content.links | Where-Object href -match 'RSTUDIO.+\.EXE').href | Get-Unique
+  $filename = $URL.split("/")[-1]
+  $filename -match("[0-9]{4}\.[0-9]{1,4}\.[0-9]{1,2}-[0-9]{2,4}")
+  $version = $matches[0].replace("-", "+")
+  $parts = $($version.split("+")[0]).split(".")
+  $fileDetectionVersion = "$($parts[0]).$($parts[1].trimstart('0')).$($parts[2]).0"
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\RStudio\Uninstall.exe" /S'
+iconFile: rstudio.png
+id: rstudio
+displayName: RStudio
+publisher: Posit
+description: RStudio is an integrated development environment (IDE) for R.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\RStudio'
+fileDetectionName: rstudio.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal

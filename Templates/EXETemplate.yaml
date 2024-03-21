@@ -1,0 +1,21 @@
+url:
+urlredirects: false
+preDownloadScript:
+installScript:
+uninstallScript:
+version:
+fileName:
+iconFile: icon.png
+id:
+displayName: 
+publisher: 
+description: 
+detectionType: file
+fileDetectionPath: 
+fileDetectionName: 
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: equal
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

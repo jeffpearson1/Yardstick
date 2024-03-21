@@ -1,0 +1,16 @@
+url: https://zoom.us/client/latest/ZoomRoomsInstaller.msi?archType=x64
+urlredirects: true
+preDownloadScript: |
+  $version = ($url -split "/")[4]
+  $fileDetectionVersion = $version
+installScript: msiexec /i <filename> /quiet Silent=true ACCEPTGDPR=true /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+fileName: ZoomRoomsInstaller.msi
+iconFile: ZoomRooms.jpg
+id: ZoomRooms
+displayName: Zoom Rooms
+publisher: Zoom Video Communications, Inc.
+description: Video Conferencing Application. Install the Zoom Rooms application to setup your conference room for one-touch meeting and calendar integration. Account Required.
+fileType: msi
+softwareName: "Zoom Rooms*"
+detectionType: msi

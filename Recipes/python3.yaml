@@ -1,0 +1,27 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $html = $(Invoke-WebRequest "https://www.python.org/downloads/windows/").Content
+  $html -match "Latest Python 3 Release - Python 3\.[0-9]{1,3}\.[0-9]{1,3}"
+  $version = $($($matches[0] -split "-")[1]).Trim(" Python")
+  $url = "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
+  $fileName = "python-$version-amd64.exe"
+  $version -match "[0-9]{1,3}\.[0-9]{1,3}"
+  $fileDetectionPath = "C:\Program Files\Python$($matches[0] -replace `"\.`")"
+installScript:
+  '<filename> /quiet InstallAllUsers=1 PrependPath=1 Shortcuts=0'
+uninstallScript:
+  '<filename> /quiet /uninstall'
+version:
+fileName:
+iconFile: python3.png
+id: python3
+displayName: Python 3
+publisher: Python Software Foundation
+description: Python is a programming language that lets you work quickly and integrate systems effectively.
+fileType: EXE
+softwareName: "Python 3*"
+detectionType: file
+fileDetectionPath: 
+fileDetectionName: 'python.exe'
+fileDetectionMethod: exists

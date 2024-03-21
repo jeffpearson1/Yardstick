@@ -1,0 +1,26 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $url = "https://daxstudio.org/"
+  $Content = Invoke-WebRequest $url
+  $url = ($Content.links | where href -match "_setup\.exe").href
+  $filename = $url.split("/")[-1]
+  $version = $url.split("/")[-2].split("v")[1]
+postDownloadScript:
+  $fileDetectionVersion = [String](Get-Item $filename).VersionInfo.FileVersion.Trim()
+installScript: <filename> /VERYSILENT /NORESTART /ALLUSERS
+uninstallScript: 'C:\Program Files\DAX Studio\unins000.exe /VERYSILENT /NORESTART'
+version:
+fileName:
+iconFile: daxstudio.png
+id: daxstudio
+displayName: Dax Studio
+publisher: Dax Studio
+description: Dax Studio is a tool to write, execute, and analyze DAX queries in Power BI Designer, Power Pivot for Excel, and Analysis Services Tabular.
+softwareName: "Dax Studio*"
+detectionType: file
+fileDetectionPath: 'C:\Program Files\DAX Studio'
+fileDetectionName: 'DAX Studio.exe'
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: equal

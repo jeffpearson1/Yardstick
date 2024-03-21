@@ -1,0 +1,27 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $URL = "https://github.com/git-for-windows/git/releases"
+  $Content = Invoke-WebRequest $url
+  $url = "https://github.com" + ($Content.links | where href -match "-64-bit\.exe")[0].href
+  $filename = $url.Split("/")[-1]
+  $version = $filename.Split("-")[1].trim()
+postDownloadScript:
+  $fileDetectionVersion = ((Get-Item $filename).VersionInfo.FileVersion).trim()
+installScript: <filename> /VERYSILENT /NORESTART
+uninstallScript: 'C:\Program Files\Git\unins000.exe /VERYSILENT /NORESTART'
+version:
+fileName:
+iconFile: git.png
+id: git
+displayName: Git for Windows
+publisher: Git
+description: Git for Windows is a set of tools that allow you to use Git on Windows.
+softwareName: "Git for Windows*"
+detectionType: file
+fileDetectionPath: 'C:\Program Files\Git\bin'
+fileDetectionName: git.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: equal
+

@@ -1,0 +1,20 @@
+url: 
+urlRedirects: false
+preDownloadScript: |
+  $html = $(Invoke-WebRequest "https://www.7-zip.org/download.html").content
+  $html -match "a\/7z[0-9]{1,6}-x64\.msi"
+  $url = "https://www.7-zip.org/$($matches[0])"
+  $fileName = $($matches[0] -split "/")[1]
+  $html -match "[0-9]{2}\.[0-9]{2}"
+  $version = $matches[0]
+  $fileDetectionVersion = $version
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: 7zip.png
+id: 7zip
+displayName: 7-Zip
+publisher: Igor Pavlov
+description: An open source file archiver/unarchiver
+fileType: MSI
+softwareName: "7-Zip*"
+detectionType: msi

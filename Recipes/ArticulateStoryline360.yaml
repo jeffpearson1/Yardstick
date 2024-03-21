@@ -1,0 +1,23 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $Products = Invoke-RestMethod -Method Get -Uri https://api.articulate.com/product-artifacts -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36" -Headers @{"accept"="application/vnd.articulate+json; version=2"}
+  $url = ($Products.products | where name -eq "Storyline 360")[0].package.url
+  $filename = ($url -split "/")[-1]
+  $version = ($products.products | where name -eq "Storyline 360")[0].version
+  $fileDetectionVersion = $version
+installScript: <filename> /s
+uninstallScript: <filename> /qn /norestart
+version:
+fileName: 
+iconFile: articulatestoryline360.png
+id: articulatestoryline360
+displayName: Articulate Storyline 360
+publisher: Articulate
+description: Articulate Storyline 360 is a powerful e-learning authoring tool that lets you create engaging, interactive courses. It's simple enough for beginners, yet powerful enough for experts.
+softwareName: "Articulate Storyline 360"
+detectionType: file
+fileDetectionPath: 'C:\Program Files (x86)\Articulate\360\Storyline'
+fileDetectionName: Storyline.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal

@@ -1,0 +1,16 @@
+url: 
+urlredirects: false
+preDownloadScript:
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+version:
+fileName: file.msi
+iconFile: 
+id: 
+displayName: 
+publisher: 
+description:
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

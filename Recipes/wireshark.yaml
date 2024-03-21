@@ -1,0 +1,21 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $URL = "https://www.wireshark.org/download.html"
+  $Content = Invoke-WebRequest $URL
+  $url = ($Content.links | where href -match "Wireshark-win64.*[0-9]\.exe")[0].href
+  $filename = $url.split("/")[-1]
+  $version = $filename.split("-")[-1].trim(".exe")
+  $fileDetectionVersion = "$version.0"
+installScript: <filename> /S
+uninstallScript: '"C:\Program Files\Wireshark\uninstall-wireshark.exe" /S'
+iconFile: wireshark.png
+id: wireshark
+displayName: Wireshark
+publisher: Wireshark Foundation
+description: Wireshark is a free and open-source packet analyzer. It is used for network troubleshooting, analysis, software and communications protocol development, and education. 
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Wireshark'
+fileDetectionName: Wireshark.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal

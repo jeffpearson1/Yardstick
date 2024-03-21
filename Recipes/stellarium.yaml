@@ -1,0 +1,20 @@
+url: https://stellarium.org
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL
+  $URL = ($Content.links | where href -match "qt6-win64").href
+  $filename = $url.split("/")[-1]
+  $version = $url.split("/")[-2].trim("v")
+  $fileDetectionVersion = "$version.0.0"
+installScript: <filename> /VERYSILENT /NORESTART
+uninstallScript: '"%ProgramFiles(x86)%\Stellarium\unins000.exe" /VERYSILENT /NORESTART'
+iconFile: stellarium.png
+id: stellarium
+displayName: Stellarium
+publisher: Stellarium Team
+description: Stellarium is a free and open-source planetarium software that shows a realistic sky in 3D.
+detectionType: file
+fileDetectionPath: '%ProgramFiles(x86)%\Stellarium'
+fileDetectionName: stellarium.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal

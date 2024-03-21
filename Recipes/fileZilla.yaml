@@ -1,0 +1,35 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $URL = "https://filezilla-project.org/download.php?show_all=1"
+  $Content = Invoke-WebRequest $URL -UseBasicParsing -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" -SessionVariable Session
+  $URL = ($Content.Links | Where-Object href -match '^https.+win64-setup\.exe').href
+  $URL -match "FileZilla_[0-9]{1,2}.[0-9]{1,3}.[0-9]{1,3}_win64-setup.exe"
+  $filename = $matches[0]
+  $version = $filename.Split("_")[1]
+  $registryDetectionValue = $version
+downloadScript: |
+  $Driver = Start-SeFirefox -Headless -DefaultDownloadPath "$buildSpace\$id\$version"
+  $URL = "https://filezilla-project.org/download.php?show_all=1"
+  Enter-SeUrl $URL -Driver $Driver
+  $Element = Find-SeElement -Driver $Driver -LinkText "FileZilla_$($version)_win64-setup.exe"
+  Invoke-SeClick -Element $Element
+  $i = 0
+  $timeout = 300
+  while ((Get-Item .\FileZilla_$($version)_win64-setup.exe).Length -le 0) { if ($i -ge $timeout) { Write-Error "Download Failed"; break; } Start-Sleep 1; $i++; }
+  Enter-SeUrl "about:downloads" -Driver $Driver
+  $Driver.Close()
+installScript: '"<filename>" /S /user=all'
+uninstallScript: '"%ProgramFiles(x86)%\FileZilla FTP Client\uninstall.exe" /S'
+version:
+fileName:
+iconFile: filezilla.png
+id: FileZilla
+displayName: FileZilla
+publisher: Tim Kosse
+description: FileZilla is a free software, cross-platform FTP application, consisting of FileZilla Client and FileZilla Server. Both server and client support FTP and FTPS, while the client can in addition connect to SFTP servers.
+detectionType: registry
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\FileZilla Client'
+registryDetectionMethod: version
+registryDetectionValueName: Version
+registryDetectionOperator: equal

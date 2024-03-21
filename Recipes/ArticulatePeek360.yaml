@@ -1,0 +1,22 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $Products = Invoke-RestMethod -Method Get -Uri https://api.articulate.com/product-artifacts -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36" -Headers @{"accept"="application/vnd.articulate+json; version=2"}
+  $url = ($Products.products | where name -eq "Peek 360")[0].package.url
+  $version = ($products.products | where name -eq "Peek 360")[0].version
+  $filename = $url.Split("/")[-1]
+installScript: <filename> /s
+uninstallScript: <filename> /qn /norestart
+version:
+fileName: 
+iconFile: peek360.png
+id: peek360
+displayName: Articulate Peek 360
+publisher: Articulate
+description: Peek 360 is a screencasting tool that lets you record screencasts and webcam videos, then share them with a link.
+softwareName: "*Peek 360*"
+detectionType: file
+fileDetectionPath: 'C:\Program Files (x86)\Articulate\360\Peek'
+fileDetectionName: Peek.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal

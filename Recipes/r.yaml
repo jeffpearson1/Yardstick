@@ -1,0 +1,20 @@
+url: $URL/release.html
+urlredirects: false
+preDownloadScript: |
+  $URL = "https://ftp.osuosl.org/pub/cran/bin/windows/base/"
+  $Content = Invoke-WebRequest -Uri $URL
+  $Content.content -match "R-([0-9]{1,2}\.){2}[0-9]{1,2}-win\.exe"
+  $filename = $matches[0]
+  $version = $filename.split("-")[1]
+  $url = "https://ftp.osuosl.org/pub/cran/bin/windows/base/$filename"
+  $fileDetectionPath = "C:\Program Files\R\R-$version\bin"
+  $uninstallScript = '"%ProgramFiles%\R\R-$version\unins000.exe" /VERYSILENT /NORESTART'
+installScript: <filename> /VERYSILENT /NORESTART
+iconFile: r.png
+id: r
+displayName: R for Windows
+publisher: R Core Team
+description: R is a free software environment for statistical computing and graphics.
+detectionType: file
+fileDetectionName: R.exe
+fileDetectionMethod: exists

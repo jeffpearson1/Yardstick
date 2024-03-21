@@ -1,0 +1,18 @@
+url: https://dl.google.com/tag/s/dl/chrome/install/googlechromestandaloneenterprise64.msi
+urlredirects: false
+preDownloadScript: |
+  $VURL = "https://versionhistory.googleapis.com/v1/chrome/platforms/win64/channels/stable/versions/all/releases?filter=endtime=none&order_by=version%20desc"
+  $Content = Invoke-WebRequest $VURL
+  $JSON = $Content.content | ConvertFrom-JSON
+  $Version = $JSON.releases[0].version
+  $fileDetectionVersion = $Version
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+fileName: googlechromestandaloneenterprise64.msi
+iconFile: GoogleChrome.png
+id: GoogleChrome
+displayName: Google Chrome
+publisher: Google
+description: A web browser by Google
+fileType: msi
+detectionType: msi
