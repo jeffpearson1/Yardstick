@@ -1,0 +1,16 @@
+tenantId: 
+clientSecret: 
+clientId: 
+defaultNumVersionsToKeep: 3
+defaultOwner: Owner
+defaultMaximumInstallationTimeInMinutes: 60
+defaultMinOSVersion: W10_20H2
+defaultInstallExperience: system
+defaultRestartBehavior: suppress
+defaultAllowUserUninstall: true
+defaultIs32BitApp: false
+defaultDetectionScriptFileExtension: ps1
+defaultDetectionScriptRunAs32Bit: false
+defaultDetectionScriptEnforceSignatureCheck: false
+defaultScopeTags:
+  - Default
