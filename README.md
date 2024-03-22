@@ -35,7 +35,7 @@ Most of this file should be fairly self-explanatory. The TenantID, ClientID, and
 ### Recipe Tips and Tricks
 * Yardstick currently expects all recipes (and configuration files) to use the full .yaml extension. Files that use .yml will not work yet.
 * Use the defaults (configurable in preferences.yaml) for as much stuff as you can. All the available default settings are in the example preferences.yaml file.
-* The installScript, uninstallScript, and registryDetectionKey have an extra function - if you use <version>, <filename>, or <productcode> in them, it will be replaced with the appropriate value after all the parameters and defaults are imported, processed, and the preDownloadScript has run.
+* The installScript, uninstallScript, and registryDetectionKey have an extra function - if you use ```<version>```, ```<filename>```, or ```<productcode>``` in them, it will be replaced with the appropriate value after all the parameters and defaults are imported, processed, and the preDownloadScript has run.
 * You can use recipes for locally hosted files as well - even if they are in a file share. Just define a custom downloadScript to make sure that file retrieval is handled correctly.
 * Yardstick is compatible with Selenium - the fileZilla.yaml recipe is a basic example of what can be done with this. Make sure that Selenium and any drivers/browsers you need are installed first.
 
