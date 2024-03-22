@@ -1,3 +1,4 @@
+# CAUTION - This recipe will not work correctly without Selenium, Mozilla Firefox, and the appropriate configuration to make PowerShell Selenium work.
 url:
 urlredirects: false
 preDownloadScript: |

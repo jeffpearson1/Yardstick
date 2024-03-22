@@ -1,7 +1,6 @@
 param (
     [Alias("AppId")]
     [String] $ApplicationId = "None",
-    [Switch] $Publish,
     [Switch] $Force,
 	[Switch] $All,
     [Switch] $NoDelete,
@@ -16,7 +15,37 @@ Import-Module powershell-yaml
 Import-Module IntuneWin32App
 Import-Module Selenium
 
+# Constants
+$LOG_LOCATION = "$PSScriptRoot"
+$LOG_FILE = "YLog.log"
+
 # Useful Functions
+
+# Write-Log
+# Prints both to the console and also to the log
+# Param: [String] $ContentToWriteToLog, [Switch] $Init (Erase log and print big timestamp for new script run)
+function Write-Log {
+    param(
+        [String]$Content,
+        [Switch]$Init
+    )
+    Push-Location $LOG_LOCATION
+    if($Init) {
+        if (Test-Path $LOG_LOCATION\$LOG_FILE) {
+            Remove-Item $LOG_LOCATION\$LOG_FILE -Force
+        }
+        Write-Output "#######################################################" | Out-File $LOG_FILE
+        Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LOG_FILE -Append
+        Write-Output "#######################################################" | Out-File $LOG_FILE -Append
+    }
+    if ($Content) {
+        $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
+        Write-Output $Content | Out-File $LOG_FILE -Append
+        Write-Output $Content
+    }
+    Pop-Location
+}
+
 
 # ArrayToString
 # Converts an array to a string
@@ -35,6 +64,8 @@ function ArrayToString() {
 
 # Get-RedirectedUrl
 # Follows redirects and returns the actual URL of a resource
+# Param: [String] URL
+# Return: [String] The last URL that is linked to that does not redirect
 function Get-RedirectedUrl() {
     param (
         [Parameter(Mandatory=$true)]
@@ -54,6 +85,8 @@ function Get-RedirectedUrl() {
 
 # Get-MsiProductCode
 # Returns the product code of an MSI file in the current directory only
+# Param: [String] $filePath
+# Return: [String] The MSI Product Code
 function Get-MsiProductCode() {
     param (
         [Parameter(Mandatory=$true)]
@@ -73,28 +106,30 @@ function Get-MsiProductCode() {
 
 # Connect-AutoMSIntuneGraph
 # Automatically connects to the Microsoft Graph API using the Intune module
+# Param: None
+# Returns: None
 function Connect-AutoMSIntuneGraph() {
     # Check if the current token is invalid
     if (-not $Global:Token) {
-        Write-Host "Getting an Intune Graph Client APItoken..."
+        Write-Log "Getting an Intune Graph Client APItoken..."
         $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
     }
     elseif ($Global:Token.ExpiresOn.ToLocalTime() -lt (Get-Date)) {
         # If not, get a new token
-        Write-Host "Token is expired. Refreshing token..."
+        Write-Log "Token is expired. Refreshing token..."
         $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
-        Write-Host "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
+        Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
     }
     elseif ($Global:Token.ExpiresOn.AddMinutes(-20).ToLocalTime() -lt (Get-Date)) {
         # For whatever reason, this API stops working 10 minutes before a token refresh
-        Write-Host "Token expires soon - Refreshing token..."
+        Write-Log "Token expires soon - Refreshing token..."
         # Required to force a refresh
         Clear-MsalTokenCache
         $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
-        Write-Host "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
+        Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
     }
     else {
-        Write-Host "Token is still valid. Skipping token refresh."
+        Write-Log "Token is still valid. Skipping token refresh."
     } 
 }
 
@@ -102,6 +137,7 @@ function Connect-AutoMSIntuneGraph() {
 # Gets all assignments for an application and adds them to a target (To)
 # Removes successfully moved assignments from the (From) application
 # Param: [Application]$From, [Application]$To
+# Return: None
 function Move-Assignments {
     param(
         [Parameter(Mandatory, Position=0)]
@@ -114,42 +150,79 @@ function Move-Assignments {
     $FromRequired = ($FromAssignments | Where-Object intent -eq "required").groupId
     if ($FromAvailable) {
         foreach ($groupId in $FromAvailable) {
-            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
-            if ($?) {
-                Write-Host "Removing $groupID available assignment from $($From.id)"
-                Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
+            $maxRetries = 3
+            $try = 0
+            $successfullyAdded = $false
+            while (!$successfullyAdded -and ($try -lt $maxRetries)) {
+                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
+                # Check that it worked
+                $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
+                if($AssignedGroups | Where-Object GroupID -eq $groupID) {
+                    $successfullyAdded = $true
+                    Write-Log "$GroupID (Available) added successfully to $($To.id)"
+                    Write-Log "Removing $groupID available assignment from $($From.id)"
+                    Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
+                }
+                else {
+                    # Wait 1 second and retry
+                    Start-Sleep -Seconds 1
+                }
             }
-            else {
-                Write-Host "Error adding available app assignment to $($To.DisplayName) for group $groupID"
+            
+            if (!$successfullyAdded) {
+                Write-Log "ERROR: Cannot add available app assignment to $($To.id) for group $groupID. Will not remove original assignment."
             }
         }
         
     }
     if ($FromRequired) {
         foreach ($groupId in $FromRequired) {
-            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" | Out-Null
-            if ($?) {
-                Write-Host "Removing $groupID required assignment from $($From.id)"
-                Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
+            $maxRetries = 3
+            $try = 0
+            $successfullyAdded = $false
+            while (!$successfullyAdded -and ($try -lt $maxRetries)) {
+                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
+                # Check that it worked
+                $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
+                if($AssignedGroups | Where-Object GroupID -eq $groupID) {
+                    $successfullyAdded = $true
+                    Write-Log "$GroupID (Required) added successfully to $($To.id)"
+                    Write-Log "Removing $groupID required assignment from $($From.id)"
+                    Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
+                }
+                else {
+                    # Wait 1 second and retry
+                    Start-Sleep -Seconds 1
+                }
             }
-            else {
-                Write-Host "Error adding available app assignment to $($To.DisplayName) for group $groupID"
+            
+            if (!$successfullyAdded) {
+                Write-Log "ERROR: Cannot add required app assignment to $($To.id) for group $groupID. Will not remove original assignment."
             }
         }
     }
 }
 
 
+# Get-SameAppAllVersions
+# Returns all versions of an app
+# Accounts for edge cases where an application name might be similar to others, i.e. Mozilla Firefox vs. Mozilla Firefox ESR
+# Param: [String] DisplayName
+# Return: @(PSCustomObject) 
 function Get-SameAppAllVersions($DisplayName) {
     $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName*"
     return ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (*")})
 }
 
+
 # So we can pop at the end
 Push-Location
 
+# Initialize the log file
+Write-Log -Init
+
 if ("None" -eq $ApplicationId -and $All -eq $false) {
-    Write-Host "Please provide parameter -ApplicationId"
+    Write-Log "Please provide parameter -ApplicationId"
     exit 1
 }
 $applications = [System.Collections.ArrayList]::new()
@@ -172,7 +245,7 @@ $clientSecret = $prefs.clientSecret
 
 if ($ApplicationId -ne "None") {
     if (-not (Test-Path "$autoPackagerRecipes\$ApplicationId.yaml")) {
-        Write-Host "Application $ApplicationId not found in $autoPackagerRecipes"
+        Write-Log "Application $ApplicationId not found in $autoPackagerRecipes"
         exit 1
     }
 }
@@ -192,15 +265,13 @@ else {
 
 
 foreach ($ApplicationId in $Applications) {
-    Write-Host "Starting update for $ApplicationId..."
+    Write-Log "Starting update for $ApplicationId..."
     # Refresh token if necessary
     Connect-AutoMSIntuneGraph
     
     # Clear the temp file
-    if (Test-Path "$tempDir") {
-        Remove-Item "$tempDir" -Recurse
-    }
-    New-Item -ItemType Directory -Path "$tempDir" | Out-Null
+    Write-Log "Clearing the temp directory..."
+    Get-ChildItem $TempDir -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
     # Open the YAML file and collect all necessary attributes
     $parameters = Get-Content "$autoPackagerRecipes\$ApplicationId.yaml" | ConvertFrom-Yaml
@@ -255,7 +326,7 @@ foreach ($ApplicationId in $Applications) {
         $CurrentApps = Get-SameAppAllVersions $DisplayName | Sort-Object displayVersion -descending
         for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
             if ($CurrentApps[$i].DisplayName -ne "$displayName (N-$i)") {
-                Write-Host "Setting name for $displayName (N-$i)"
+                Write-Log "Setting name for $displayName (N-$i)"
                 Set-IntuneWin32App -Id $CurrentApps[$i].Id -DisplayName "$displayName (N-$i)"
             }
         }
@@ -264,7 +335,7 @@ foreach ($ApplicationId in $Applications) {
 
     # Run the pre-download script
     if ($preDownloadScript) {
-        Write-Host "Running pre-download script..."
+        Write-Log "Running pre-download script..."
         Invoke-Expression $preDownloadScript | Out-Null
 
         if (!$?) {
@@ -272,20 +343,20 @@ foreach ($ApplicationId in $Applications) {
                 continue
         }
         else {
-            Write-Host "Pre-download script ran successfully."
+            Write-Log "Pre-download script ran successfully."
         }
     }
 
 
     # Check if there is an up-to-date version in the repo already
-    Write-Host "Checking if update is needed for $displayName $version"
+    Write-Log "Checking if $displayName $version is a new version..."
     $ExistingVersions = Get-SameAppAllVersions $DisplayName
     if ($ExistingVersions.displayVersion -contains $version) {
         if ($force) {
-            Write-Host "Package up-to-date. -Force applied. Recreating package."
+            Write-Log "Package up-to-date. -Force applied. Recreating package."
         }
         else {
-            Write-Host "$id already up-to-date!"
+            Write-Log "$id already up-to-date!"
             continue
         }
     }
@@ -296,14 +367,14 @@ foreach ($ApplicationId in $Applications) {
         if (-not (Test-Path $buildSpace\Old)) {
             New-Item -Path $buildSpace -ItemType Directory -Name "Old"
         }
-        Write-Host "Removing old buildspace..."
+        Write-Log "Removing old buildspace..."
         Move-Item -Path $buildSpace\$id $buildSpace\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
     }
     if (Test-Path $scriptSpace\$id) {
         if (-not (Test-Path $scriptSpace\Old)) {
             New-Item -Path $scriptSpace -ItemType Directory -Name "Old"
         }
-        Write-Host "Removing old script space..."
+        Write-Log "Removing old script space..."
         Move-Item -Path $scriptSpace\$id $scriptSpace\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
     }
 
@@ -312,8 +383,8 @@ foreach ($ApplicationId in $Applications) {
     Set-Location $buildSpace\$id\$version
 
     # Download the new installer
-    Write-Host "Starting download..."
-    Write-Host "URL: $url"
+    Write-Log "Starting download..."
+    Write-Log "URL: $url"
     if (!$url) {
         Write-Error "URL is empty - cannot continue."
         break
@@ -325,7 +396,7 @@ foreach ($ApplicationId in $Applications) {
             break
         }
         else {
-            Write-Host "Download script ran successfully."
+            Write-Log "Download script ran successfully."
         }
     }
     else {
@@ -335,14 +406,14 @@ foreach ($ApplicationId in $Applications) {
 
     # Run the post-download script
     if ($postDownloadScript) {
-        Write-Host "Running post download script..."
+        Write-Log "Running post download script..."
         Invoke-Expression $postDownloadScript | Out-Null
         if (!$?) {
                 Write-Error "Error while running post download PowerShell script"
                 break
         }
         else {
-            Write-Host "Post download script ran successfully."
+            Write-Log "Post download script ran successfully."
         }
     }
     
@@ -354,7 +425,7 @@ foreach ($ApplicationId in $Applications) {
     # Replace the <productcode> placeholder with the actual product code
     if ($filename -match "\.msi$") {
         $ProductCode = Get-MSIProductCode $buildSpace\$id\$version\$fileName
-        Write-Host "Product Code: $ProductCode"
+        Write-Log "Product Code: $ProductCode"
         $installScript = $installScript.replace("<productcode>", $ProductCode)
         $uninstallScript = $uninstallScript.replace("<productcode>", $ProductCode)
     }
@@ -364,12 +435,16 @@ foreach ($ApplicationId in $Applications) {
     $uninstallScript = $uninstallScript.replace("<version>", $version)  
     
     if ($registryDetectionKey) {
+        $registryDetectionKey = $registryDetectionKey.replace("<filename>", $fileName)
         $registryDetectionKey = $registryDetectionKey.replace("<version>", $version)
+        if ($ProductCode) {
+            $registryDetectionKey = $registryDetectionKey.replace("<productcode>", $productCode)
+        }
     }
 
     # Generate the .intunewin file
     Set-Location $PSScriptRoot
-    Write-Host "Generating .intunewin file..."
+    Write-Log "Generating .intunewin file..."
     $app = New-IntuneWin32AppPackage -SourceFolder $buildSpace\$id\$version -SetupFile $filename -OutputFolder $publishedApps -Force
 
     # Upload .intunewin file to Intune
@@ -437,11 +512,7 @@ foreach ($ApplicationId in $Applications) {
     
 
     # Create the Intune App
-    Write-Host "Uploading $displayName to Intune..."
-    # # For debugging purposes, set a custom version string to simulate lots of old versions
-    # if ($null -ne $SimulateVersion) {
-    #     $Version = $SimulateVersion
-    # }
+    Write-Log "Uploading $displayName to Intune..."
     if ($allowUserUninstall) {
         $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $DisplayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallScript -UninstallCommandLine $UninstallScript -Icon $Icon -AppVersion "$Version" -ScopeTagName $ScopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes -AllowAvailableUninstall
     }
@@ -460,18 +531,18 @@ foreach ($ApplicationId in $Applications) {
     $ToRemove = $ExistingVersions | where-object displayVersion -eq $version
     if ($ToRemove) {
         # Remove conflicting versions
-        Write-Host "Removing conflicting versions"
+        Write-Log "Removing conflicting versions"
         $CurrentApp = Get-IntuneWin32App -Id $Win32App.id
         foreach ($removeapp in $ToRemove) {
-            Write-Host "Moving assignments before removal..."
+            Write-Log "Moving assignments before removal..."
             Move-Assignments -From $removeapp -To $CurrentApp
-            Write-Host "Removing App with ID $($removeapp.id)"
+            Write-Log "Removing App with ID $($removeapp.id)"
             Remove-IntuneWin32App -Id $removeapp.id
         }
     }
 
     # Define the current version, the version that is one older but shares the same name, and all the ones older than that
-    Write-Host "Updating local application manifest..."
+    Write-Log "Updating local application manifest..."
     $AllMatchingApps = Get-SameAppAllVersions $DisplayName | Sort-Object DisplayVersion -Descending
     $CurrentApp = $AllMatchingApps | Where-Object id -eq $Win32App.Id
     $AllOldApps = $AllMatchingApps | Where-Object id -ne $CurrentApp.Id
@@ -482,7 +553,7 @@ foreach ($ApplicationId in $Applications) {
 
     # Start with the N-1 app first and move all its deployments to the newest one
     if ($NMinusOneApp) {
-        Write-Host "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
+        Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
         Move-Assignments -From $NMinusOneApp -To $CurrentApp
         for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
             # Move all the deployments up one number
@@ -499,21 +570,30 @@ foreach ($ApplicationId in $Applications) {
     for ($i = 1; $i -lt $AllMatchingApps.count; $i++) {
         Set-IntuneWin32App -Id $AllMatchingApps[$i].Id -DisplayName "$($displayName) (N-$i)"
         if ($?) {
-            Write-Host "Successfully set Application Name to $($displayName) (N-$i)"
+            Write-Log "Successfully set Application Name to $($displayName) (N-$i)"
         }
         else {
-            Write-Host "ERROR: Failed to update display name to $($displayName) (N-$i)"
+            Write-Log "ERROR: Failed to update display name to $($displayName) (N-$i)"
         }
     }
     
     # Remove all the old versions 
     if (!$NoDelete) {
         for ($i = $numVersionsToKeep; $i -lt $AllMatchingApps.count; $i++) {
-            Write-Host "Removing old app with id $($AllMatchingApps[$i].id)"
+            Write-Log "Removing old app with id $($AllMatchingApps[$i].id)"
             Remove-IntuneWin32App -Id $AllMatchingApps[$i].id
         }
     }
-    Write-Host "Updates complete for $displayName"
+    Write-Log "Updates complete for $displayName"
 }   
 
+# Clean up
+Write-Log "Cleaning up the buildspace..."
+Get-ChildItem $buildSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+Write-Log "Removing .intunewin files..."
+Get-ChildItem $publishedApps -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+Write-Log "Removing temporary script files..."
+Get-ChildItem $scriptSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+
+# Return to the original directory
 Pop-Location

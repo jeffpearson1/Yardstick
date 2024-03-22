@@ -25,3 +25,6 @@
 
 # Exclude .gitignore
 /.gitignore
+
+# Exclude log
+/*.log
