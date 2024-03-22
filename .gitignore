@@ -23,8 +23,5 @@
 /.vscode
 /.DS_Store
 
-# Exclude .gitignore
-/.gitignore
-
 # Exclude log
 /*.log
