@@ -4,7 +4,6 @@ preDownloadScript: |
   $filename = $url.split("/")[-1]
   $version = $filename.split("-")[2]
   $registryDetectionValue = $version
-  Write-Host "RegDetValue: $registryDetectionValue"
 postDownloadScript:
 installScript: <filename> /allusers /S
 uninstallScript: '"C:\Program Files\DBeaver\Uninstall.exe" /allusers /S'

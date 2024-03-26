@@ -1,0 +1,44 @@
+url: https://digilent.com/reference/software/waveforms/waveforms-3/previous-versions
+urlRedirects: false
+preDownloadScript: |
+  $content = (Invoke-WebRequest $URL)
+  $content.content -match "Current Version .*[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}"
+  $version = ($matches[0] -split " ")[-1]
+  $filename = "digilent.waveforms_v$($version)_64bit.exe"
+  $url = "https://files.digilent.com/Software/Waveforms2015/$version/$filename"
+  $fileDetectionVersion = "$version.0"
+postDownloadScript: |
+  Copy-Item $toolsDir\digilentwaveforms\static.dwf3 . -Force
+installScript: |
+  <filename> /S /ALLUSERS
+  If (!(Test-Path -Path "C:\Users\Default\AppData\Local\Waveforms")) {New-Item -Path "C:\Users\Default\AppData\Local\Waveforms" -ItemType directory -Force}
+  Copy-Item -Path "$PSScriptRoot\static.dwf3" -Destination "C:\Users\Default\AppData\Local\Waveforms" -Recurse -Force
+  $AllUserProfiles = Get-Item "C:\Users\*" | Where-Object FullName -ne "C:\Users\Public"
+  Foreach ($Profile in $AllUserProfiles){
+    If (!(Test-Path -Path "$($Profile.FullName)\AppData\Local\Waveforms")) {New-Item -Path "$($Profile.FullName)\AppData\Local\Waveforms" -ItemType directory -Force}
+    Copy-Item -Path "$PSScriptRoot\static.dwf3" -Destination "$($Profile.FullName)\AppData\Local\Waveforms" -Recurse -Force 
+  }
+uninstallScript: |
+  $AllUserProfiles = Get-Item "C:\Users\*" | Where-Object FullName -ne "C:\Users\Public"
+  Start-Process -FilePath "C:\Program Files (x86)\Digilent\uninstall.exe" -ArgumentList "/S" -Wait
+  Remove-Item -Path "C:\Program Files (x86)\Digilent" -Recurse -Force
+  If (Test-Path -Path "C:\Users\Default\AppData\Local\Waveforms") 
+  {
+    Remove-item -Path "C:\Users\Default\AppData\Local\Waveforms" -Recurse -Force
+  }
+  Foreach ($Profile in $AllUserProfiles){
+    If (Test-Path -Path "$($Profile.FullName)\AppData\Local\Waveforms") {Remove-item -Path "$($Profile.FullName)\AppData\Local\Waveforms" -Recurse -Force}
+  }
+version:
+fileName: digilent_waveforms_x64.exe
+iconFile: digilentwaveforms.png
+id: digilentwaveforms
+displayName: Digilent WaveForms
+publisher: Digilent
+description: Connect easily to a variety of Digilent products.
+fileType: EXE
+detectionType: file
+fileDetectionPath: '%ProgramFiles(X86)%\Digilent\Waveforms3'
+fileDetectionName: 'WaveForms.exe'
+fileDetectionMethod: version
+fileDetectionOperator: equal

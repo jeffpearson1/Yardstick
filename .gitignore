@@ -16,7 +16,7 @@
 !/Tools/.gitkeep
 
 # Exclude any files that might contain sensitive data
-/Recipes/sccmclient.yaml
+/Recipes/sccm*
 /Preferences.yaml
 
 # Exclude miscellaneous editor files
