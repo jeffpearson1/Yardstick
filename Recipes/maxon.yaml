@@ -1,0 +1,28 @@
+url: https://www.maxon.net/en/downloads
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL
+  $URL = ($Content.links | Where-Object href -match "Maxon_App_.*_Win\.exe").href
+  $fileName = $URL.split("/")[-1]
+  $version = $URL.split("/")[-2]
+  $fileDetectionVersion = "$version.0"
+installScript: |
+  <filename> --mode unattended --unattendedmodeui none
+uninstallScript: |
+  "%ProgramData%\Red Giant\uninstall\uninstall-net.maxon.app-manager_v<version>.bat"
+version:
+fileName:
+iconFile: maxon.png
+id: maxon
+displayName: Maxon App
+publisher: Maxon
+description: The Maxon App manages the installation, licensing, upgrading, and updating of your Maxon products.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Maxon\App Manager'
+fileDetectionName: "Maxon.exe"
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: equal
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

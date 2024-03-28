@@ -234,6 +234,7 @@ $autoPackagerRecipes = "$PSScriptRoot\Recipes"
 $iconPath = "$PSScriptRoot\Icons"
 $toolsDir = "$PSScriptRoot\Tools"
 $tempDir = "$PSScriptRoot\Temp"
+$secretsDir = "$PSScriptRoot\Secrets"
 
 # Import preferences file:
 $prefs = Get-Content $PSScriptRoot\Preferences.yaml | ConvertFrom-Yaml
