@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/after-effects/release-note/release-notes-after-effects.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "The [A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionYear = $versionString.split(" ")[2]
+  $version = $versionString.split(" ")[-1]
+  $Global:PackageName = "Auto_AfterEffects_$($version)_NU_NoAutoUpdate"
+  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe AfterEffects $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "After Effects"
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: AfterEffects.png
+id: AfterEffects
+displayName: Adobe After Effects
+publisher: Adobe
+description: Adobe After Effects is a digital visual effects, motion graphics, and compositing application developed by Adobe; it is used in the post-production process of film making, video games and television production. Among other things, After Effects can be used for keying, tracking, compositing, and animation.
+detectionType: file
+fileDetectionName: AfterEffects.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

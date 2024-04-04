@@ -1,0 +1,17 @@
+url: https://www.bluej.org/
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL
+  $Content.content -match "(?<=Version )[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}"
+  $Version = $matches[0]
+  $url = ($Content.links | where href -like "*BlueJ-windows*.msi").href
+  $filename = $url.split("/")[-1]
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: bluej.png
+id: bluej
+displayName: BlueJ
+publisher: M. Kölling and J. Rosenberg
+description: A free Java Development Environment designed for beginners, used by millions worldwide.
+fileType: msi
+detectionType: msi

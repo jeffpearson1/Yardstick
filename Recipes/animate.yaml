@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/animate/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "most current version of Adobe Animate is the [A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $version = $versionString.split(" ")[-1]
+  $versionYear = $versionString.split(" ")[9]
+  $Global:PackageName = "Auto_Animate_$($version)_NU_NoAutoUpdate"
+  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Animate $versionYear"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Animate"
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Animate.png
+id: Animate
+displayName: Adobe Animate
+publisher: Adobe
+description: Adobe Animate is a desktop publishing and page layout designing software application.
+detectionType: file
+fileDetectionName: Animate.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/photoshop/kb/uptodate.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "The current version of Photoshop [0-9]{4} \(desktop\) is.*[0-9]{2,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionYear = ($versionString -split (" "))[5]
+  $version = ((($versionString -split (" "))[-1]) -split ">")[-1]
+  $Global:PackageName = "Auto_Photoshop_$($version)_NU_NoAutoUpdate"
+  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Photoshop $versionYear"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Photoshop"
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Photoshop.png
+id: Photoshop
+displayName: Adobe Photoshop
+publisher: Adobe
+description: Adobe Photoshop is a raster graphics editor developed and published by Adobe for Windows and macOS.
+detectionType: file
+fileDetectionName: Photoshop.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

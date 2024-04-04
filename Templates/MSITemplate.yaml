@@ -1,6 +1,11 @@
 url: 
 urlredirects: false
-preDownloadScript:
+preDownloadScript: |
+
+downloadScript: |
+
+postDownloadScript: |
+
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
 version:

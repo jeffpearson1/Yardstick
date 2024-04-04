@@ -14,206 +14,15 @@ param (
 Import-Module powershell-yaml
 Import-Module IntuneWin32App
 Import-Module Selenium
+Import-Module TUN.CredentialManager
+$CustomModules = Get-ChildItem -Path .\Scripts\*.psm1
+foreach ($Module in $CustomModules) {
+    Import-Module "$($Module.FullName)" -Global
+}
 
 # Constants
-$LOG_LOCATION = "$PSScriptRoot"
-$LOG_FILE = "YLog.log"
-
-# Useful Functions
-
-# Write-Log
-# Prints both to the console and also to the log
-# Param: [String] $ContentToWriteToLog, [Switch] $Init (Erase log and print big timestamp for new script run)
-function Write-Log {
-    param(
-        [String]$Content,
-        [Switch]$Init
-    )
-    Push-Location $LOG_LOCATION
-    if($Init) {
-        if (Test-Path $LOG_LOCATION\$LOG_FILE) {
-            Remove-Item $LOG_LOCATION\$LOG_FILE -Force
-        }
-        Write-Output "#######################################################" | Out-File $LOG_FILE
-        Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LOG_FILE -Append
-        Write-Output "#######################################################" | Out-File $LOG_FILE -Append
-    }
-    if ($Content) {
-        $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
-        Write-Output $Content | Out-File $LOG_FILE -Append
-        Write-Output $Content
-    }
-    Pop-Location
-}
-
-
-# ArrayToString
-# Converts an array to a string
-function ArrayToString() {
-    param (
-        [Array] $array
-    )
-    $arrayString = "@("
-    foreach ($value in $array) {
-        $arrayString = "$($arrayString)$([String]$value),"
-    }
-    $arrayString = $arrayString.TrimEnd(",")
-    $arrayString = "$arrayString)"
-    return [String]$arrayString
-}
-
-# Get-RedirectedUrl
-# Follows redirects and returns the actual URL of a resource
-# Param: [String] URL
-# Return: [String] The last URL that is linked to that does not redirect
-function Get-RedirectedUrl() {
-    param (
-        [Parameter(Mandatory=$true)]
-        [String]$URL
-    )
-
-    $request = [System.Net.WebRequest]::Create($url)
-    $request.AllowAutoRedirect=$false
-    $response=$request.GetResponse()
-
-    If ($response.StatusCode -eq "Found")
-    {
-        $response.GetResponseHeader("Location")
-    }
-}
-
-
-# Get-MsiProductCode
-# Returns the product code of an MSI file in the current directory only
-# Param: [String] $filePath
-# Return: [String] The MSI Product Code
-function Get-MsiProductCode() {
-    param (
-        [Parameter(Mandatory=$true)]
-        [String]$filePath
-    )
-    # Read property from MSI database
-    $windowsInstallerObject = New-Object -ComObject WindowsInstaller.Installer
-    $msiDatabase = $windowsInstallerObject.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $windowsInstallerObject, @($filePath, 0))
-    $query = "SELECT Value FROM Property WHERE Property = 'ProductCode'"
-    $view = $msiDatabase.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $msiDatabase, ($query))
-    $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
-    $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
-    $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
-    $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($windowsInstallerObject) 
-    return [String]$value
-}
-
-# Connect-AutoMSIntuneGraph
-# Automatically connects to the Microsoft Graph API using the Intune module
-# Param: None
-# Returns: None
-function Connect-AutoMSIntuneGraph() {
-    # Check if the current token is invalid
-    if (-not $Global:Token) {
-        Write-Log "Getting an Intune Graph Client APItoken..."
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
-    }
-    elseif ($Global:Token.ExpiresOn.ToLocalTime() -lt (Get-Date)) {
-        # If not, get a new token
-        Write-Log "Token is expired. Refreshing token..."
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
-        Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
-    }
-    elseif ($Global:Token.ExpiresOn.AddMinutes(-20).ToLocalTime() -lt (Get-Date)) {
-        # For whatever reason, this API stops working 10 minutes before a token refresh
-        Write-Log "Token expires soon - Refreshing token..."
-        # Required to force a refresh
-        Clear-MsalTokenCache
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
-        Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
-    }
-    else {
-        Write-Log "Token is still valid. Skipping token refresh."
-    } 
-}
-
-# MOVE-ASSIGNMENTS
-# Gets all assignments for an application and adds them to a target (To)
-# Removes successfully moved assignments from the (From) application
-# Param: [Application]$From, [Application]$To
-# Return: None
-function Move-Assignments {
-    param(
-        [Parameter(Mandatory, Position=0)]
-        [System.Object] $From,
-        [Parameter(Mandatory, Position=1)]
-        [System.Object] $To
-    )
-    $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
-    $FromAvailable = ($FromAssignments | Where-Object intent -eq "available").groupId
-    $FromRequired = ($FromAssignments | Where-Object intent -eq "required").groupId
-    if ($FromAvailable) {
-        foreach ($groupId in $FromAvailable) {
-            $maxRetries = 3
-            $try = 0
-            $successfullyAdded = $false
-            while (!$successfullyAdded -and ($try -lt $maxRetries)) {
-                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
-                # Check that it worked
-                $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
-                if($AssignedGroups | Where-Object GroupID -eq $groupID) {
-                    $successfullyAdded = $true
-                    Write-Log "$GroupID (Available) added successfully to $($To.id)"
-                    Write-Log "Removing $groupID available assignment from $($From.id)"
-                    Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
-                }
-                else {
-                    # Wait 1 second and retry
-                    Start-Sleep -Seconds 1
-                }
-            }
-            
-            if (!$successfullyAdded) {
-                Write-Log "ERROR: Cannot add available app assignment to $($To.id) for group $groupID. Will not remove original assignment."
-            }
-        }
-        
-    }
-    if ($FromRequired) {
-        foreach ($groupId in $FromRequired) {
-            $maxRetries = 3
-            $try = 0
-            $successfullyAdded = $false
-            while (!$successfullyAdded -and ($try -lt $maxRetries)) {
-                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
-                # Check that it worked
-                $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
-                if($AssignedGroups | Where-Object GroupID -eq $groupID) {
-                    $successfullyAdded = $true
-                    Write-Log "$GroupID (Required) added successfully to $($To.id)"
-                    Write-Log "Removing $groupID required assignment from $($From.id)"
-                    Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
-                }
-                else {
-                    # Wait 1 second and retry
-                    Start-Sleep -Seconds 1
-                }
-            }
-            
-            if (!$successfullyAdded) {
-                Write-Log "ERROR: Cannot add required app assignment to $($To.id) for group $groupID. Will not remove original assignment."
-            }
-        }
-    }
-}
-
-
-# Get-SameAppAllVersions
-# Returns all versions of an app
-# Accounts for edge cases where an application name might be similar to others, i.e. Mozilla Firefox vs. Mozilla Firefox ESR
-# Param: [String] DisplayName
-# Return: @(PSCustomObject) 
-function Get-SameAppAllVersions($DisplayName) {
-    $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName*"
-    return ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (*")})
-}
-
+$Global:LOG_LOCATION = "$PSScriptRoot"
+$Global:LOG_FILE = "YLog.log"
 
 # So we can pop at the end
 Push-Location
@@ -226,21 +35,21 @@ if ("None" -eq $ApplicationId -and $All -eq $false) {
     exit 1
 }
 $applications = [System.Collections.ArrayList]::new()
-$testApps = "$PSScriptRoot\TestApps"
-$buildSpace = "$PSScriptRoot\BuildSpace"
-$scriptSpace = "$PSScriptRoot\Scripts"
-$publishedApps = "$PSScriptRoot\Apps"
-$autoPackagerRecipes = "$PSScriptRoot\Recipes"
-$iconPath = "$PSScriptRoot\Icons"
-$toolsDir = "$PSScriptRoot\Tools"
-$tempDir = "$PSScriptRoot\Temp"
-$secretsDir = "$PSScriptRoot\Secrets"
+$Global:testApps = "$PSScriptRoot\TestApps"
+$Global:buildSpace = "$PSScriptRoot\BuildSpace"
+$Global:scriptSpace = "$PSScriptRoot\Scripts"
+$Global:publishedApps = "$PSScriptRoot\Apps"
+$Global:autoPackagerRecipes = "$PSScriptRoot\Recipes"
+$Global:iconPath = "$PSScriptRoot\Icons"
+$Global:toolsDir = "$PSScriptRoot\Tools"
+$Global:tempDir = "$PSScriptRoot\Temp"
+$Global:secretsDir = "$PSScriptRoot\Secrets"
 
 # Import preferences file:
 $prefs = Get-Content $PSScriptRoot\Preferences.yaml | ConvertFrom-Yaml
-$tenantId = $prefs.tenantId
-$clientId = $prefs.clientId
-$clientSecret = $prefs.clientSecret
+$Global:tenantId = $prefs.tenantId
+$Global:clientId = $prefs.clientId
+$Global:clientSecret = $prefs.clientSecret
 
 # $scopeTags = $prefs.scopeTags
 
@@ -275,50 +84,50 @@ foreach ($ApplicationId in $Applications) {
     Get-ChildItem $TempDir -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
     # Open the YAML file and collect all necessary attributes
-    $parameters = Get-Content "$autoPackagerRecipes\$ApplicationId.yaml" | ConvertFrom-Yaml
-    $url = if ($parameters.urlRedirects) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
-    $id = $parameters.id
-    $version = $parameters.version
-    $fileDetectionVersion = $parameters.fileDetectionVersion
-    $displayName = $parameters.displayName
-    $displayVersion = $parameters.displayVersion
-    $fileName = $parameters.fileName
-    $fileDetectionPath = $parameters.fileDetectionPath
-    $preDownloadScript = $parameters.preDownloadScript
-    $postDownloadScript = $parameters.postDownloadScript
-    $downloadScript = $parameters.downloadScript
-    $installScript = $parameters.installScript
-    $uninstallScript = $parameters.uninstallScript
-    $scopeTags = if($parameters.scopeTags) {$parameters.scopeTags} else {$prefs.defaultScopeTags}
-    $owner = if($parameters.owner) {$parameters.owner} else {$prefs.defaultOwner}
-    $maximumInstallationTimeInMinutes = if($parameters.maximumInstallationTimeInMinutes) {$parameters.maximumInstallationTimeInMinutes} else {$prefs.defaultMaximumInstallationTimeInMinutes}
-    $minOSVersion = if($parameters.minOSVersion) {$parameters.minOSVersion} else {$prefs.defaultMinOSVersion}
-    $installExperience = if($parameters.installExperience) {$parameters.installExperience} else {$prefs.defaultInstallExperience}
-    $restartBehavior = if($parameters.restartBehavior) {$parameters.restartBehavior} else {$prefs.defaultRestartBehavior}
-    $availableGroups = if($parameters.availableGroups) {$parameters.availableGroups} else {$prefs.defaultAvailableGroups}
-    $requiredGroups = if($parameters.requiredGroups) {$parameters.requiredGroups} else {$prefs.defaultRequiredGroups}
-    $detectionType = $parameters.detectionType
-    $fileDetectionVersion = $parameters.fileDetectionVersion
-    $fileDetectionMethod = $parameters.fileDetectionMethod
-    $fileDetectionName = $parameters.fileDetectionName
-    $fileDetectionOperator = $parameters.fileDetectionOperator
-    $fileDetectionDateTime = $parameters.fileDetectionDateTime
-    $fileDetectionValue = $parameters.fileDetectionValue
-    $registryDetectionMethod = $parameters.registryDetectionMethod
-    $registryDetectionKey = $parameters.registryDetectionKey
-    $registryDetectionValueName = $parameters.registryDetectionValueName
-    $registryDetectionValue = $parameters.registryDetectionValue
-    $registryDetectionOperator = $parameters.registryDetectionOperator
-    $detectionScript = $parameters.detectionScript
-    $DetectionScriptFileExtension = if($parameters.detectionScriptFileExtension) {$parameters.detectionScriptFileExtension} else {$prefs.defaultDetectionScriptFileExtension}
-    $detectionScriptRunAs32Bit = if($parameters.detectionScriptRunAs32Bit) {$parameters.detectionScriptRunAs32Bit} else {$prefs.defaultdetectionScriptRunAs32Bit}
-    $detectionScriptEnforceSignatureCheck = if($parameters.detectionScriptEnforceSignatureCheck) {$parameters.detectionScriptEnforceSignatureCheck} else {$prefs.defaultdetectionScriptEnforceSignatureCheck}
-    $allowUserUninstall = if($parameters.allowUserUninstall) {$parameters.allowUserUninstall} else {$prefs.defaultAllowUserUninstall}
-    $iconFile = $parameters.iconFile
-    $description = $parameters.description
-    $publisher = $parameters.publisher
-    $is32BitApp = if($parameters.is32BitApp) {$parameters.is32BitApp} else {$prefs.defaultIs32BitApp}
-    $numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
+    $Global:parameters = Get-Content "$autoPackagerRecipes\$ApplicationId.yaml" | ConvertFrom-Yaml
+    $Global:url = if ($parameters.urlRedirects) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
+    $Global:id = $parameters.id
+    $Global:version = $parameters.version
+    $Global:fileDetectionVersion = $parameters.fileDetectionVersion
+    $Global:displayName = $parameters.displayName
+    $Global:displayVersion = $parameters.displayVersion
+    $Global:fileName = $parameters.fileName
+    $Global:fileDetectionPath = $parameters.fileDetectionPath
+    $Global:preDownloadScript = $parameters.preDownloadScript
+    $Global:postDownloadScript = $parameters.postDownloadScript
+    $Global:downloadScript = $parameters.downloadScript
+    $Global:installScript = $parameters.installScript
+    $Global:uninstallScript = $parameters.uninstallScript
+    $Global:scopeTags = if($parameters.scopeTags) {$parameters.scopeTags} else {$prefs.defaultScopeTags}
+    $Global:owner = if($parameters.owner) {$parameters.owner} else {$prefs.defaultOwner}
+    $Global:maximumInstallationTimeInMinutes = if($parameters.maximumInstallationTimeInMinutes) {$parameters.maximumInstallationTimeInMinutes} else {$prefs.defaultMaximumInstallationTimeInMinutes}
+    $Global:minOSVersion = if($parameters.minOSVersion) {$parameters.minOSVersion} else {$prefs.defaultMinOSVersion}
+    $Global:installExperience = if($parameters.installExperience) {$parameters.installExperience} else {$prefs.defaultInstallExperience}
+    $Global:restartBehavior = if($parameters.restartBehavior) {$parameters.restartBehavior} else {$prefs.defaultRestartBehavior}
+    $Global:availableGroups = if($parameters.availableGroups) {$parameters.availableGroups} else {$prefs.defaultAvailableGroups}
+    $Global:requiredGroups = if($parameters.requiredGroups) {$parameters.requiredGroups} else {$prefs.defaultRequiredGroups}
+    $Global:detectionType = $parameters.detectionType
+    $Global:fileDetectionVersion = $parameters.fileDetectionVersion
+    $Global:fileDetectionMethod = $parameters.fileDetectionMethod
+    $Global:fileDetectionName = $parameters.fileDetectionName
+    $Global:fileDetectionOperator = $parameters.fileDetectionOperator
+    $Global:fileDetectionDateTime = $parameters.fileDetectionDateTime
+    $Global:fileDetectionValue = $parameters.fileDetectionValue
+    $Global:registryDetectionMethod = $parameters.registryDetectionMethod
+    $Global:registryDetectionKey = $parameters.registryDetectionKey
+    $Global:registryDetectionValueName = $parameters.registryDetectionValueName
+    $Global:registryDetectionValue = $parameters.registryDetectionValue
+    $Global:registryDetectionOperator = $parameters.registryDetectionOperator
+    $Global:detectionScript = $parameters.detectionScript
+    $Global:DetectionScriptFileExtension = if($parameters.detectionScriptFileExtension) {$parameters.detectionScriptFileExtension} else {$prefs.defaultDetectionScriptFileExtension}
+    $Global:detectionScriptRunAs32Bit = if($parameters.detectionScriptRunAs32Bit) {$parameters.detectionScriptRunAs32Bit} else {$prefs.defaultdetectionScriptRunAs32Bit}
+    $Global:detectionScriptEnforceSignatureCheck = if($parameters.detectionScriptEnforceSignatureCheck) {$parameters.detectionScriptEnforceSignatureCheck} else {$prefs.defaultdetectionScriptEnforceSignatureCheck}
+    $Global:allowUserUninstall = if($parameters.allowUserUninstall) {$parameters.allowUserUninstall} else {$prefs.defaultAllowUserUninstall}
+    $Global:iconFile = $parameters.iconFile
+    $Global:description = $parameters.description
+    $Global:publisher = $parameters.publisher
+    $Global:is32BitApp = if($parameters.is32BitApp) {$parameters.is32BitApp} else {$prefs.defaultIs32BitApp}
+    $Global:numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
 
 
     if ($Repair) {
@@ -451,14 +260,10 @@ foreach ($ApplicationId in $Applications) {
     # Upload .intunewin file to Intune
     # Detection Types
     $Icon = New-IntuneWin32AppIcon -FilePath "$($iconPath)\$($iconFile)"
-    if ($fileDetectionVersion) {
-        $fileDetectionVersion = $fileDetectionVersion
+    if ( -not ($fileDetectionVersion)) {
+        $fileDetectionVersion = $version
     }
-    else {
-        if ( -not ($fileDetectionVersion)) {
-            $fileDetectionVersion = $version
-        }
-    }
+
     if ($detectionType -eq "file") {
         if ($fileDetectionMethod -eq "exists") {
             $DetectionRule = New-IntuneWin32AppDetectionRuleFile -Existence -DetectionType "exists" -Path $fileDetectionPath -FileOrFolder $fileDetectionName
@@ -510,10 +315,11 @@ foreach ($ApplicationId in $Applications) {
     # Generate the min OS requirement rule
     $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture "All" -MinimumSupportedWindowsRelease $minOSVersion
 
-    
+
 
     # Create the Intune App
     Write-Log "Uploading $displayName to Intune..."
+    Connect-AutoMSIntuneGraph
     if ($allowUserUninstall) {
         $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $DisplayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallScript -UninstallCommandLine $UninstallScript -Icon $Icon -AppVersion "$Version" -ScopeTagName $ScopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes -AllowAvailableUninstall
     }
@@ -593,8 +399,6 @@ Write-Log "Cleaning up the buildspace..."
 Get-ChildItem $buildSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 Write-Log "Removing .intunewin files..."
 Get-ChildItem $publishedApps -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
-Write-Log "Removing temporary script files..."
-Get-ChildItem $scriptSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
 # Return to the original directory
 Pop-Location

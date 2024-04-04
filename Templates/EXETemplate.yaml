@@ -1,8 +1,15 @@
 url:
 urlredirects: false
-preDownloadScript:
-installScript:
-uninstallScript:
+preDownloadScript: |
+
+downloadScript: |
+
+postDownloadScript: |
+
+installScript: |
+
+uninstallScript: |
+
 version:
 fileName:
 iconFile: icon.png
