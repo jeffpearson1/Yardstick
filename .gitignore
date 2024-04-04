@@ -12,6 +12,8 @@
 !/BuildSpace/.gitkeep
 !/Icons/.gitkeep
 !/Scripts/.gitkeep
+!/Scripts/AdobeDownloader.psm1
+!/Scripts/YardstickSupport.psm1
 !/Temp/.gitkeep
 !/Tools/.gitkeep
 
