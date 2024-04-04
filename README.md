@@ -22,7 +22,8 @@ Yardstick depends on (and we are extremely grateful for) a handful of PowerShell
 
 * Before starting, install all necessary PowerShell Modules
 ```powershell
-Install-Module -Name Powershell-Yaml, IntuneWin32App, Selenium-PowerShell
+Install-Module -Name Powershell-Yaml, IntuneWin32App, TUN.CredentialManager
+Install-Module -Name Selenium -AllowPrerelease
 ```
 * Download or clone the repository into a folder where it can live. A sufficient amount of disk space should be available in this directory for the staging of applications. 
 * Some recipes may require you to have Mozilla Firefox installed and configured to work with Selenium.
