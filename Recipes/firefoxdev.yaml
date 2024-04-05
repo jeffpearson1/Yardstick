@@ -13,3 +13,4 @@ description: Mozilla Firefox Developer Edition is the developer version of the f
 detectionType: registry
 registryDetectionMethod: exists
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Firefox Developer Edition <version> (x64 en-US)'
+numVersionsToKeep: 1

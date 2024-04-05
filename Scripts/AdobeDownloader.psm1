@@ -7,7 +7,7 @@ function Start-AdobeDownload {
         $ConsoleURL = "https://adminconsole.adobe.com"
         Write-Log "Tempdir: $Global:tempDir"
         Write-Log "ID: $Global:id and $id"
-        $Global:Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath $Global:tempDir\$Global:id Arguments @('--headless')
+        $Global:Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath "$Global:tempDir\$Global:id" -Arguments @('--headless')
         Start-Sleep -Seconds 10
         # Load the credentials from the password manager
         $Credentials = Get-StoredCredential -Target "adobe"
@@ -104,5 +104,4 @@ function Start-AdobeDownload {
         Write-Error "ERROR: There was an issue running Start-AdobeDownload for application $SearchName"
         return 1
     }
-    
 }

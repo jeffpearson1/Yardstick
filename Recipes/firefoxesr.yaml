@@ -13,3 +13,4 @@ description: Mozilla Firefox ESR is a free and open-source web browser developed
 detectionType: registry
 registryDetectionMethod: exists
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> ESR (x64 en-US)'
+numVersionsToKeep: 1

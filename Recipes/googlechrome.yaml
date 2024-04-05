@@ -16,3 +16,4 @@ publisher: Google
 description: A web browser by Google
 fileType: msi
 detectionType: msi
+numVersionsToKeep: 1

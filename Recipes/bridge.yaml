@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/bridge/using/whats-new.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionYear = $versionString.split(" ")[9]
+  $version = $versionString.split(" ")[-1]
+  $Global:PackageName = "Auto_Bridge_$($version)_NU_NoAutoUpdate"
+  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Bridge $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Bridge"
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Bridge.png
+id: Bridge
+displayName: Adobe Bridge
+publisher: Adobe
+description: Adobe Bridge allows you to manage digital assets.
+detectionType: file
+fileDetectionName: Bridge.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

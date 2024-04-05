@@ -17,7 +17,8 @@ Import-Module Selenium
 Import-Module TUN.CredentialManager
 $CustomModules = Get-ChildItem -Path .\Scripts\*.psm1
 foreach ($Module in $CustomModules) {
-    Import-Module "$($Module.FullName)" -Global
+    # Force allows us to reload them for testing
+    Import-Module "$($Module.FullName)" -Global -Force
 }
 
 # Constants
@@ -395,10 +396,10 @@ foreach ($ApplicationId in $Applications) {
 }   
 
 # Clean up
-Write-Log "Cleaning up the buildspace..."
-Get-ChildItem $buildSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
-Write-Log "Removing .intunewin files..."
-Get-ChildItem $publishedApps -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+# Write-Log "Cleaning up the buildspace..."
+# Get-ChildItem $buildSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+# Write-Log "Removing .intunewin files..."
+# Get-ChildItem $publishedApps -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
 # Return to the original directory
 Pop-Location

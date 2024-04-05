@@ -1,0 +1,30 @@
+url: https://helpx.adobe.com/dimension/using/whats-new.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "[A-Za-z]{3,} [0-9]{4} release of Dimension \(version [0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionString -match "[A-Za-z]{3,} [0-9]{4}"
+  $yearString =  $matches[0]
+  $versionYear = $yearString.split(" ")[1]
+  $versionString -match "[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}"
+  $version = $matches[0]
+  $Global:PackageName = "Auto_Dimension_$($version)_NU_NoAutoUpdate"
+  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Dimension $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Dimension"
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Dimension.png
+id: Dimension
+displayName: Adobe Dimension
+publisher: Adobe
+description: Create engaging content in 3D faster with models, materials, and lighting. Dimension makes it easy to build brand visualizations, illustrations, product mockups, and other creative work.
+detectionType: file
+fileDetectionName: Dimension.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

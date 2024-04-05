@@ -1,0 +1,30 @@
+url: https://helpx.adobe.com/adobe-character-animator/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionString -match "[A-Za-z]{3,} [0-9]{4}"
+  $yearString =  $matches[0]
+  $versionYear = $yearString.split(" ")[1]
+  $versionString -match "[0-9]{1,}\.[0-9]{1,}"
+  $version = $matches[0]
+  $Global:PackageName = "Auto_CharacterAnimator_$($version)_NU_NoAU"
+  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Character Animator"
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: CharacterAnimator.png
+id: CharacterAnimator
+displayName: Adobe Character Animator
+publisher: Adobe
+description: Adobe Character Animator is a character animation application that allows you to bring expressive characters to life using your own artwork. It is a unique and powerful application for intuitive 2D character animation.
+detectionType: file
+fileDetectionName: CharacterAnimator.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
