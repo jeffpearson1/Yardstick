@@ -16,6 +16,7 @@ Yardstick depends on (and we are extremely grateful for) a handful of PowerShell
 * [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml)
 * [Selenium-Powershell](https://github.com/adamdriscoll/selenium-powershell)
 * [IntuneWin32App](https://github.com/MSEndpointMgr/IntuneWin32App)
+* [PowerShell_Credential_Manager](https://github.com/echalone/PowerShell_Credential_Manager)
 
 
 ### Installing
