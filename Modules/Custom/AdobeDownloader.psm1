@@ -12,7 +12,7 @@ function Start-AdobeDownload {
         $ConsoleURL = "https://adminconsole.adobe.com"
         Write-Log "Tempdir: $tempDir"
         Write-Log "ID: $id and $id"
-        $Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath "$tempDir\$id" # -Arguments @('--headless', '--window-size=1920,1080')
+        $Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath "$tempDir\$id" -Arguments @('--headless', '--window-size=1920,1080')
         Start-Sleep -Seconds 15
         # Load the credentials from the password manager
         $Credentials = Get-StoredCredential -Target "adobe"
