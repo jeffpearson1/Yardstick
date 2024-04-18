@@ -10,15 +10,13 @@ preDownloadScript: |
   $version = $filename.Split("_")[1]
   $registryDetectionValue = $version
 downloadScript: |
-  $Driver = Start-SeFirefox -Headless -DefaultDownloadPath "$buildSpace\$id\$version"
   $URL = "https://filezilla-project.org/download.php?show_all=1"
-  Enter-SeUrl $URL -Driver $Driver
-  $Element = Find-SeElement -Driver $Driver -LinkText "FileZilla_$($version)_win64-setup.exe"
-  Invoke-SeClick -Element $Element
+  $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -DefaultDownloadPath "$buildSpace\$id\$version" -Arguments @('--headless')
+  $Element = Get-SeElement -By LinkText "FileZilla_$($version)_win64-setup.exe"
+  $Element.Click()
   $i = 0
   $timeout = 300
-  while ((Get-Item .\FileZilla_$($version)_win64-setup.exe).Length -le 0) { if ($i -ge $timeout) { Write-Error "Download Failed"; break; } Start-Sleep 1; $i++; }
-  Enter-SeUrl "about:downloads" -Driver $Driver
+  while ((Get-Item "$buildSpace\$id\$version\FileZilla_$($version)_win64-setup.exe").Length -le 0) { if ($i -ge $timeout) { Write-Error "Download Failed"; break; } Start-Sleep 1; $i++; }
   $Driver.Close()
 installScript: '"<filename>" /S /user=all'
 uninstallScript: '"%ProgramFiles(x86)%\FileZilla FTP Client\uninstall.exe" /S'
