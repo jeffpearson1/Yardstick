@@ -10,7 +10,7 @@ preDownloadScript: |
   $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
   $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Dreamweaver $versionYear\"
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Dreamweaver"
+  Start-AdobeDownload -SearchNames "Dreamweaver" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
 installScript: |
   setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
 filename: setup.exe

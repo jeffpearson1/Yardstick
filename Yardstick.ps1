@@ -15,15 +15,16 @@ Import-Module powershell-yaml -Scope Local
 Import-Module IntuneWin32App -Scope Local
 Import-Module Selenium -Scope Local
 Import-Module TUN.CredentialManager -Scope Local
-$CustomModules = Get-ChildItem -Path .\Scripts\*.psm1
+Import-Module $PSScriptRoot\Modules\YardstickSupport.psm1 -Scope Global -Force
+$CustomModules = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
 foreach ($Module in $CustomModules) {
     # Force allows us to reload them for testing
     Import-Module "$($Module.FullName)" -Scope Global -Force
 }
 
 # Constants
-$Script:LOG_LOCATION = "$PSScriptRoot"
-$Script:LOG_FILE = "YLog.log"
+$Global:LOG_LOCATION = "$PSScriptRoot"
+$Global:LOG_FILE = "YLog.log"
 
 # So we can pop at the end
 Push-Location $PSScriptRoot
@@ -48,9 +49,9 @@ $Script:secretsDir = "$PSScriptRoot\Secrets"
 
 # Import preferences file:
 $prefs = Get-Content $PSScriptRoot\Preferences.yaml | ConvertFrom-Yaml
-$Script:tenantId = $prefs.tenantId
-$Script:clientId = $prefs.clientId
-$Script:clientSecret = $prefs.clientSecret
+$Global:tenantId = $prefs.tenantId
+$Global:clientId = $prefs.clientId
+$Global:clientSecret = $prefs.clientSecret
 
 # $scopeTags = $prefs.scopeTags
 

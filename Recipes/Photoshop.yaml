@@ -10,7 +10,7 @@ preDownloadScript: |
   $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
   $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Photoshop $versionYear"
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Photoshop"
+  Start-AdobeDownload -SearchNames "Photoshop" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
 installScript: |
   setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
 filename: setup.exe

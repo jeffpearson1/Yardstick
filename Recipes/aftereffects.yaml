@@ -10,7 +10,7 @@ preDownloadScript: |
   $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
   $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe AfterEffects $versionYear\"
 downloadScript: |
-  Start-AdobeDownload -SearchNames "After Effects"
+  Start-AdobeDownload -SearchNames "After Effects" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
 installScript: |
   setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
 filename: setup.exe
