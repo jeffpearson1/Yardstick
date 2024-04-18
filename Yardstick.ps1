@@ -144,11 +144,9 @@ foreach ($ApplicationId in $Applications) {
     }
 
 
-    Write-Log "ID in main script: $id"
     # Run the pre-download script
     if ($preDownloadScript) {
         Write-Log "Running pre-download script..."
-        # Write-Log $preDownloadScript
         Invoke-Command -ScriptBlock $preDownloadScript -NoNewScope
 
         if (!$?) {
@@ -161,7 +159,6 @@ foreach ($ApplicationId in $Applications) {
     }
     else {
         Write-Log "Skipping Pre-download script"
-        # Write-Log $preDownloadScript
     }
 
 
