@@ -4,8 +4,8 @@ preDownloadScript: |
   $url -match '([0-9]{1,}\.){1,3}[0-9]{1,}'
   $version = $matches[0]
   $fileDetectionVersion = $version
-installScript: msiexec /i <filename> /qn /norestart
-uninstallScript: msiexec /x <productcode> /qn /norestart
+installScript: msiexec /i <filename> /qn /norestart ZConfig="nogoogle=1;nofacebook=1;AddFWException=1;EnableAppleLogin=0;ForceSSOUrl=urlgoeshere;DisableLoginWithEmail=1"
+uninstallScript: msiexec /x <productcode> /silent
 fileName: ZoomInstallerFull.msi
 iconFile: zoom.png
 id: Zoom

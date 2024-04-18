@@ -16,8 +16,8 @@ preDownloadScript: |
   $Version = ($URL.split("/"))[-2]
   $Driver.Close()
   $fileDetectionVersion = $version
-installScript: msiexec /i <filename> /qn /norestart
-uninstallScript: msiexec /x <productcode> /qn /norestart
+installScript:  msiexec /i <filename> /qn /norestart ZConfig="nogoogle=1;nofacebook=1;AddFWException=1;EnableAppleLogin=0;ForceSSOUrl=urlgoeshere;DisableLoginWithEmail=1"
+uninstallScript: msiexec /x <productcode> /silent /norestart
 fileName: ZoomInstallerVDI.msi
 iconFile: zoom.png
 id: ZoomVDI
