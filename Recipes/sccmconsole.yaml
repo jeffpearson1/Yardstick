@@ -1,0 +1,18 @@
+url: \\yoursiteserver.yourcompany.com\sms_def\tools\ConsoleSetup
+urlredirects: false
+preDownloadScript: |
+  $Version = (Get-Item "$url\ConsoleSetup.exe").VersionInfo.ProductVersion
+downloadScript: |
+  Copy-Item "$url\*" . -Recurse -Force
+installScript: ConsoleSetup.exe /q "TargetDir=%ProgramFiles(x86)%\Microsoft Configuration Manager\AdminConsole" DefaultSiteServerName=yoursiteserver.yourcompany.com
+uninstallScript: ConsoleSetup.exe /uninstall /q
+fileName: AdminConsole.msi
+iconFile: sccm_bw.png
+id: sccmclient
+displayName: Microsoft Configuration Manager Console
+publisher: Microsoft
+description: For admin use only - installs the SCCM Console.
+fileType: msi
+detectionType: msi
+numVersionsToKeep: 1
+minOSVersion: W10_22H2

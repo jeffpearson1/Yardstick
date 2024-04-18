@@ -1,0 +1,23 @@
+url: \\yoursiteserver.yourcompany.com\sms_def\Client
+urlredirects: false
+preDownloadScript: |
+  $PathToCCMSetupEXE = "$url\ccmsetup.exe"
+  $Version = (Get-Item $PathToCCMSetupEXE).VersionInfo.ProductVersion
+downloadScript: |
+  Copy-Item "$url\*" . -Recurse -Force
+installScript: ccmsetup.exe /noservice /mp:https://YOURMP.URL CCMHOSTNAME="YOURMP.URL" /BITSPriority:HIGH SMSCACHESIZE=20000 SMSSITECODE="DEF"
+uninstallScript: ccmsetup.exe /uninstall
+fileName: ccmsetup.exe
+iconFile: sccm.png
+id: sccmclient
+displayName: SCCM Client
+publisher: Microsoft
+description: Allows management by SCCM
+fileType: exe
+detectionType: script
+detectionScript: |
+  If (Get-Service -Name "CCMExec"){
+    Write-Host "Installed"
+  }
+numVersionsToKeep: 1
+minOSVersion: W10_1709

@@ -18,9 +18,6 @@
 !/Tools/.gitkeep
 
 # Exclude any files that might contain sensitive data
-/Recipes/sccm*
-/Recipes/zoom.yaml
-/Recipes/zoomvdi.yaml
 /Preferences.yaml
 
 # Exclude miscellaneous editor files
