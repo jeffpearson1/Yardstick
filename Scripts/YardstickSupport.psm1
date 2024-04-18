@@ -57,7 +57,7 @@ function Get-RedirectedUrl() {
 
     If ($response.StatusCode -eq "Found")
     {
-        $response.GetResponseHeader("Location")
+        return $response.GetResponseHeader("Location")
     }
 }
 

@@ -11,22 +11,22 @@ param (
 # powershell-yaml
 # IntuneWin32App
 # Selenium
-Import-Module powershell-yaml
-Import-Module IntuneWin32App
-Import-Module Selenium
-Import-Module TUN.CredentialManager
+Import-Module powershell-yaml -Scope Local
+Import-Module IntuneWin32App -Scope Local
+Import-Module Selenium -Scope Local
+Import-Module TUN.CredentialManager -Scope Local
 $CustomModules = Get-ChildItem -Path .\Scripts\*.psm1
 foreach ($Module in $CustomModules) {
     # Force allows us to reload them for testing
-    Import-Module "$($Module.FullName)" -Global -Force
+    Import-Module "$($Module.FullName)" -Scope Global -Force
 }
 
 # Constants
-$Global:LOG_LOCATION = "$PSScriptRoot"
-$Global:LOG_FILE = "YLog.log"
+$Script:LOG_LOCATION = "$PSScriptRoot"
+$Script:LOG_FILE = "YLog.log"
 
 # So we can pop at the end
-Push-Location
+Push-Location $PSScriptRoot
 
 # Initialize the log file
 Write-Log -Init
@@ -36,21 +36,21 @@ if ("None" -eq $ApplicationId -and $All -eq $false) {
     exit 1
 }
 $applications = [System.Collections.ArrayList]::new()
-$Global:testApps = "$PSScriptRoot\TestApps"
-$Global:buildSpace = "$PSScriptRoot\BuildSpace"
-$Global:scriptSpace = "$PSScriptRoot\Scripts"
-$Global:publishedApps = "$PSScriptRoot\Apps"
-$Global:autoPackagerRecipes = "$PSScriptRoot\Recipes"
-$Global:iconPath = "$PSScriptRoot\Icons"
-$Global:toolsDir = "$PSScriptRoot\Tools"
-$Global:tempDir = "$PSScriptRoot\Temp"
-$Global:secretsDir = "$PSScriptRoot\Secrets"
+$Script:testApps = "$PSScriptRoot\TestApps"
+$Script:buildSpace = "$PSScriptRoot\BuildSpace"
+$Script:scriptSpace = "$PSScriptRoot\Scripts"
+$Script:publishedApps = "$PSScriptRoot\Apps"
+$Script:autoPackagerRecipes = "$PSScriptRoot\Recipes"
+$Script:iconPath = "$PSScriptRoot\Icons"
+$Script:toolsDir = "$PSScriptRoot\Tools"
+$Script:tempDir = "$PSScriptRoot\Temp"
+$Script:secretsDir = "$PSScriptRoot\Secrets"
 
 # Import preferences file:
 $prefs = Get-Content $PSScriptRoot\Preferences.yaml | ConvertFrom-Yaml
-$Global:tenantId = $prefs.tenantId
-$Global:clientId = $prefs.clientId
-$Global:clientSecret = $prefs.clientSecret
+$Script:tenantId = $prefs.tenantId
+$Script:clientId = $prefs.clientId
+$Script:clientSecret = $prefs.clientSecret
 
 # $scopeTags = $prefs.scopeTags
 
@@ -85,50 +85,50 @@ foreach ($ApplicationId in $Applications) {
     Get-ChildItem $TempDir -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
     # Open the YAML file and collect all necessary attributes
-    $Global:parameters = Get-Content "$autoPackagerRecipes\$ApplicationId.yaml" | ConvertFrom-Yaml
-    $Global:url = if ($parameters.urlRedirects) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
-    $Global:id = $parameters.id
-    $Global:version = $parameters.version
-    $Global:fileDetectionVersion = $parameters.fileDetectionVersion
-    $Global:displayName = $parameters.displayName
-    $Global:displayVersion = $parameters.displayVersion
-    $Global:fileName = $parameters.fileName
-    $Global:fileDetectionPath = $parameters.fileDetectionPath
-    $Global:preDownloadScript = $parameters.preDownloadScript
-    $Global:postDownloadScript = $parameters.postDownloadScript
-    $Global:downloadScript = $parameters.downloadScript
-    $Global:installScript = $parameters.installScript
-    $Global:uninstallScript = $parameters.uninstallScript
-    $Global:scopeTags = if($parameters.scopeTags) {$parameters.scopeTags} else {$prefs.defaultScopeTags}
-    $Global:owner = if($parameters.owner) {$parameters.owner} else {$prefs.defaultOwner}
-    $Global:maximumInstallationTimeInMinutes = if($parameters.maximumInstallationTimeInMinutes) {$parameters.maximumInstallationTimeInMinutes} else {$prefs.defaultMaximumInstallationTimeInMinutes}
-    $Global:minOSVersion = if($parameters.minOSVersion) {$parameters.minOSVersion} else {$prefs.defaultMinOSVersion}
-    $Global:installExperience = if($parameters.installExperience) {$parameters.installExperience} else {$prefs.defaultInstallExperience}
-    $Global:restartBehavior = if($parameters.restartBehavior) {$parameters.restartBehavior} else {$prefs.defaultRestartBehavior}
-    $Global:availableGroups = if($parameters.availableGroups) {$parameters.availableGroups} else {$prefs.defaultAvailableGroups}
-    $Global:requiredGroups = if($parameters.requiredGroups) {$parameters.requiredGroups} else {$prefs.defaultRequiredGroups}
-    $Global:detectionType = $parameters.detectionType
-    $Global:fileDetectionVersion = $parameters.fileDetectionVersion
-    $Global:fileDetectionMethod = $parameters.fileDetectionMethod
-    $Global:fileDetectionName = $parameters.fileDetectionName
-    $Global:fileDetectionOperator = $parameters.fileDetectionOperator
-    $Global:fileDetectionDateTime = $parameters.fileDetectionDateTime
-    $Global:fileDetectionValue = $parameters.fileDetectionValue
-    $Global:registryDetectionMethod = $parameters.registryDetectionMethod
-    $Global:registryDetectionKey = $parameters.registryDetectionKey
-    $Global:registryDetectionValueName = $parameters.registryDetectionValueName
-    $Global:registryDetectionValue = $parameters.registryDetectionValue
-    $Global:registryDetectionOperator = $parameters.registryDetectionOperator
-    $Global:detectionScript = $parameters.detectionScript
-    $Global:DetectionScriptFileExtension = if($parameters.detectionScriptFileExtension) {$parameters.detectionScriptFileExtension} else {$prefs.defaultDetectionScriptFileExtension}
-    $Global:detectionScriptRunAs32Bit = if($parameters.detectionScriptRunAs32Bit) {$parameters.detectionScriptRunAs32Bit} else {$prefs.defaultdetectionScriptRunAs32Bit}
-    $Global:detectionScriptEnforceSignatureCheck = if($parameters.detectionScriptEnforceSignatureCheck) {$parameters.detectionScriptEnforceSignatureCheck} else {$prefs.defaultdetectionScriptEnforceSignatureCheck}
-    $Global:allowUserUninstall = if($parameters.allowUserUninstall) {$parameters.allowUserUninstall} else {$prefs.defaultAllowUserUninstall}
-    $Global:iconFile = $parameters.iconFile
-    $Global:description = $parameters.description
-    $Global:publisher = $parameters.publisher
-    $Global:is32BitApp = if($parameters.is32BitApp) {$parameters.is32BitApp} else {$prefs.defaultIs32BitApp}
-    $Global:numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
+    $parameters = Get-Content "$autoPackagerRecipes\$ApplicationId.yaml" | ConvertFrom-Yaml
+    $Script:url = if ($parameters.urlRedirects -eq $true) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
+    $Script:id = $parameters.id
+    $Script:version = $parameters.version
+    $Script:fileDetectionVersion = $parameters.fileDetectionVersion
+    $Script:displayName = $parameters.displayName
+    $Script:displayVersion = $parameters.displayVersion
+    $Script:fileName = $parameters.fileName
+    $Script:fileDetectionPath = $parameters.fileDetectionPath
+    $Script:preDownloadScript = if ($parameters.preDownloadScript) { [ScriptBlock]::Create($parameters.preDownloadScript)}
+    $Script:postDownloadScript = if ($parameters.postDownloadScript) { [ScriptBlock]::Create($parameters.postDownloadScript) }
+    $Script:downloadScript = if ($parameters.downloadScript) { [ScriptBlock]::Create($parameters.downloadScript) }
+    $Script:installScript = $parameters.installScript
+    $Script:uninstallScript = $parameters.uninstallScript
+    $Script:scopeTags = if($parameters.scopeTags) {$parameters.scopeTags} else {$prefs.defaultScopeTags}
+    $Script:owner = if($parameters.owner) {$parameters.owner} else {$prefs.defaultOwner}
+    $Script:maximumInstallationTimeInMinutes = if($parameters.maximumInstallationTimeInMinutes) {$parameters.maximumInstallationTimeInMinutes} else {$prefs.defaultMaximumInstallationTimeInMinutes}
+    $Script:minOSVersion = if($parameters.minOSVersion) {$parameters.minOSVersion} else {$prefs.defaultMinOSVersion}
+    $Script:installExperience = if($parameters.installExperience) {$parameters.installExperience} else {$prefs.defaultInstallExperience}
+    $Script:restartBehavior = if($parameters.restartBehavior) {$parameters.restartBehavior} else {$prefs.defaultRestartBehavior}
+    $Script:availableGroups = if($parameters.availableGroups) {$parameters.availableGroups} else {$prefs.defaultAvailableGroups}
+    $Script:requiredGroups = if($parameters.requiredGroups) {$parameters.requiredGroups} else {$prefs.defaultRequiredGroups}
+    $Script:detectionType = $parameters.detectionType
+    $Script:fileDetectionVersion = $parameters.fileDetectionVersion
+    $Script:fileDetectionMethod = $parameters.fileDetectionMethod
+    $Script:fileDetectionName = $parameters.fileDetectionName
+    $Script:fileDetectionOperator = $parameters.fileDetectionOperator
+    $Script:fileDetectionDateTime = $parameters.fileDetectionDateTime
+    $Script:fileDetectionValue = $parameters.fileDetectionValue
+    $Script:registryDetectionMethod = $parameters.registryDetectionMethod
+    $Script:registryDetectionKey = $parameters.registryDetectionKey
+    $Script:registryDetectionValueName = $parameters.registryDetectionValueName
+    $Script:registryDetectionValue = $parameters.registryDetectionValue
+    $Script:registryDetectionOperator = $parameters.registryDetectionOperator
+    $Script:detectionScript = $parameters.detectionScript
+    $Script:DetectionScriptFileExtension = if($parameters.detectionScriptFileExtension) {$parameters.detectionScriptFileExtension} else {$prefs.defaultDetectionScriptFileExtension}
+    $Script:detectionScriptRunAs32Bit = if($parameters.detectionScriptRunAs32Bit) {$parameters.detectionScriptRunAs32Bit} else {$prefs.defaultdetectionScriptRunAs32Bit}
+    $Script:detectionScriptEnforceSignatureCheck = if($parameters.detectionScriptEnforceSignatureCheck) {$parameters.detectionScriptEnforceSignatureCheck} else {$prefs.defaultdetectionScriptEnforceSignatureCheck}
+    $Script:allowUserUninstall = if($parameters.allowUserUninstall) {$parameters.allowUserUninstall} else {$prefs.defaultAllowUserUninstall}
+    $Script:iconFile = $parameters.iconFile
+    $Script:description = $parameters.description
+    $Script:publisher = $parameters.publisher
+    $Script:is32BitApp = if($parameters.is32BitApp) {$parameters.is32BitApp} else {$prefs.defaultIs32BitApp}
+    $Script:numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
 
 
     if ($Repair) {
@@ -144,10 +144,12 @@ foreach ($ApplicationId in $Applications) {
     }
 
 
+    Write-Log "ID in main script: $id"
     # Run the pre-download script
     if ($preDownloadScript) {
         Write-Log "Running pre-download script..."
-        Invoke-Expression $preDownloadScript | Out-Null
+        # Write-Log $preDownloadScript
+        Invoke-Command -ScriptBlock $preDownloadScript -NoNewScope
 
         if (!$?) {
                 Write-Error "Error while running pre-download PowerShell script"
@@ -156,6 +158,10 @@ foreach ($ApplicationId in $Applications) {
         else {
             Write-Log "Pre-download script ran successfully."
         }
+    }
+    else {
+        Write-Log "Skipping Pre-download script"
+        # Write-Log $preDownloadScript
     }
 
 
@@ -201,7 +207,7 @@ foreach ($ApplicationId in $Applications) {
         break
     }
     if ($downloadScript) {
-        Invoke-Expression $downloadScript | Out-Null
+        Invoke-Command -ScriptBlock $downloadScript -NoNewScope
         if (!$?) {
             Write-Error "Error while running download PowerShell script"
             break
@@ -218,7 +224,7 @@ foreach ($ApplicationId in $Applications) {
     # Run the post-download script
     if ($postDownloadScript) {
         Write-Log "Running post download script..."
-        Invoke-Expression $postDownloadScript | Out-Null
+        Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
         if (!$?) {
                 Write-Error "Error while running post download PowerShell script"
                 break
