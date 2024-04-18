@@ -55,7 +55,7 @@ Most of this file should be fairly self-explanatory. The TenantID, ClientID, and
 
 #### Other Parameters
 
-* ```-Force``` will overwrite the latest version of any targeted applications whether or not they are the same as the new version
+* ```-Force``` will overwrite the latest version of any targeted applications if they are the same as the new version, and run normally if a new version is available.
 * ```-Repair``` will fix any name discrepancies of (N-X) for any target applications (i.e. if multiple applications are named N-1 - although this is normally fixed after an update anyway).
 * ```-NoDelete``` will stop the script from automatically deleting old versions when it is done. 
 
