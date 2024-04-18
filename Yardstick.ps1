@@ -399,10 +399,10 @@ foreach ($ApplicationId in $Applications) {
 }   
 
 # Clean up
-# Write-Log "Cleaning up the buildspace..."
-# Get-ChildItem $buildSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
-# Write-Log "Removing .intunewin files..."
-# Get-ChildItem $publishedApps -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+Write-Log "Cleaning up the buildspace..."
+Get-ChildItem $buildSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+Write-Log "Removing .intunewin files..."
+Get-ChildItem $publishedApps -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
 # Return to the original directory
 Pop-Location
