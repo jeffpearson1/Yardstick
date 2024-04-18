@@ -8,10 +8,10 @@ preDownloadScript: |
   $yearString =  $matches[0]
   $versionYear = $yearString.split(" ")[1]
   $versionString -match "[0-9]{1,}\.[0-9]{1,}"
-  $version = $matches[0]
-  $Global:PackageName = "Auto_CharacterAnimator_$($version)_NU_NoAU"
-  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator $versionYear\"
+  $Script:version = $matches[0]
+  $Script:PackageName = "Auto_CharacterAnimator_$($version)_NU_NoAU"
+  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator $versionYear\"
 downloadScript: |
   Start-AdobeDownload -SearchNames "Character Animator"
 installScript: |

@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/dreamweaver/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "latest version of Dreamweaver is the [A-Za-z]{3,} [0-9]{4}.*\(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionYear = $versionString.split(" ")[-4]
+  $Script:version = $versionString.split(" ")[-1]
+  $Script:PackageName = "Auto_Dreamweaver_$($version)_NU_NoAutoUpdate"
+  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Dreamweaver $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Dreamweaver"
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Dreamweaver.png
+id: Dreamweaver
+displayName: Adobe Dreamweaver
+publisher: Adobe
+description: Adobe Dreamweaver is a proprietary web development tool from Adobe.
+detectionType: file
+fileDetectionName: Dreamweaver.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

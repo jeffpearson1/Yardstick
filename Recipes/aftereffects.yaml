@@ -6,7 +6,7 @@ preDownloadScript: |
   $versionString = $matches[0]
   $versionYear = $versionString.split(" ")[2]
   $version = $versionString.split(" ")[-1]
-  $Global:PackageName = "Auto_AfterEffects_$($version)_NU_NoAutoUpdate"
+  $Script:PackageName = "Auto_AfterEffects_$($version)_NU_NoAU"
   $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
   $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe AfterEffects $versionYear\"
 downloadScript: |

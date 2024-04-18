@@ -5,10 +5,10 @@ preDownloadScript: |
   $content.content -match "The current version of Photoshop [0-9]{4} \(desktop\) is.*[0-9]{2,}\.[0-9]{1,}" | Out-Null
   $versionString = $matches[0]
   $versionYear = ($versionString -split (" "))[5]
-  $version = ((($versionString -split (" "))[-1]) -split ">")[-1]
-  $Global:PackageName = "Auto_Photoshop_$($version)_NU_NoAutoUpdate"
-  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Photoshop $versionYear"
+  $Script:version = ((($versionString -split (" "))[-1]) -split ">")[-1]
+  $Script:PackageName = "Auto_Photoshop_$($version)_NU_NoAutoUpdate"
+  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Photoshop $versionYear"
 downloadScript: |
   Start-AdobeDownload -SearchNames "Photoshop"
 installScript: |

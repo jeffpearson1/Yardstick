@@ -3,12 +3,12 @@ function Start-AdobeDownload {
         [string[]] $SearchNames
     )
     try {
-        $zipfilename = "$($Global:PackageName)_en_US_WIN_64.zip"
+        $zipfilename = "$($Script:PackageName)_en_US_WIN_64.zip"
         $ConsoleURL = "https://adminconsole.adobe.com"
-        Write-Log "Tempdir: $Global:tempDir"
-        Write-Log "ID: $Global:id and $id"
-        $Global:Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath "$Global:tempDir\$Global:id" -Arguments @('--headless')
-        Start-Sleep -Seconds 10
+        Write-Log "Tempdir: $Script:tempDir"
+        Write-Log "ID: $Script:id and $id"
+        $Script:Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath "$Script:tempDir\$Script:id" -Arguments @('--headless', '--window-size=1920,1080')
+        Start-Sleep -Seconds 15
         # Load the credentials from the password manager
         $Credentials = Get-StoredCredential -Target "adobe"
         # Enter the username into the sign-in dialog
@@ -16,14 +16,22 @@ function Start-AdobeDownload {
         Invoke-SeKeys -Element $Element -Keys $Credentials.Username
         $Button = Get-SeElement -By CSSSelector ".spectrum-Button"
         $Button.click()
-        Start-Sleep -Seconds 10
+        Start-Sleep -Seconds 15
         # Sign in via SSO
         Invoke-SSOAutoSignIn -Target "adminconsole.adobe.com"
         # Go to the packages tab
+        while ( -not (Get-SeElement -By LinkText "Overview" -ErrorAction SilentlyContinue)) {
+            Write-Log "Waiting for page load..."
+            Start-Sleep 3
+        }
         Write-Log "Selecting Packages tab..."
         (Get-SeElement -By LinkText "Packages").click()
-        Start-Sleep -Seconds 10
+        
         # Click the create a package button
+        While ( -not (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(2)" -ErrorAction SilentlyContinue)) {
+            Write-Log "Waiting for page load..."
+            Start-Sleep 3
+        }
         Write-Log "Clicking 'create a package'"
         (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(2)").click()
         Start-Sleep -Seconds 5
@@ -75,18 +83,18 @@ function Start-AdobeDownload {
         (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").click()
         Start-Sleep -Seconds 2
         # Fill out the package name
-        Write-Log "Fill out package name with $Global:PackageName"
+        Write-Log "Fill out package name with $Script:PackageName"
         $PackageName_Field = Get-SeElement -By XPATH "//*/input[@data-testid='package-name-input']"
-        Invoke-SeKeys -Element $PackageName_Field -Keys $Global:PackageName
+        Invoke-SeKeys -Element $PackageName_Field -Keys $Script:PackageName
         # Click Create package
         (Get-SeElement -By XPATH "//*/button[@data-testid='cta-button']").click()
         Write-Log "Package is building and will download automatically..."
         Write-Log "Filename: $zipfilename"
-        while (!(Test-Path $Global:tempDir\$Global:id\$zipfilename)) {
+        while (!(Test-Path $Script:tempDir\$Script:id\$zipfilename)) {
         Write-Log "Waiting for download to start..."
         Start-Sleep -Seconds 5
         }
-        while ((Get-Item $Global:tempDir\$Global:id\$zipfilename).Length -le 0) {
+        while ((Get-Item $Script:tempDir\$Script:id\$zipfilename).Length -le 0) {
         Write-Log "Waiting for download to finish..."
         Start-Sleep -Seconds 30
         }
@@ -95,10 +103,10 @@ function Start-AdobeDownload {
         $Driver.Close()
         # Extract the zip file
         Write-Log "Expanding downloaded archive..."
-        Expand-Archive $Global:tempDir\$Global:id\$zipfilename -DestinationPath $Global:tempDir\$Global:id
+        Expand-Archive $Script:tempDir\$Script:id\$zipfilename -DestinationPath $Script:tempDir\$Script:id
         # Move into buildspace
-        Write-Log "Moving contents into buildspace..."
-        Move-Item $Global:tempDir\$Global:id\$Global:packageName\Build\* $Global:buildspace\$Global:id\$Global:version -Force
+        Write-Log "Moving contents into buildspace... ($Script:tempDir\$Script:id\$Script:packageName\Build\* to $Script:buildspace\$Script:id\$Script:version)"
+        Move-Item $Script:tempDir\$Script:id\$Script:packageName\Build\* $Script:buildspace\$Script:id\$Script:version -Force
     }
     catch {
         Write-Error "ERROR: There was an issue running Start-AdobeDownload for application $SearchName"
