@@ -2,11 +2,11 @@ url: https://www.audacityteam.org/download/windows/
 urlredirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
-  $URL = ($Content.links | where href -match "audacity-win-.*-64bit\.exe").href
-  $fileName = ($URL -split "/")[-1]
+  $Script:URL = ($Content.links | where href -match "audacity-win-.*-64bit\.exe").href
+  $Script:fileName = ($URL -split "/")[-1]
   $filename -match "([0-9]{1,}\.){2}[0-9]{1,}"
-  $version = $matches[0]
-  $fileDetectionVersion = "$($version).0"
+  $Script:version = $matches[0]
+  $Script:fileDetectionVersion = "$($version).0"
 installScript: <filename> /VERYSILENT /NORESTART
 uninstallScript: 'C:\Program Files (x86)\Audacity\unins000.exe /VERYSILENT /NORESTART'
 version:
