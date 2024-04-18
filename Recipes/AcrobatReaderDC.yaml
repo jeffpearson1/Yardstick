@@ -11,7 +11,7 @@ preDownloadScript: |
   if ($ReplaceVersion -match "x") { 
     $URL = ($Content.links | where outerhtml -like "*$temp*").href
     $HTML = Invoke-Expression "$toolsDir\curl.exe $URL -k"
-    [String]$HTML -match "$($ReplaceVersion.trim("x"))[0-9]{0,}"
+    [String]$HTML -match "$($ReplaceVersion.trim("x"))[0-9]{0,}" | Out-Null
     $ReplaceVersion = $matches[0]
     $Version = $version.substring(0, $version.length -5) + $ReplaceVersion.substring($ReplaceVersion.length -5) 
   }

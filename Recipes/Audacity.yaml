@@ -4,7 +4,7 @@ preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $Script:URL = ($Content.links | where href -match "audacity-win-.*-64bit\.exe").href
   $Script:fileName = ($URL -split "/")[-1]
-  $filename -match "([0-9]{1,}\.){2}[0-9]{1,}"
+  $filename -match "([0-9]{1,}\.){2}[0-9]{1,}" | Out-Null
   $Script:version = $matches[0]
   $Script:fileDetectionVersion = "$($version).0"
 installScript: <filename> /VERYSILENT /NORESTART

@@ -2,7 +2,7 @@ url: 'https://corretto.aws/downloads/latest/amazon-corretto-21-x64-windows-jdk.m
 urlRedirects: true
 preDownloadScript: |
   $Script:url = "https://corretto.aws$($Script:url)"
-  $url -match "([0-9]{1,}\.){4}[0-9]{1,}"
+  $url -match "([0-9]{1,}\.){4}[0-9]{1,}" | Out-Null
   $Script:version = $matches[0]
   $Script:fileDetectionVersion = $version
   $Script:fileName = $($url -split "/")[-1]

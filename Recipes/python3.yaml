@@ -2,11 +2,11 @@ url:
 urlredirects: false
 preDownloadScript: |
   $html = $(Invoke-WebRequest "https://www.python.org/downloads/windows/").Content
-  $html -match "Latest Python 3 Release - Python 3\.[0-9]{1,3}\.[0-9]{1,3}"
+  $html -match "Latest Python 3 Release - Python 3\.[0-9]{1,3}\.[0-9]{1,3}" | Out-Null
   $version = $($($matches[0] -split "-")[1]).Trim(" Python")
   $url = "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
   $fileName = "python-$version-amd64.exe"
-  $version -match "[0-9]{1,3}\.[0-9]{1,3}"
+  $version -match "[0-9]{1,3}\.[0-9]{1,3}" | Out-Null
   $fileDetectionPath = "C:\Program Files\Python$($matches[0] -replace `"\.`")"
 installScript:
   '<filename> /quiet InstallAllUsers=1 PrependPath=1 Shortcuts=0'

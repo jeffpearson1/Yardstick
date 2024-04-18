@@ -5,7 +5,7 @@ preDownloadScript: |
   $URL = "https://filezilla-project.org/download.php?show_all=1"
   $Content = Invoke-WebRequest $URL -UseBasicParsing -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" -SessionVariable Session
   $URL = ($Content.Links | Where-Object href -match '^https.+win64-setup\.exe').href
-  $URL -match "FileZilla_[0-9]{1,2}.[0-9]{1,3}.[0-9]{1,3}_win64-setup.exe"
+  $URL -match "FileZilla_[0-9]{1,2}.[0-9]{1,3}.[0-9]{1,3}_win64-setup.exe" | Out-Null
   $filename = $matches[0]
   $version = $filename.Split("_")[1]
   $registryDetectionValue = $version

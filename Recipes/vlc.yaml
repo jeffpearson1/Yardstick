@@ -2,11 +2,11 @@ url:
 urlredirects: false
 preDownloadScript: |
   $html = $(Invoke-WebRequest "https://www.videolan.org/vlc/download-windows.html").content
-  $html -match "\/\/get\.videolan\.org\/vlc\/[0-9]{0,}\.{0,}[0-9]{0,}\.{0,}[0-9]{0,}\/win64\/vlc-[0-9]{0,}\.{0,}[0-9]{0,}\.{0,}[0-9]{0,}-win64\.msi"
+  $html -match "\/\/get\.videolan\.org\/vlc\/[0-9]{0,}\.{0,}[0-9]{0,}\.{0,}[0-9]{0,}\/win64\/vlc-[0-9]{0,}\.{0,}[0-9]{0,}\.{0,}[0-9]{0,}-win64\.msi" | Out-Null
   $url = $("https:$($matches[0])") -replace "get.videolan.org", "mirror.fcix.net/videolan-ftp"
   $version = $($url -split "/")[-3] 
   $fileDetectionVersion = $version
-  $html -match "vlc-[0-9]{0,}\.{0,}[0-9]{0,}\.{0,}[0-9]{0,}-win64\.msi"
+  $html -match "vlc-[0-9]{0,}\.{0,}[0-9]{0,}\.{0,}[0-9]{0,}-win64\.msi" | Out-Null
   $fileName = $matches[0]
 postDownloadScript:
 installScript: msiexec /i <filename> /qn /norestart

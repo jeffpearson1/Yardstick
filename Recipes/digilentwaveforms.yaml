@@ -2,7 +2,7 @@ url: https://digilent.com/reference/software/waveforms/waveforms-3/previous-vers
 urlRedirects: false
 preDownloadScript: |
   $content = (Invoke-WebRequest $URL)
-  $content.content -match "Current Version .*[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}"
+  $content.content -match "Current Version .*[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
   $version = ($matches[0] -split " ")[-1]
   $filename = "digilent.waveforms_v$($version)_64bit.exe"
   $url = "https://files.digilent.com/Software/Waveforms2015/$version/$filename"

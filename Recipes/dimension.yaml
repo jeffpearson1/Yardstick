@@ -4,10 +4,10 @@ preDownloadScript: |
   $content = Invoke-WebRequest $url
   $content.content -match "[A-Za-z]{3,} [0-9]{4} release of Dimension \(version [0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
   $versionString = $matches[0]
-  $versionString -match "[A-Za-z]{3,} [0-9]{4}"
+  $versionString -match "[A-Za-z]{3,} [0-9]{4}" | Out-Null
   $yearString =  $matches[0]
   $versionYear = $yearString.split(" ")[1]
-  $versionString -match "[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}"
+  $versionString -match "[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
   $Script:version = $matches[0]
   $Script:PackageName = "Auto_Dimension_$($version)_NU_NoAutoUpdate"
   $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"

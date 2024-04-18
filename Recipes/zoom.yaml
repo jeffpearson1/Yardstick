@@ -1,7 +1,7 @@
 url: https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64
 urlredirects: true
 preDownloadScript: |
-  $url -match '([0-9]{1,}\.){1,3}[0-9]{1,}'
+  $url -match '([0-9]{1,}\.){1,3}[0-9]{1,}' | Out-Null
   $version = $matches[0]
   $fileDetectionVersion = $version
 installScript: msiexec /i <filename> /qn /norestart ZConfig="nogoogle=1;nofacebook=1;AddFWException=1;EnableAppleLogin=0;ForceSSOUrl=def;DisableLoginWithEmail=1"

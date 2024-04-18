@@ -2,7 +2,7 @@ url: https://www.bluej.org/
 urlredirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
-  $Content.content -match "(?<=Version )[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}"
+  $Content.content -match "(?<=Version )[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
   $Version = $matches[0]
   $url = ($Content.links | where href -like "*BlueJ-windows*.msi").href
   $filename = $url.split("/")[-1]

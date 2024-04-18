@@ -2,10 +2,10 @@ url:
 urlRedirects: false
 preDownloadScript: |
   $html = $(Invoke-WebRequest "https://www.7-zip.org/download.html").content
-  $html -match "a\/7z[0-9]{1,6}-x64\.msi"
+  $html -match "a\/7z[0-9]{1,6}-x64\.msi" | Out-Null
   $url = "https://www.7-zip.org/$($matches[0])"
   $fileName = $($matches[0] -split "/")[1]
-  $html -match "[0-9]{2}\.[0-9]{2}"
+  $html -match "[0-9]{2}\.[0-9]{2}" | Out-Null
   $version = $matches[0]
   $fileDetectionVersion = $version
 installScript: msiexec /i <filename> /qn /norestart

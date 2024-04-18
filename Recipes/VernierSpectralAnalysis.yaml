@@ -3,7 +3,7 @@ urlredirects: false
 preDownloadScript: |
   $VURL = "https://chromewebstore.google.com/detail/vernier-spectral-analysis/neagmanoonoaijlnipjppnjknalpodmi"
   $Content = Invoke-WebRequest $VURL
-  $Content.Content -match "([0-9]{1,3}\.){2}[0-9]{1,4}-[0-9]{3,5}"
+  $Content.Content -match "([0-9]{1,3}\.){2}[0-9]{1,4}-[0-9]{3,5}" | Out-Null
   $Version = $matches[0]
 downloadScript: |
   $filename = $url.split("/")[-1]
