@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/fresco/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "Fresco version [0-9]{1,}\.[0-9]{1,} \([A-Za-z]{3,10} [0-9]{4}" | Out-Null
+  $versionString = $matches[0]
+  $versionYear = ($versionString -split (" "))[1]
+  $Script:version = ($versionString -split (" "))[2]
+  $Script:PackageName = "Auto_Fresco_$($version)_NU_NoAutoUpdate"
+  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Fresco $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Fresco" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Fresco.png
+id: Fresco
+displayName: Adobe Fresco
+publisher: Adobe
+description: Adobe Fresco is a vector and raster graphics editor developed by Adobe primarily for digital painting.
+detectionType: file
+fileDetectionName: Fresco.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

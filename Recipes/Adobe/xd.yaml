@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/illustrator/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "Adobe Illustrator on the desktop is the [A-Za-z]{3,10} [0-9]{4} release, version [0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionYear = ($versionString -split (" "))[8]
+  $Script:version = ($versionString -split (" "))[-1]
+  $Script:PackageName = "Auto_XD_$($version)_NU_NoAutoUpdate"
+  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe XD $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Illustrator" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Illustrator.png
+id: Illustrator
+displayName: Adobe Illustrator
+publisher: Adobe
+description: Adobe Illustrator is a vector graphics editor and design software developed and marketed by Adobe.
+detectionType: file
+fileDetectionName: Illustrator.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

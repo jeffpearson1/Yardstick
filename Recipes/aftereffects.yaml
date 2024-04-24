@@ -8,7 +8,7 @@ preDownloadScript: |
   $version = $versionString.split(" ")[-1]
   $Script:PackageName = "Auto_AfterEffects_$($version)_NU_NoAU"
   $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe AfterEffects $versionYear\"
+  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe After Effects $versionYear\Support Files"
 downloadScript: |
   Start-AdobeDownload -SearchNames "After Effects" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
 installScript: |
@@ -20,7 +20,7 @@ displayName: Adobe After Effects
 publisher: Adobe
 description: Adobe After Effects is a digital visual effects, motion graphics, and compositing application developed by Adobe; it is used in the post-production process of film making, video games and television production. Among other things, After Effects can be used for keying, tracking, compositing, and animation.
 detectionType: file
-fileDetectionName: AfterEffects.exe
+fileDetectionName: AfterFX.exe
 fileDetectionMethod: exists
 installExperience: system
 restartBehavior: suppress

@@ -6,8 +6,8 @@ preDownloadScript: |
   Start-Sleep -Seconds 15
   $Elements = Get-SeElement -By ClassName "fill-div"
   $DropDownMenu = $Elements[0]
-  $PartialVersion = $DropDownMenu.Text
-  $Driver.ExecuteScript("window.scrollTo($($DropDownMenu.Location.X),$($DropDownMenu.Location.Y - 200))")
+  $PartialVersion = $DropDownMenu.Text.Split(" ")[0]
+  $Driver.ExecuteScript("window.scrollTo($($DropDownMenu.Location.X),$($DropDownMenu.Location.Y -240))")
   Start-Sleep -Seconds 3
   $DropDownMenu.Click()
   Start-Sleep -Seconds 3

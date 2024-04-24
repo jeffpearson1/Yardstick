@@ -1,0 +1,28 @@
+url: https://helpx.adobe.com/incopy/release-note/incopy-cc-release-notes.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "InCopy version.*[0-9]{1,}\.[0-9]{1,} release \([A-Za-z]{3,10} [0-9]{4}" | Out-Null
+  $versionString = $matches[0]
+  $versionString = $versionString -creplace '\P{IsBasicLatin}', " "
+  $versionYear = ($versionString -split (" "))[-1]
+  $Script:version = ($versionString -split (" "))[2]
+  $Script:PackageName = "Auto_InCopy_$($version)_NU_NoAutoUpdate"
+  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe InCopy $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "InCopy" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: InCopy.png
+id: InCopy
+displayName: Adobe InCopy
+publisher: Adobe
+description: Adobe InCopy is a professional word processor made by Adobe Inc. that integrates with Adobe InDesign. InCopy is used for general word processing, in contrast to InDesign, which is used to publish printed material, including newspapers and magazines. The software enables editors to write, edit, and design documents.
+detectionType: file
+fileDetectionName: InCopy.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

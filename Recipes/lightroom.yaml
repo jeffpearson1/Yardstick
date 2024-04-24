@@ -1,0 +1,27 @@
+url: https://helpx.adobe.com/lightroom-cc/kb/fixed-issues.html
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "[A-Za-z]{3,10} [0-9]{4} RELEASE \(VERSION [0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $versionString = $matches[0]
+  $versionYear = ($versionString -split (" "))[1]
+  $Script:version = ($versionString -split (" "))[-1]
+  $Script:PackageName = "Auto_Lightroom_$($version)_NU_NAU"
+  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Lightroom CC $versionYear\"
+downloadScript: |
+  Start-AdobeDownload -SearchNames "Lightroom" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Lightroom.png
+id: Lightroom
+displayName: Adobe Lightroom
+publisher: Adobe
+description: Adobe Lightroom is an image organization and image processing software developed by Adobe as part of the Creative Cloud subscription family.
+detectionType: file
+fileDetectionName: Lightroom.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

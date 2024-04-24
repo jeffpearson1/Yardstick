@@ -11,7 +11,7 @@ preDownloadScript: |
   $Script:version = $matches[0]
   $Script:PackageName = "Auto_CharacterAnimator_$($version)_NU_NoAU"
   $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator $versionYear\"
+  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator $versionYear\Support Files"
 downloadScript: |
   Start-AdobeDownload -SearchNames "Character Animator" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
 installScript: |
@@ -23,7 +23,7 @@ displayName: Adobe Character Animator
 publisher: Adobe
 description: Adobe Character Animator is a character animation application that allows you to bring expressive characters to life using your own artwork. It is a unique and powerful application for intuitive 2D character animation.
 detectionType: file
-fileDetectionName: CharacterAnimator.exe
+fileDetectionName: Character Animator.exe
 fileDetectionMethod: exists
 installExperience: system
 restartBehavior: suppress
