@@ -1,1 +1,2 @@
 *.yaml filter=cleanSecrets
+*.psm1 filter=cleanSecrets

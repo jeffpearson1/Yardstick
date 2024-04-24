@@ -1,4 +1,4 @@
-# ASURITE Auto SSO Sign On
+# DEFRITE Auto SSO Sign On
 function Invoke-SSOAutoSignIn {
     param(
         $Target,
@@ -7,7 +7,7 @@ function Invoke-SSOAutoSignIn {
     $Username_Field = Get-SeElement -By ID "username"
     $Password_Field = Get-SeElement -By ID "password"
     $Button = Get-SeElement -By CSSSelector ".btn"
-    $Credentials = Get-StoredCredential -Target "asurite"
+    $Credentials = Get-StoredCredential -Target "defrite"
     Invoke-SeKeys -Element $Username_Field -Keys $Credentials.username
     Invoke-SeKeys -Element $Password_Field -Keys $(ConvertFrom-SecureString $Credentials.Password -AsPlainText)
     $Button.click()
@@ -19,4 +19,3 @@ function Invoke-SSOAutoSignIn {
     }
     Start-Sleep -Seconds 10
 }
-
