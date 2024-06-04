@@ -1,18 +1,28 @@
 url: https://helpx.adobe.com/animate/release-notes.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "most current version of Adobe Animate is the [A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $Script:version = $versionString.split(" ")[-1]
-  $versionYear = $versionString.split(" ")[9]
-  $Script:PackageName = "Auto_Animate_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Animate $versionYear"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Animate = [AdobeApplication]::new(@{
+    Name = "Animate"
+    ID = "Animate"
+    URL = $URL
+    VersionMatchStringRegex = 'most current version of Adobe Animate is the [A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
+    VersionYearLocation = 9
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Animate <VersionYear>"
+    PackageName = "Auto_Animate_<Version>_NU_NAU"
+  })
+
+  $Script:Animate.Update()
+  $Version = $Animate.Version
+  $VersionYear = "2024"
+  $PackageName = $Animate.PackageName
+  $InstallScript = $Animate.InstallScript
+  $UninstallScript = $Animate.UninstallScript
+  $FileDetectionPath = $Animate.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Animate" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Animate.Download()
+installScript:
 filename: setup.exe
 iconFile: Animate.png
 id: Animate

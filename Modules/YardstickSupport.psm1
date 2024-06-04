@@ -91,12 +91,12 @@ function Connect-AutoMSIntuneGraph() {
     # Check if the current token is invalid
     if (-not $Global:Token) {
         Write-Log "Getting an Intune Graph Client APItoken..."
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
+        $Global:Token = Connect-MSIntuneGraph -TenantID $TENANT_ID -ClientID $CLIENT_ID -ClientSecret $CLIENT_SECRET
     }
     elseif ($Global:Token.ExpiresOn.ToLocalTime() -lt (Get-Date)) {
         # If not, get a new token
         Write-Log "Token is expired. Refreshing token..."
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
+        $Global:Token = Connect-MSIntuneGraph -TenantID $TENANT_ID -ClientID $CLIENT_ID -ClientSecret $CLIENT_SECRET
         Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
     }
     elseif ($Global:Token.ExpiresOn.AddMinutes(-30).ToLocalTime() -lt (Get-Date)) {
@@ -105,7 +105,7 @@ function Connect-AutoMSIntuneGraph() {
         Write-Log "Token expires soon - Refreshing token..."
         # Required to force a refresh
         Clear-MsalTokenCache
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $clientSecret
+        $Global:Token = Connect-MSIntuneGraph -TenantID $TENANT_ID -ClientID $CLIENT_ID -ClientSecret $CLIENT_SECRET
         Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
     }
     else {

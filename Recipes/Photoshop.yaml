@@ -1,18 +1,27 @@
 url: https://helpx.adobe.com/photoshop/kb/uptodate.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "The current version of Photoshop [0-9]{4} \(desktop\) is.*[0-9]{2,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = ($versionString -split (" "))[5]
-  $Script:version = ((($versionString -split (" "))[-1]) -split ">")[-1]
-  $Script:PackageName = "Auto_Photoshop_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Photoshop $versionYear"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Photoshop = [AdobeApplication]::new(@{
+    Name = "Photoshop"
+    ID = "Photoshop"
+    URL = $URL
+    VersionMatchStringRegex = '[0-9]{4} \(desktop\) is.*[0-9]{2,}\.[0-9]{1,}'
+    VersionYearLocation = 1
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Photoshop <VersionYear>"
+    PackageName = "Auto_Photoshop_<Version>_NU_NAU"
+  })
+
+  $Photoshop.Update()
+  $Version = $Photoshop.Version
+  $VersionYear = $Photoshop.VersionYear
+  $PackageName = $Photoshop.PackageName
+  $InstallScript = $Photoshop.InstallScript
+  $UninstallScript = $Photoshop.UninstallScript
+  $FileDetectionPath = $Photoshop.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Photoshop" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Photoshop.Download()
 filename: setup.exe
 iconFile: Photoshop.png
 id: Photoshop

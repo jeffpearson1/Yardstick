@@ -1,0 +1,36 @@
+url: https://helpx.adobe.com/creative-cloud/release-note/cc-release-notes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:CCDesktop = [AdobeApplication]::new(@{
+    Name = "Creative Cloud Desktop"
+    ID = "CreativeCloudDesktop"
+    URL = $URL
+    VersionMatchStringRegex = 'Version ([0-9]{1,}\.){3}[0-9]{1,}'
+    VersionLocation = 1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Creative Cloud\ACC"
+    PackageName = "Auto_CCDesktop_<Version>_NU_NAU"
+    InstallType = "SelfService"
+  })
+
+  $CCDesktop.Update()
+  $Version = $CCDesktop.Version
+  $VersionYear = $CCDesktop.VersionYear
+  $PackageName = $CCDesktop.PackageName
+  $InstallScript = $CCDesktop.InstallScript
+  $UninstallScript = $CCDesktop.UninstallScript
+  $FileDetectionPath = $CCDesktop.FileDetectionPath
+downloadScript: |
+  $Script:CCDesktop.Download()
+filename: setup.exe
+iconFile: CCDesktop.png
+id: CreativeCloudDesktop
+displayName: Adobe Creative Cloud Desktop
+publisher: Adobe
+description: Creative Cloud for desktop is a great place to start any creative project. Quickly launch and update your desktop apps. Manage and share assets stored in Creative Cloud. Download fonts or high-quality royalty-free Adobe Stock assets. And showcase and discover creative work on Behance. Best of all, the application stays out of your way but is there when you need it, so you can focus on creativity.
+detectionType: file
+fileDetectionName: Creative Cloud.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

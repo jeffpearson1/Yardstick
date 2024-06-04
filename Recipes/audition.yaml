@@ -1,18 +1,28 @@
 url: https://helpx.adobe.com/audition/audition-releasenotes.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "The latest release of Adobe Audition is the [A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = $versionString.split(" ")[9]
-  $Script:version = $versionString.split(" ")[-1]
-  $Script:PackageName = "Auto_Audition_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Audition $versionYear\"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Audition = [AdobeApplication]::new(@{
+    Name = "Audition"
+    ID = "Audition"
+    URL = $URL
+    VersionMatchStringRegex = '[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
+    VersionYearLocation = 1
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Audition <VersionYear>"
+    PackageName = "Auto_Audition_<Version>_NU_NAU"
+  })
+
+  $Audition.Update()
+  $Version = $Audition.Version
+  $VersionYear = $Audition.VersionYear
+  $PackageName = $Audition.PackageName
+  $InstallScript = $Audition.InstallScript
+  $UninstallScript = $Audition.UninstallScript
+  $FileDetectionPath = $Audition.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Audition" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Audition.Download()
+installScript:
 filename: setup.exe
 iconFile: Audition.png
 id: Audition

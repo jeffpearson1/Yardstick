@@ -1,21 +1,27 @@
 url: https://helpx.adobe.com/adobe-character-animator/release-notes.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionString -match "[A-Za-z]{3,} [0-9]{4}" | Out-Null
-  $yearString =  $matches[0]
-  $versionYear = $yearString.split(" ")[1]
-  $versionString -match "[0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $Script:version = $matches[0]
-  $Script:PackageName = "Auto_CharacterAnimator_$($version)_NU_NoAU"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator $versionYear\Support Files"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:CharacterAnimator = [AdobeApplication]::new(@{
+    Name = "Character Animator"
+    ID = "CharacterAnimator"
+    URL = $URL
+    VersionMatchStringRegex = '[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
+    VersionYearLocation = 1
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator <VersionYear>\Support Files"
+    PackageName = "Auto_CharacterAnimator_<Version>_NU_NAU"
+  })
+
+  $CharacterAnimator.Update()
+  $Version = $CharacterAnimator.Version
+  $VersionYear = $CharacterAnimator.VersionYear
+  $PackageName = $CharacterAnimator.PackageName
+  $InstallScript = $CharacterAnimator.InstallScript
+  $UninstallScript = $CharacterAnimator.UninstallScript
+  $FileDetectionPath = $CharacterAnimator.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Character Animator" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:CharacterAnimator.Download()
 filename: setup.exe
 iconFile: CharacterAnimator.png
 id: CharacterAnimator

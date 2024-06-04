@@ -1,18 +1,27 @@
 url: https://helpx.adobe.com/dreamweaver/release-notes.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "latest version of Dreamweaver is the [A-Za-z]{3,} [0-9]{4}.*\(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = $versionString.split(" ")[-4]
-  $Script:version = $versionString.split(" ")[-1]
-  $Script:PackageName = "Auto_Dreamweaver_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Dreamweaver $versionYear\"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Dreamweaver = [AdobeApplication]::new(@{
+    Name = "Dreamweaver"
+    ID = "Dreamweaver"
+    URL = $URL
+    VersionMatchStringRegex = 'latest version of Dreamweaver is the [A-Za-z]{3,} [0-9]{4}.*\(version [0-9]{1,}\.[0-9]{1,}'
+    VersionYearLocation = -4
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Dreamweaver <VersionYear>"
+    PackageName = "Auto_Dreamweaver_<Version>_NU_NAU"
+  })
+
+  $Dreamweaver.Update()
+  $Version = $Dreamweaver.Version
+  $VersionYear = $Dreamweaver.VersionYear
+  $PackageName = $Dreamweaver.PackageName
+  $InstallScript = $Dreamweaver.InstallScript
+  $UninstallScript = $Dreamweaver.UninstallScript
+  $FileDetectionPath = $Dreamweaver.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Dreamweaver" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Dreamweaver.Download()
 filename: setup.exe
 iconFile: Dreamweaver.png
 id: Dreamweaver

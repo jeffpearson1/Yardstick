@@ -1,3 +1,5 @@
+using module .\Modules\Custom\AdobeDownloader.psm1
+
 param (
     [Alias("AppId")]
     [String] $ApplicationId = "None",
@@ -6,6 +8,8 @@ param (
     [Switch] $NoDelete,
     [Switch] $Repair
 )
+
+
 
 # Modules required:
 # powershell-yaml
@@ -37,27 +41,35 @@ if ("None" -eq $ApplicationId -and $All -eq $false) {
     exit 1
 }
 $applications = [System.Collections.ArrayList]::new()
-$Script:testApps = "$PSScriptRoot\TestApps"
-$Script:buildSpace = "$PSScriptRoot\BuildSpace"
-$Script:scriptSpace = "$PSScriptRoot\Scripts"
-$Script:publishedApps = "$PSScriptRoot\Apps"
-$Script:autoPackagerRecipes = "$PSScriptRoot\Recipes"
-$Script:iconPath = "$PSScriptRoot\Icons"
-$Script:toolsDir = "$PSScriptRoot\Tools"
-$Script:tempDir = "$PSScriptRoot\Temp"
-$Script:secretsDir = "$PSScriptRoot\Secrets"
 
 # Import preferences file:
-$prefs = Get-Content $PSScriptRoot\Preferences.yaml | ConvertFrom-Yaml
-$Global:tenantId = $prefs.tenantId
-$Global:clientId = $prefs.clientId
-$Global:clientSecret = $prefs.clientSecret
+try {
+    $prefs = Get-Content $PSScriptRoot\Preferences.yaml | ConvertFrom-Yaml
+}
+catch {
+    Write-Error "Unable to open preferences.yaml!"
+    exit 1
+}
 
-# $scopeTags = $prefs.scopeTags
+# Import Folder Locations
+$Script:TEMP = $prefs.Temp
+$Script:BUILDSPACE = $prefs.Buildspace
+$Script:SCRIPTS = $prefs.Scripts
+$Script:PUBLISHED = $prefs.Published
+$Script:RECIPES = $prefs.Recipes
+$Script:ICONS = $prefs.Icons
+$Script:TOOLS = $prefs.Tools
+$Script:SECRETS = $prefs.Secrets
+
+
+# Import Intune Connection Settings
+$Global:TENANT_ID = $prefs.TenantID
+$Global:CLIENT_ID = $prefs.ClientID
+$Global:CLIENT_SECRET = $prefs.ClientSecret
 
 if ($ApplicationId -ne "None") {
-    if (-not (Test-Path "$autoPackagerRecipes\$ApplicationId.yaml")) {
-        Write-Log "Application $ApplicationId not found in $autoPackagerRecipes"
+    if (-not (Test-Path "$RECIPES\$ApplicationId.yaml")) {
+        Write-Log "Application $ApplicationId not found in $RECIPES"
         exit 1
     }
 }
@@ -65,7 +77,7 @@ if ($ApplicationId -ne "None") {
 
 # Start updating each application if all are selected
 if ($All) {
-	$ApplicationFullNames = $(Get-ChildItem $autoPackagerRecipes -File).Name
+	$ApplicationFullNames = $(Get-ChildItem $RECIPES -File).Name
 	foreach ($Application in $ApplicationFullNames) {
 		$Applications.Add($($Application -split ".yaml")[0]) | Out-Null
 	}
@@ -83,10 +95,16 @@ foreach ($ApplicationId in $Applications) {
     
     # Clear the temp file
     Write-Log "Clearing the temp directory..."
-    Get-ChildItem $TempDir -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+    Get-ChildItem $TEMP -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
     # Open the YAML file and collect all necessary attributes
-    $parameters = Get-Content "$autoPackagerRecipes\$ApplicationId.yaml" | ConvertFrom-Yaml
+    try {
+        $parameters = Get-Content "$RECIPES\$ApplicationId.yaml" | ConvertFrom-Yaml
+    }
+    catch {
+        Write-Error "Unable to open parameters file for $ApplicationId"
+        break
+    }
     $Script:url = if ($parameters.urlRedirects -eq $true) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
     $Script:id = $parameters.id
     $Script:version = $parameters.version
@@ -178,24 +196,24 @@ foreach ($ApplicationId in $Applications) {
 
 
     # See if this has been run before. If there are previous files, move them to a folder called "Old"
-    if (Test-Path $buildSpace\$id) {
-        if (-not (Test-Path $buildSpace\Old)) {
-            New-Item -Path $buildSpace -ItemType Directory -Name "Old"
+    if (Test-Path $BUILDSPACE\$id) {
+        if (-not (Test-Path $BUILDSPACE\Old)) {
+            New-Item -Path $BUILDSPACE -ItemType Directory -Name "Old"
         }
-        Write-Log "Removing old buildspace..."
-        Move-Item -Path $buildSpace\$id $buildSpace\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
+        Write-Log "Removing old Buildspace..."
+        Move-Item -Path $BUILDSPACE\$id $BUILDSPACE\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
     }
-    if (Test-Path $scriptSpace\$id) {
-        if (-not (Test-Path $scriptSpace\Old)) {
-            New-Item -Path $scriptSpace -ItemType Directory -Name "Old"
+    if (Test-Path $SCRIPTS\$id) {
+        if (-not (Test-Path $SCRIPTS\Old)) {
+            New-Item -Path $SCRIPTS -ItemType Directory -Name "Old"
         }
         Write-Log "Removing old script space..."
-        Move-Item -Path $scriptSpace\$id $scriptSpace\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
+        Move-Item -Path $SCRIPTS\$id $SCRIPTS\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
     }
 
-    # Make the new buildspace directory
-    New-Item -Path $buildSpace\$id -ItemType Directory -Name $version
-    Set-Location $buildSpace\$id\$version
+    # Make the new BUILDSPACE directory
+    New-Item -Path $BUILDSPACE\$id -ItemType Directory -Name $version
+    Set-Location $BUILDSPACE\$id\$version
 
     # Download the new installer
     Write-Log "Starting download..."
@@ -215,7 +233,7 @@ foreach ($ApplicationId in $Applications) {
         }
     }
     else {
-        Start-BitsTransfer -Source $url -Destination $buildSpace\$id\$version\$fileName
+        Start-BitsTransfer -Source $url -Destination $BUILDSPACE\$id\$version\$fileName
     }
 
 
@@ -239,7 +257,7 @@ foreach ($ApplicationId in $Applications) {
 
     # Replace the <productcode> placeholder with the actual product code
     if ($filename -match "\.msi$") {
-        $ProductCode = Get-MSIProductCode $buildSpace\$id\$version\$fileName
+        $ProductCode = Get-MSIProductCode $BUILDSPACE\$id\$version\$fileName
         Write-Log "Product Code: $ProductCode"
         $installScript = $installScript.replace("<productcode>", $ProductCode)
         $uninstallScript = $uninstallScript.replace("<productcode>", $ProductCode)
@@ -260,11 +278,11 @@ foreach ($ApplicationId in $Applications) {
     # Generate the .intunewin file
     Set-Location $PSScriptRoot
     Write-Log "Generating .intunewin file..."
-    $app = New-IntuneWin32AppPackage -SourceFolder $buildSpace\$id\$version -SetupFile $filename -OutputFolder $publishedApps -Force
+    $app = New-IntuneWin32AppPackage -SourceFolder $BUILDSPACE\$id\$version -SetupFile $filename -OutputFolder $PUBLISHED -Force
 
     # Upload .intunewin file to Intune
     # Detection Types
-    $Icon = New-IntuneWin32AppIcon -FilePath "$($iconPath)\$($iconFile)"
+    $Icon = New-IntuneWin32AppIcon -FilePath "$($ICONS)\$($iconFile)"
     if ( -not ($fileDetectionVersion)) {
         $fileDetectionVersion = $version
     }
@@ -309,10 +327,10 @@ foreach ($ApplicationId in $Applications) {
         }
     }
     elseif ($detectionType -eq "script") {
-        if (!(Test-Path $scriptSpace\$id)) {
-            New-Item -Name $id -ItemType Directory -Path $scriptSpace
+        if (!(Test-Path $SCRIPTS\$id)) {
+            New-Item -Name $id -ItemType Directory -Path $SCRIPTS
         }
-        $ScriptLocation = "$scriptSpace\$id\$version.$detectionScriptFileExtension"
+        $ScriptLocation = "$SCRIPTS\$id\$version.$detectionScriptFileExtension"
         Write-Output $detectionScript | Out-File $ScriptLocation
         $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $detectionScriptEnforceSignatureCheck -RunAs32Bit $detectionScriptRunAs32Bit
     }
@@ -358,23 +376,25 @@ foreach ($ApplicationId in $Applications) {
     $AllMatchingApps = Get-SameAppAllVersions $DisplayName | Sort-Object DisplayVersion -Descending
     $CurrentApp = $AllMatchingApps | Where-Object id -eq $Win32App.Id
     $AllOldApps = $AllMatchingApps | Where-Object id -ne $CurrentApp.Id
-    $NMinusOneApp = $AllOldApps | Where-Object displayName -eq $displayName
+    $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $displayName
     $NMinusTwoAndOlderApps = $AllOldApps | Where-Object displayName -ne $displayName
 
     
 
     # Start with the N-1 app first and move all its deployments to the newest one
-    if ($NMinusOneApp) {
-        Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
-        Move-Assignments -From $NMinusOneApp -To $CurrentApp
-        for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
-            # Move all the deployments up one number
-            if ($i -eq 0) {
-                # Move the app assignments in the 0 position to the nminusoneapp
-                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusOneApp
-            }
-            else {
-                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1]
+    if ($NMinusOneApps) {
+        foreach ($NMinusOneApp in $NMinusOneApps) {
+            Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
+            Move-Assignments -From $NMinusOneApp -To $CurrentApp
+            for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
+                # Move all the deployments up one number
+                if ($i -eq 0) {
+                    # Move the app assignments in the 0 position to the nminusoneapp
+                    Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusOneApp
+                }
+                else {
+                    Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1]
+                }
             }
         }
     }
@@ -400,10 +420,10 @@ foreach ($ApplicationId in $Applications) {
 }   
 
 # Clean up
-Write-Log "Cleaning up the buildspace..."
-Get-ChildItem $buildSpace -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+Write-Log "Cleaning up the Buildspace..."
+Get-ChildItem $BUILDSPACE -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 Write-Log "Removing .intunewin files..."
-Get-ChildItem $publishedApps -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+Get-ChildItem $PUBLISHED -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
 # Return to the original directory
 Pop-Location

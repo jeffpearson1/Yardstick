@@ -1,18 +1,27 @@
 url: https://helpx.adobe.com/lightroom-cc/kb/fixed-issues.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "[A-Za-z]{3,10} [0-9]{4} RELEASE \(VERSION [0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = ($versionString -split (" "))[1]
-  $Script:version = ($versionString -split (" "))[-1]
-  $Script:PackageName = "Auto_Lightroom_$($version)_NU_NAU"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Lightroom CC $versionYear\"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Lightroom = [AdobeApplication]::new(@{
+    Name = "Lightroom"
+    ID = "Lightroom"
+    URL = $URL
+    VersionMatchStringRegex = '[A-Za-z]{3,10} [0-9]{4} RELEASE \(VERSION [0-9]{1,}\.[0-9]{1,}'
+    VersionYearLocation = 1
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Lightroom CC <VersionYear>"
+    PackageName = "Auto_Lightroom_<Version>_NU_NAU"
+  })
+
+  $Lightroom.Update()
+  $Version = $Lightroom.Version
+  $VersionYear = $Lightroom.VersionYear
+  $PackageName = $Lightroom.PackageName
+  $InstallScript = $Lightroom.InstallScript
+  $UninstallScript = $Lightroom.UninstallScript
+  $FileDetectionPath = $Lightroom.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Lightroom" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Lightroom.Download()
 filename: setup.exe
 iconFile: Lightroom.png
 id: Lightroom

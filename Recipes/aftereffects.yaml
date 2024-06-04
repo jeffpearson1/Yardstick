@@ -1,18 +1,28 @@
-url: https://helpx.adobe.com/after-effects/release-note/release-notes-after-effects.html
+url: 'https://helpx.adobe.com/after-effects/release-note/release-notes-after-effects.html'
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "The [A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = $versionString.split(" ")[2]
-  $version = $versionString.split(" ")[-1]
-  $Script:PackageName = "Auto_AfterEffects_$($version)_NU_NoAU"
-  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe After Effects $versionYear\Support Files"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:AfterEffects = [AdobeApplication]::new(@{
+    Name = "After Effects"
+    ID = "AfterEffects"
+    URL = $URL
+    VersionMatchStringRegex = "[0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}"
+    VersionYearLocation = 0
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe After Effects <VersionYear>\Support Files"
+    PackageName = "Auto_AfterEffects_<Version>_NU_NAU"
+  })
+
+  $Script:AfterEffects.Update()
+  $Version = $AfterEffects.Version
+  $VersionYear = $AfterEffects.VersionYear
+  $PackageName = $AfterEffects.PackageName
+  $InstallScript = $AfterEffects.InstallScript
+  $UninstallScript = $AfterEffects.UninstallScript
+  $FileDetectionPath = $AfterEffects.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "After Effects" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:AfterEffects.Download()
+installScript:
 filename: setup.exe
 iconFile: AfterEffects.png
 id: AfterEffects

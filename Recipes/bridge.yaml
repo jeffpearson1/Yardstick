@@ -1,18 +1,28 @@
 url: https://helpx.adobe.com/bridge/using/whats-new.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = $versionString.split(" ")[9]
-  $version = $versionString.split(" ")[-1]
-  $Global:PackageName = "Auto_Bridge_$($version)_NU_NoAutoUpdate"
-  $uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Bridge $versionYear\"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Bridge = [AdobeApplication]::new(@{
+    Name = "Bridge"
+    ID = "Bridge"
+    URL = $URL
+    VersionMatchStringRegex = '[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
+    VersionYearLocation = 1
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Bridge <VersionYear>"
+    PackageName = "Auto_Bridge_<Version>_NU_NAU"
+  })
+
+  $Bridge.Update()
+  $Version = $Bridge.Version
+  $VersionYear = $Bridge.VersionYear
+  $PackageName = $Bridge.PackageName
+  $InstallScript = $Bridge.InstallScript
+  $UninstallScript = $Bridge.UninstallScript
+  $FileDetectionPath = $Bridge.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Bridge" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Bridge.Download()
+installScript:
 filename: setup.exe
 iconFile: Bridge.png
 id: Bridge

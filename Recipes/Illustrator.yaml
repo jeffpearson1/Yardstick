@@ -1,16 +1,27 @@
 url: https://helpx.adobe.com/illustrator/release-notes.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "Adobe Illustrator on the desktop is the [A-Za-z]{3,10} [0-9]{4} release, version [0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = ($versionString -split (" "))[8]
-  $Script:version = ($versionString -split (" "))[-1]
-  $Script:PackageName = "Auto_Illustrator_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Illustrator $versionYear\Support Files\Contents\Windows"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Illustrator = [AdobeApplication]::new(@{
+    Name = "Illustrator"
+    ID = "Illustrator"
+    URL = $URL
+    VersionMatchStringRegex = 'desktop is the [A-Za-z]{3,10} [0-9]{4} release\, version [0-9]{1,}\.[0-9]{1,}(\.[0-9]{1,}){0,1}'
+    VersionYearLocation = 4
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Illustrator <VersionYear>\Support Files\Contents\Windows"
+    PackageName = "Auto_Illustrator_<Version>_NU_NAU"
+  })
+
+  $Illustrator.Update()
+  $Version = $Illustrator.Version
+  $VersionYear = $Illustrator.VersionYear
+  $PackageName = $Illustrator.PackageName
+  $InstallScript = $Illustrator.InstallScript
+  $UninstallScript = $Illustrator.UninstallScript
+  $FileDetectionPath = $Illustrator.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Illustrator" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
+  $Script:Illustrator.Download()
 installScript: |
   setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
 filename: setup.exe

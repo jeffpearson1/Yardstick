@@ -1,18 +1,27 @@
 url: https://helpx.adobe.com/indesign/release-notes.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "InDesign version [0-9]{1,}\.[0-9]{1,} release \([A-Za-z]{3,} [0-9]{4}\)" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = $versionString.split(" ")[-1].trim(")")
-  $Script:version = $versionString.split(" ")[2]
-  $Script:PackageName = "Auto_InDesign_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe InDesign $versionYear"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:InDesign = [AdobeApplication]::new(@{
+    Name = "InDesign"
+    ID = "InDesign"
+    URL = $URL
+    VersionMatchStringRegex = '[0-9]{1,}\.[0-9]{1,} release \([A-Za-z]{3,} [0-9]{4}'
+    VersionYearLocation = -1
+    VersionLocation = 0
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe InDesign <VersionYear>"
+    PackageName = "Auto_InDesign_<Version>_NU_NAU"
+  })
+
+  $InDesign.Update()
+  $Version = $InDesign.Version
+  $VersionYear = $InDesign.VersionYear
+  $PackageName = $InDesign.PackageName
+  $InstallScript = $InDesign.InstallScript
+  $UninstallScript = $InDesign.UninstallScript
+  $FileDetectionPath = $InDesign.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "InDesign" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:InDesign.Download()
 filename: setup.exe
 iconFile: InDesign.png
 id: InDesign

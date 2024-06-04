@@ -1,21 +1,27 @@
 url: https://helpx.adobe.com/dimension/using/whats-new.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "[A-Za-z]{3,} [0-9]{4} release of Dimension \(version [0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $versionString = $matches[0]
-  $versionString -match "[A-Za-z]{3,} [0-9]{4}" | Out-Null
-  $yearString =  $matches[0]
-  $versionYear = $yearString.split(" ")[1]
-  $versionString -match "[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
-  $Script:version = $matches[0]
-  $Script:PackageName = "Auto_Dimension_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Dimension $versionYear\"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Dimension = [AdobeApplication]::new(@{
+    Name = "Dimension"
+    ID = "Dimension"
+    URL = $URL
+    VersionMatchStringRegex = '[A-Za-z]{3,} [0-9]{4} release of Dimension \(version [0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}'
+    VersionYearLocation = 1
+    VersionLocation = -1
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Dimension <VersionYear>"
+    PackageName = "Auto_Dimension_<Version>_NU_NAU"
+  })
+
+  $Dimension.Update()
+  $Version = $Dimension.Version
+  $VersionYear = $Dimension.VersionYear
+  $PackageName = $Dimension.PackageName
+  $InstallScript = $Dimension.InstallScript
+  $UninstallScript = $Dimension.UninstallScript
+  $FileDetectionPath = $Dimension.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Dimension" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Dimension.Download()
 filename: setup.exe
 iconFile: Dimension.png
 id: Dimension

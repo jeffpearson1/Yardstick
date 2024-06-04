@@ -1,14 +1,25 @@
 url: https://helpx.adobe.com/fresco/release-notes.html
 urlredirects: false
 preDownloadScript: |
-  $content = Invoke-WebRequest $url
-  $content.content -match "Fresco version [0-9]{1,}\.[0-9]{1,} \([A-Za-z]{3,10} [0-9]{4}" | Out-Null
-  $versionString = $matches[0]
-  $versionYear = ($versionString -split (" "))[1]
-  $Script:version = ($versionString -split (" "))[2]
-  $Script:PackageName = "Auto_Fresco_$($version)_NU_NoAutoUpdate"
-  $Script:uninstallScript = "msiexec /x $PackageName.msi /qn /norestart"
-  $Script:fileDetectionPath = "%ProgramFiles%\Adobe\Adobe Fresco $versionYear\"
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Fresco = [AdobeApplication]::new(@{
+    Name = "Fresco"
+    ID = "Fresco"
+    URL = $URL
+    VersionMatchStringRegex = 'Fresco version [0-9]{1,}\.[0-9]{1,} \([A-Za-z]{3,10} [0-9]{4}'
+    VersionYearLocation = -1
+    VersionLocation = 2
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Fresco <VersionYear>"
+    PackageName = "Auto_Fresco_<Version>_NU_NAU"
+  })
+
+  $Script:Fresco.Update()
+  $Version = $Fresco.Version
+  $VersionYear = "2024"
+  $PackageName = $Fresco.PackageName
+  $InstallScript = $Fresco.InstallScript
+  $UninstallScript = $Fresco.UninstallScript
+  $FileDetectionPath = $Fresco.FileDetectionPath
 downloadScript: |
   Start-AdobeDownload -SearchNames "Fresco" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
 installScript: |
