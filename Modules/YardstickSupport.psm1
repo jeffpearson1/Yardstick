@@ -10,10 +10,10 @@ function Write-Log {
     )
     Push-Location $LOG_LOCATION
     if($Init) {
-        if (Test-Path $LOG_LOCATION\$LOG_FILE) {
-            Remove-Item $LOG_LOCATION\$LOG_FILE -Force
-        }
-        Write-Output "#######################################################" | Out-File $LOG_FILE
+        # if (Test-Path $LOG_LOCATION\$LOG_FILE) {
+        #     Remove-Item $LOG_LOCATION\$LOG_FILE -Force
+        # }
+        Write-Output "#######################################################" | Out-File $LOG_FILE -Append
         Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LOG_FILE -Append
         Write-Output "#######################################################" | Out-File $LOG_FILE -Append
     }
@@ -161,7 +161,7 @@ function Move-Assignments {
             $try = 0
             $successfullyAdded = $false
             while (!$successfullyAdded -and ($try -lt $maxRetries)) {
-                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
+                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" | Out-Null
                 # Check that it worked
                 $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
                 if($AssignedGroups | Where-Object GroupID -eq $groupID) {
