@@ -126,6 +126,7 @@ foreach ($ApplicationId in $Applications) {
     $Script:restartBehavior = if($parameters.restartBehavior) {$parameters.restartBehavior} else {$prefs.defaultRestartBehavior}
     $Script:availableGroups = if($parameters.availableGroups) {$parameters.availableGroups} else {$prefs.defaultAvailableGroups}
     $Script:requiredGroups = if($parameters.requiredGroups) {$parameters.requiredGroups} else {$prefs.defaultRequiredGroups}
+    $Script:defaultDeploymentGroups = if($parameters.defaultDeploymentGroups) {$parameters.defaultDeploymentGroups} else {$prefs.defaultDeploymentGroups}
     $Script:detectionType = $parameters.detectionType
     $Script:fileDetectionVersion = $parameters.fileDetectionVersion
     $Script:fileDetectionMethod = $parameters.fileDetectionMethod
@@ -139,7 +140,7 @@ foreach ($ApplicationId in $Applications) {
     $Script:registryDetectionValue = $parameters.registryDetectionValue
     $Script:registryDetectionOperator = $parameters.registryDetectionOperator
     $Script:detectionScript = $parameters.detectionScript
-    $Script:DetectionScriptFileExtension = if($parameters.detectionScriptFileExtension) {$parameters.detectionScriptFileExtension} else {$prefs.defaultDetectionScriptFileExtension}
+    $Script:detectionScriptFileExtension = if($parameters.detectionScriptFileExtension) {$parameters.detectionScriptFileExtension} else {$prefs.defaultDetectionScriptFileExtension}
     $Script:detectionScriptRunAs32Bit = if($parameters.detectionScriptRunAs32Bit) {$parameters.detectionScriptRunAs32Bit} else {$prefs.defaultdetectionScriptRunAs32Bit}
     $Script:detectionScriptEnforceSignatureCheck = if($parameters.detectionScriptEnforceSignatureCheck) {$parameters.detectionScriptEnforceSignatureCheck} else {$prefs.defaultdetectionScriptEnforceSignatureCheck}
     $Script:allowUserUninstall = if($parameters.allowUserUninstall) {$parameters.allowUserUninstall} else {$prefs.defaultAllowUserUninstall}
@@ -250,30 +251,44 @@ foreach ($ApplicationId in $Applications) {
         }
     }
     
+
     # Script Files:
     # Replace the <filename> placeholder with the actual filename
     $installScript = $installScript.replace("<filename>", $fileName)
     $uninstallScript = $uninstallScript.replace("<filename>", $fileName)
+    if ($detectionScript) {
+        $detectionScript = $detectionScript.replace("<filename>", $fileName)
+    }
+    if ($registryDetectionKey) {
+        $registryDetectionKey = $registryDetectionKey.replace("<filename>", $fileName)
+    }
+
 
     # Replace the <productcode> placeholder with the actual product code
     if ($filename -match "\.msi$") {
         $ProductCode = Get-MSIProductCode $BUILDSPACE\$id\$version\$fileName
         Write-Log "Product Code: $ProductCode"
-        $installScript = $installScript.replace("<productcode>", $ProductCode)
-        $uninstallScript = $uninstallScript.replace("<productcode>", $ProductCode)
-    }
-
-    # Replace <version> placeholder with the actual version
-    $installScript = $installScript.replace("<version>", $version)
-    $uninstallScript = $uninstallScript.replace("<version>", $version)  
-    
-    if ($registryDetectionKey) {
-        $registryDetectionKey = $registryDetectionKey.replace("<filename>", $fileName)
-        $registryDetectionKey = $registryDetectionKey.replace("<version>", $version)
-        if ($ProductCode) {
+        $installScript = $installScript.replace("<productcode>", $productCode)
+        $uninstallScript = $uninstallScript.replace("<productcode>", $productCode)
+        if ($detectionScript) {
+            $detectionScript = $detectionScript.replace("<productcode>", $productCode)
+        }
+        if ($registryDetectionKey) {
             $registryDetectionKey = $registryDetectionKey.replace("<productcode>", $productCode)
         }
     }
+
+    
+    # Replace <version> placeholder with the actual version
+    $installScript = $installScript.replace("<version>", $version)
+    $uninstallScript = $uninstallScript.replace("<version>", $version) 
+    if ($detectionScript) {
+        $detectionScript = $detectionScript.replace("<version>", $version) 
+    } 
+    if ($registryDetectionKey) {
+        $registryDetectionKey = $registryDetectionKey.replace("<version>", $version)
+    }  
+
 
     # Generate the .intunewin file
     Set-Location $PSScriptRoot
@@ -386,18 +401,31 @@ foreach ($ApplicationId in $Applications) {
         foreach ($NMinusOneApp in $NMinusOneApps) {
             Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
             Move-Assignments -From $NMinusOneApp -To $CurrentApp
-            for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
-                # Move all the deployments up one number
-                if ($i -eq 0) {
-                    # Move the app assignments in the 0 position to the nminusoneapp
-                    Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusOneApp
-                }
-                else {
-                    Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1]
-                }
+        }
+    }
+    for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
+        # Move all the deployments up one number
+        if ($i -eq 0) {
+            # Move the app assignments in the 0 position to the nminusoneapp
+            Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusOneApp
+        }
+        else {
+            Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1]
+        }
+    }
+
+    # Add the default deployments if they're not already there from the migration
+    if ($Script:defaultDeploymentGroups) {
+        $ID = $CurrentApp.Id
+        $CurrentlyDeployedIDs = (Get-IntuneWin32AppAssignment -Id $ID).GroupID
+        foreach ($DeploymentGroupID in $Script:defaultDeploymentGroups) {
+            if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
+                Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
+                Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
             }
         }
     }
+
     # Rename all the old applications to have the appropriate N-<versions behind> in them
     for ($i = 1; $i -lt $AllMatchingApps.count; $i++) {
         Set-IntuneWin32App -Id $AllMatchingApps[$i].Id -DisplayName "$($displayName) (N-$i)"
