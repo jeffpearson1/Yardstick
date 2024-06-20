@@ -154,7 +154,7 @@ foreach ($ApplicationId in $Applications) {
     if ($Repair) {
         # Correct any naming discrepancies before we continue
         # Rename any apps if they are named incorrectly
-        $CurrentApps = Get-SameAppAllVersions $DisplayName | Sort-Object displayVersion -descending
+        $CurrentApps = Get-SameAppAllVersions $DisplayName
         for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
             if ($CurrentApps[$i].DisplayName -ne "$displayName (N-$i)") {
                 Write-Log "Setting name for $displayName (N-$i)"
@@ -388,7 +388,7 @@ foreach ($ApplicationId in $Applications) {
 
     # Define the current version, the version that is one older but shares the same name, and all the ones older than that
     Write-Log "Updating local application manifest..."
-    $AllMatchingApps = Get-SameAppAllVersions $DisplayName | Sort-Object DisplayVersion -Descending
+    $AllMatchingApps = Get-SameAppAllVersions $DisplayName
     $CurrentApp = $AllMatchingApps | Where-Object id -eq $Win32App.Id
     $AllOldApps = $AllMatchingApps | Where-Object id -ne $CurrentApp.Id
     $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $displayName
@@ -439,9 +439,9 @@ foreach ($ApplicationId in $Applications) {
     
     # Remove all the old versions 
     if (!$NoDelete) {
-        for ($i = $numVersionsToKeep; $i -lt $AllMatchingApps.count; $i++) {
-            Write-Log "Removing old app with id $($AllMatchingApps[$i].id)"
-            Remove-IntuneWin32App -Id $AllMatchingApps[$i].id
+        for ($i = $numVersionsToKeep - 1; $i -lt $AllOldApps.count; $i++) {
+            Write-Log "Removing old app with id $($AllOldApps[$i].id)"
+            Remove-IntuneWin32App -Id $AllOldApps[$i].id
         }
     }
     Write-Log "Updates complete for $displayName"

@@ -125,6 +125,8 @@ function Move-Assignments {
         [Parameter(Mandatory, Position=1)]
         [System.Object] $To
     )
+    Write-Log "DEBUG: FROM.ID - $($From.id)"
+    Write-Log "DEBUG: TO.ID - $($To.id)"
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromAvailable = ($FromAssignments | Where-Object intent -eq "available").groupId
     $FromRequired = ($FromAssignments | Where-Object intent -eq "required").groupId
@@ -185,11 +187,12 @@ function Move-Assignments {
 
 
 # Get-SameAppAllVersions
-# Returns all versions of an app
+# Returns all versions of an app sorted from newest to oldest
 # Accounts for edge cases where an application name might be similar to others, i.e. Mozilla Firefox vs. Mozilla Firefox ESR
 # Param: [String] DisplayName
 # Return: @(PSCustomObject) 
 function Get-SameAppAllVersions($DisplayName) {
     $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName*"
-    return ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (*")})
+    $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (*")})
+    return $sortable | Sort-Object {$($($_.displayVersion -replace "[A-Za-z]", "0").split(".") | ForEach-Object {'{0:d8}' -f [int]$_}) -join ''} -Descending
 }
