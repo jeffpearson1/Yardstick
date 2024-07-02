@@ -7,6 +7,9 @@
 /Temp/*
 /Tools/*
 
+# Exclude recipes in development
+/Apps/Disabled/*
+
 # Keep any empty directories
 !/Apps/.gitkeep
 !/BuildSpace/.gitkeep
