@@ -9,7 +9,7 @@ preDownloadScript: |
     VersionMatchStringRegex = '[A-Za-z]{3,10} [0-9]{4} RELEASE \(VERSION [0-9]{1,}\.[0-9]{1,}'
     VersionYearLocation = 1
     VersionLocation = -1
-    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Lightroom CC <VersionYear>"
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Lightroom CC"
     PackageName = "Auto_Lightroom_<Version>_NU_NAU"
   })
 
@@ -28,9 +28,16 @@ id: Lightroom
 displayName: Adobe Lightroom
 publisher: Adobe
 description: Adobe Lightroom is an image organization and image processing software developed by Adobe as part of the Creative Cloud subscription family.
-detectionType: file
-fileDetectionName: Lightroom.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Lightroom CC*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Lightroom.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

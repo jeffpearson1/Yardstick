@@ -19,7 +19,6 @@ preDownloadScript: |
   $PackageName = $InDesign.PackageName
   $InstallScript = $InDesign.InstallScript
   $UninstallScript = $InDesign.UninstallScript
-  $FileDetectionPath = $InDesign.FileDetectionPath
 downloadScript: |
   $Script:InDesign.Download()
 filename: setup.exe
@@ -28,9 +27,16 @@ id: InDesign
 displayName: Adobe InDesign
 publisher: Adobe
 description: Adobe InDesign is a desktop publishing and page layout designing software application.
-detectionType: file
-fileDetectionName: InDesign.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe InDesign*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "InDesign.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

@@ -19,7 +19,6 @@ preDownloadScript: |
   $PackageName = $Animate.PackageName
   $InstallScript = $Animate.InstallScript
   $UninstallScript = $Animate.UninstallScript
-  $FileDetectionPath = $Animate.FileDetectionPath
 downloadScript: |
   $Script:Animate.Download()
 installScript:
@@ -29,9 +28,16 @@ id: Animate
 displayName: Adobe Animate
 publisher: Adobe
 description: Adobe Animate is a desktop publishing and page layout designing software application.
-detectionType: file
-fileDetectionName: Animate.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Animate*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Animate.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

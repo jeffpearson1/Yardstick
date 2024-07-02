@@ -1,0 +1,42 @@
+url: https://helpx.adobe.com/substance-3d-modeler/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Substance3DModeler = [AdobeApplication]::new(@{
+    Name = "Substance 3D Modeler"
+    ID = "Substance3DModeler"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=\>Version )[0-9]{1,}\.[0-9]{1,}"
+    VersionLocation = -1
+    PackageName = "Auto_Substance3DModeler_<Version>_NU_NAU"
+  })
+
+  $Script:Substance3DModeler.Update()
+  $Version = $Substance3DModeler.Version
+  $VersionYear = $Substance3DModeler.VersionYear
+  $PackageName = $Substance3DModeler.PackageName
+  $InstallScript = $Substance3DModeler.InstallScript
+  $UninstallScript = $Substance3DModeler.UninstallScript
+downloadScript: |
+  $Script:Substance3DModeler.Download()
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Substance3D.png
+id: Substance3DModeler
+displayName: Substance 3D Modeler
+publisher: Adobe
+description: Modeler is a 3D modeling and sculpting application that helps you create across both desktop and VR. Modeler makes working in 3D as intuitive as working with clay in real life. With Modeler, you can focus on the creative process rather than on technical limitations.
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Substance 3D Modeler*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Substance 3D Modeler.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

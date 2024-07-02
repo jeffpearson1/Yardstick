@@ -6,7 +6,7 @@ preDownloadScript: |
     Name = "Fresco"
     ID = "Fresco"
     URL = $URL
-    VersionMatchStringRegex = 'Fresco version [0-9]{1,}\.[0-9]{1,} \([A-Za-z]{3,10} [0-9]{4}'
+    VersionMatchStringRegex = 'Fresco version ([0-9]{1,}\.){1,2}[0-9]{1,} \([A-Za-z]{3,10} [0-9]{4}'
     VersionYearLocation = -1
     VersionLocation = 2
     FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Fresco <VersionYear>"
@@ -19,20 +19,24 @@ preDownloadScript: |
   $PackageName = $Fresco.PackageName
   $InstallScript = $Fresco.InstallScript
   $UninstallScript = $Fresco.UninstallScript
-  $FileDetectionPath = $Fresco.FileDetectionPath
 downloadScript: |
-  Start-AdobeDownload -SearchNames "Fresco" -Id $id -TempDir $tempDir -PackageName $PackageName -Version $Version -BuildSpace $buildSpace
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+  $Script:Fresco.Download()
 filename: setup.exe
 iconFile: Fresco.png
 id: Fresco
 displayName: Adobe Fresco
 publisher: Adobe
 description: Adobe Fresco is a vector and raster graphics editor developed by Adobe primarily for digital painting.
-detectionType: file
-fileDetectionName: Fresco.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Fresco*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Fresco.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

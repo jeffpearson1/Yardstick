@@ -12,6 +12,7 @@ class AdobeApplication {
     [string]$InstallScript = 'setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US'
     [string]$UninstallScript = 'msiexec /x <PackageName>.msi /qn /norestart'
     [string]$InstallType = 'Managed'
+    [bool]$SSO=$true
     [array]$prefs = (Get-Content G:\Intune\Yardstick\Preferences.yaml | ConvertFrom-Yaml)
 
     AdobeApplication() { 
@@ -88,15 +89,35 @@ class AdobeApplication {
             return
         }
         
-        try {
-            # Sign in via SSO
-            Invoke-SSOAutoSignIn -Target "adminconsole.adobe.com" -Driver $Driver
+
+        if ($this.SSO) {
+            try {
+                # Sign in via SSO
+                Invoke-SSOAutoSignIn -Target "adminconsole.adobe.com" -Driver $Driver
+            }
+            catch {
+                Write-Log "ERROR: Cannot run Invoke-SSOAutoSignIn!"
+                Write-Error "ERROR: Cannot run Invoke-SSOAutoSignIn!"
+                return
+            }
         }
-        catch {
-            Write-Log "ERROR: Cannot run Invoke-SSOAutoSignIn!"
-            Write-Error "ERROR: Cannot run Invoke-SSOAutoSignIn!"
-            return
+        else {
+            try {
+                # Enter the password
+                $Element = Get-SeElement -By ID "PasswordPage-PasswordField"
+                Invoke-SeKeys -Element $Element -Keys $((New-Object PSCredential 0, $Credentials.Password).GetNetworkCredential().Password)
+                $Button = Get-SeElement -By CSSSelector ".spectrum-Button"
+                $Button.click()
+            }
+            catch {
+                Write-Log "ERROR: There was an issue with sign in"
+                Write-Error "ERROR: There was an issue with sign in"
+                return
+            }
         }
+
+
+        
         
         try {
             # Go to the packages tab

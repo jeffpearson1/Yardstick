@@ -2,18 +2,25 @@ url:
 urlredirects: false
 preDownloadScript: |
   $URL = "https://helpx.adobe.com/acrobat/release-note/release-notes-acrobat-reader.html"
-  $Content = Invoke-WebRequest $URL
-  $Content.Content -match "DC [A-Za-z]{3} 20[0-9]{2} \(.*\)" | Out-Null
+  $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless', '--window-size=1920,1080')
+  $Matchable = (Get-SeElement -By Xpath "//*[contains(@class, 'cmp-text')]/table/tbody/tr")[1].Text
+  $Matchable -match "DC [A-Za-z]{3,4} 20[0-9]{2} \(.*\)" | Out-Null
   $temp = $matches[0]
   $temp -match "(?<=\().*(?=\))" | Out-Null
   $Version = $matches[0]
   $ReplaceVersion = $matches[0] -replace "\."
+  
   if ($ReplaceVersion -match "x") { 
-    $URL = ($Content.links | where outerhtml -like "*$temp*").href
-    $HTML = Invoke-Expression "$toolsDir\curl.exe $URL -k"
+    $Element = Get-SeElement -By LinkText "$temp"
+    $URL = Get-SeElementAttribute $Element "href"
+    $HTML = Invoke-Expression "$TOOLS\curl.exe $URL -k"
     [String]$HTML -match "$($ReplaceVersion.trim("x"))[0-9]{0,}" | Out-Null
     $ReplaceVersion = $matches[0]
     $Version = $version.substring(0, $version.length -5) + $ReplaceVersion.substring($ReplaceVersion.length -5) 
+    $Driver.Close()
+  }
+  else {
+    $Driver.Close()
   }
   $Components = $Version.split(".")
   $Version = $Components[0] + "." + $Components[1].trim("0") + "." + $Components[2] + ".0"
@@ -35,4 +42,5 @@ fileDetectionName: AcroRd32.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
 numVersionsToKeep: 1
+
 

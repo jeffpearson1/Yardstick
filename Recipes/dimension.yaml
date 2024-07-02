@@ -19,7 +19,6 @@ preDownloadScript: |
   $PackageName = $Dimension.PackageName
   $InstallScript = $Dimension.InstallScript
   $UninstallScript = $Dimension.UninstallScript
-  $FileDetectionPath = $Dimension.FileDetectionPath
 downloadScript: |
   $Script:Dimension.Download()
 filename: setup.exe
@@ -28,9 +27,16 @@ id: Dimension
 displayName: Adobe Dimension
 publisher: Adobe
 description: Create engaging content in 3D faster with models, materials, and lighting. Dimension makes it easy to build brand visualizations, illustrations, product mockups, and other creative work.
-detectionType: file
-fileDetectionName: Dimension.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Dimension*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Dimension.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

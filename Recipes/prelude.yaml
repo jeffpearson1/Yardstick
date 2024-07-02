@@ -1,0 +1,39 @@
+url: https://helpx.adobe.com/prelude/release-note/release-notes-prelude.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Prelude = [AdobeApplication]::new(@{
+    Name = "Prelude"
+    ID = "Prelude"
+    URL = $URL
+    VersionMatchStringRegex = "version of Prelude is version ([0-9]{1,}\.){2}[0-9]{1,}"
+    VersionLocation = -1
+    PackageName = "Auto_Prelude_<Version>_NU_NAU"
+  })
+
+  $Script:Prelude.Update()
+  $Version = $Prelude.Version
+  $PackageName = $Prelude.PackageName
+  $InstallScript = $Prelude.InstallScript
+  $UninstallScript = $Prelude.UninstallScript
+downloadScript: |
+  $Script:Prelude.Download()
+filename: setup.exe
+iconFile: Prelude.png
+id: Prelude
+displayName: Adobe Prelude
+publisher: Adobe
+description: Adobe Prelude works in conjunction with Adobe Premiere Pro. Adobe Prelude allows video professionals to easily add metadata to their video files in a digital workflow.
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Prelude*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Prelude.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

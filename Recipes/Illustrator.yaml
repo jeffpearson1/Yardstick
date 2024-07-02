@@ -19,20 +19,24 @@ preDownloadScript: |
   $PackageName = $Illustrator.PackageName
   $InstallScript = $Illustrator.InstallScript
   $UninstallScript = $Illustrator.UninstallScript
-  $FileDetectionPath = $Illustrator.FileDetectionPath
 downloadScript: |
   $Script:Illustrator.Download()
-installScript: |
-  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
 filename: setup.exe
 iconFile: Illustrator.png
 id: Illustrator
 displayName: Adobe Illustrator
 publisher: Adobe
 description: Adobe Illustrator is a vector graphics editor and design software developed and marketed by Adobe.
-detectionType: file
-fileDetectionName: Illustrator.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Illustrator*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Illustrator.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

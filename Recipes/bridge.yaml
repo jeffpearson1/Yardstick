@@ -19,7 +19,6 @@ preDownloadScript: |
   $PackageName = $Bridge.PackageName
   $InstallScript = $Bridge.InstallScript
   $UninstallScript = $Bridge.UninstallScript
-  $FileDetectionPath = $Bridge.FileDetectionPath
 downloadScript: |
   $Script:Bridge.Download()
 installScript:
@@ -29,9 +28,16 @@ id: Bridge
 displayName: Adobe Bridge
 publisher: Adobe
 description: Adobe Bridge allows you to manage digital assets.
-detectionType: file
-fileDetectionName: Bridge.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Bridge*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Bridge.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

@@ -1,0 +1,40 @@
+url: https://helpx.adobe.com/xd/help/whats-new.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:XD = [AdobeApplication]::new(@{
+    Name = "XD"
+    ID = "XD"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=released with XD version )[0-9]{2,3}"
+    VersionLocation = 0
+    PackageName = "Auto_XD_<Version>_NU_NAU"
+  })
+
+  $Script:XD.Update()
+  $Version = $XD.Version
+  $VersionYear = $XD.VersionYear
+  $PackageName = $XD.PackageName
+  $InstallScript = $XD.InstallScript
+  $UninstallScript = $XD.UninstallScript
+downloadScript: |
+  $Script:XD.Download()
+filename: setup.exe
+iconFile: XD.png
+id: XD
+displayName: Adobe XD
+publisher: Adobe
+description: Adobe XD enables UX designers design interactive user experiences for web and mobile apps using a single app. You can design quick and simple designs on artboards in XD. Then wire the artboards together to create an interactive prototype that you can share and iterate with stakeholders.
+detectionType: script
+detectionScript: |
+  if ([string]$((Get-AppxPackage -Name "Adobe.XD").Version.Split(".")[0]) -eq "<version>") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  else {
+    Write-Host "Product has failed to install correctly"
+    exit 1
+  }
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

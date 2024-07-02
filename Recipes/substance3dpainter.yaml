@@ -1,0 +1,42 @@
+url: https://helpx.adobe.com/substance-3d-painter/release-notes/all-changes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Substance3DPainter = [AdobeApplication]::new(@{
+    Name = "Substance 3D Painter"
+    ID = "Substance3DPainter"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=\>)([0-9]{1,}\.){2}[0-9]{1,}(?=\<)"
+    VersionLocation = -1
+    PackageName = "Auto_Substance3DPainter_<Version>_NU_NAU"
+  })
+
+  $Script:Substance3DPainter.Update()
+  $Version = $Substance3DPainter.Version
+  $VersionYear = $Substance3DPainter.VersionYear
+  $PackageName = $Substance3DPainter.PackageName
+  $InstallScript = $Substance3DPainter.InstallScript
+  $UninstallScript = $Substance3DPainter.UninstallScript
+downloadScript: |
+  $Script:Substance3DPainter.Download()
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Substance3D.png
+id: Substance3DPainter
+displayName: Substance 3D Painter
+publisher: Adobe
+description: Substance 3D Painter is a 3D painting software allowing you to texture and render your 3D meshes.
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Substance 3D Painter*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Substance 3D Painter.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

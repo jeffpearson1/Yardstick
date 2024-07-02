@@ -1,0 +1,42 @@
+url: https://helpx.adobe.com/substance-3d-sampler/release-notes/all-changes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Substance3DSampler = [AdobeApplication]::new(@{
+    Name = "Substance 3D Sampler"
+    ID = "Substance3DSampler"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=\>)([0-9]{1,}\.){2}[0-9]{1,}"
+    VersionLocation = -1
+    PackageName = "Auto_Substance3DSampler_<Version>_NU_NAU"
+  })
+
+  $Script:Substance3DSampler.Update()
+  $Version = $Substance3DSampler.Version
+  $VersionYear = $Substance3DSampler.VersionYear
+  $PackageName = $Substance3DSampler.PackageName
+  $InstallScript = $Substance3DSampler.InstallScript
+  $UninstallScript = $Substance3DSampler.UninstallScript
+downloadScript: |
+  $Script:Substance3DSampler.Download()
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Substance3D.png
+id: Substance3DSampler
+displayName: Substance 3D Sampler
+publisher: Adobe
+description: Substance 3D Sampler allows you to create and iterate on material collections by tweaking and mixing existing materials, or by extracting new materials from scans (single or multiple images).
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Substance 3D Sampler*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Substance 3D Sampler.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
