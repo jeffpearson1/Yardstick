@@ -1,0 +1,28 @@
+url: 
+urlredirects: false
+preDownloadScript: |
+  $VURL = "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0063810"
+  $Driver = Start-SeDriver -Browser "Firefox" -StartURL $VURL -Arguments @("--headless")
+  Start-Sleep -Seconds 15
+  $Elements = Get-SeElement -By ClassName "fill-div"
+  $DropDownMenu = $Elements[0]
+  $PartialVersion = $DropDownMenu.Text.Split(" ")[0]
+  $Driver.ExecuteScript("window.scrollTo($($DropDownMenu.Location.X),$($DropDownMenu.Location.Y -240))")
+  Start-Sleep -Seconds 3
+  $DropDownMenu.Click()
+  Start-Sleep -Seconds 3
+  $Element = (Get-SeElement -By LinkText "VDI client version $PartialVersion (64-bit)") 
+  $URL = Get-SeElementAttribute -Element $Element -Name href
+  $Version = ($URL.split("/"))[-2]
+  $Driver.Close()
+  $fileDetectionVersion = $version
+installScript:  msiexec /i <filename> /qn /norestart ZConfig="nogoogle=1;nofacebook=1;AddFWException=1;EnableAppleLogin=0;ForceSSOUrl=def;DisableLoginWithEmail=1"
+uninstallScript: msiexec /x <productcode> /silent /norestart
+fileName: ZoomInstallerVDI.msi
+iconFile: zoom.png
+id: ZoomVDI
+displayName: Zoom for VDI
+publisher: Zoom Video Communications, Inc.
+description: Zoom is a video conferencing service used by companies and universities for remote communication.
+fileType: msi
+detectionType: msi
