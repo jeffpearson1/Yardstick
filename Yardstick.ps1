@@ -3,6 +3,7 @@ using module .\Modules\Custom\AdobeDownloader.psm1
 param (
     [Alias("AppId")]
     [String] $ApplicationId = "None",
+    [String] $Group,
     [Switch] $Force,
 	[Switch] $All,
     [Switch] $NoDelete,
@@ -36,7 +37,7 @@ Push-Location $PSScriptRoot
 # Initialize the log file
 Write-Log -Init
 
-if ("None" -eq $ApplicationId -and $All -eq $false) {
+if ("None" -eq $ApplicationId -and (($All -eq $false) -and (!$Group))) {
     Write-Log "Please provide parameter -ApplicationId"
     exit 1
 }
@@ -69,7 +70,7 @@ $Global:CLIENT_SECRET = $prefs.ClientSecret
 
 if ($ApplicationId -ne "None") {
     if (-not (Test-Path "$RECIPES\$ApplicationId.yaml")) {
-        Write-Log "Application $ApplicationId not found in $RECIPES"
+        Write-Log "ERROR: Application $ApplicationId not found in $RECIPES"
         exit 1
     }
 }
@@ -81,6 +82,20 @@ if ($All) {
 	foreach ($Application in $ApplicationFullNames) {
 		$Applications.Add($($Application -split ".yaml")[0]) | Out-Null
 	}
+}
+elseif ($Group) {
+    # Open the RecipeGroups.yaml file and read in the appropriate list of application ids
+    try {
+        $groupFile = Get-Content $PSScriptRoot\RecipeGroups.yaml | ConvertFrom-Yaml
+        $groupFile[$Group] | ForEach-Object {
+            $Applications.Add($_) | Out-Null
+        }
+    
+    }
+    catch {
+        Write-Log "ERROR: There was an issue importing the application group! Exiting."
+        exit 3
+    }
 }
 else {
     # Just do the one specified if -All is not specified
@@ -103,7 +118,7 @@ foreach ($ApplicationId in $Applications) {
     }
     catch {
         Write-Error "Unable to open parameters file for $ApplicationId"
-        break
+        continue
     }
     $Script:url = if ($parameters.urlRedirects -eq $true) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
     $Script:id = $parameters.id
@@ -221,13 +236,13 @@ foreach ($ApplicationId in $Applications) {
     Write-Log "URL: $url"
     if (!$url) {
         Write-Error "URL is empty - cannot continue."
-        break
+        continue
     }
     if ($downloadScript) {
         Invoke-Command -ScriptBlock $downloadScript -NoNewScope
         if (!$?) {
             Write-Error "Error while running download PowerShell script"
-            break
+            continue
         }
         else {
             Write-Log "Download script ran successfully."
@@ -241,10 +256,10 @@ foreach ($ApplicationId in $Applications) {
     # Run the post-download script
     if ($postDownloadScript) {
         Write-Log "Running post download script..."
-        Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
-        if (!$?) {
+        $result = Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
+        if (!$? -or ($result -eq $false)) {
                 Write-Error "Error while running post download PowerShell script"
-                break
+                continue
         }
         else {
             Write-Log "Post download script ran successfully."
@@ -254,8 +269,12 @@ foreach ($ApplicationId in $Applications) {
 
     # Script Files:
     # Replace the <filename> placeholder with the actual filename
-    $installScript = $installScript.replace("<filename>", $fileName)
-    $uninstallScript = $uninstallScript.replace("<filename>", $fileName)
+    if ($installScript) {
+        $installScript = $installScript.replace("<filename>", $fileName)
+    }
+    if ($uninstallScript) {
+        $uninstallScript = $uninstallScript.replace("<filename>", $fileName)
+    }
     if ($detectionScript) {
         $detectionScript = $detectionScript.replace("<filename>", $fileName)
     }
@@ -268,8 +287,12 @@ foreach ($ApplicationId in $Applications) {
     if ($filename -match "\.msi$") {
         $ProductCode = Get-MSIProductCode $BUILDSPACE\$id\$version\$fileName
         Write-Log "Product Code: $ProductCode"
-        $installScript = $installScript.replace("<productcode>", $productCode)
-        $uninstallScript = $uninstallScript.replace("<productcode>", $productCode)
+        if ($installScript) {
+            $installScript = $installScript.replace("<productcode>", $productCode)
+        }
+        if ($uninstallScript) {
+            $uninstallScript = $uninstallScript.replace("<productcode>", $productCode)
+        }
         if ($detectionScript) {
             $detectionScript = $detectionScript.replace("<productcode>", $productCode)
         }
@@ -280,8 +303,12 @@ foreach ($ApplicationId in $Applications) {
 
     
     # Replace <version> placeholder with the actual version
-    $installScript = $installScript.replace("<version>", $version)
-    $uninstallScript = $uninstallScript.replace("<version>", $version) 
+    if ($installScript) {
+        $installScript = $installScript.replace("<version>", $version)
+    }
+    if ($uninstallScript) {
+        $uninstallScript = $uninstallScript.replace("<version>", $version) 
+    }
     if ($detectionScript) {
         $detectionScript = $detectionScript.replace("<version>", $version) 
     } 
