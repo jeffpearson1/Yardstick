@@ -415,9 +415,9 @@ foreach ($ApplicationId in $Applications) {
 
     # Define the current version, the version that is one older but shares the same name, and all the ones older than that
     Write-Log "Updating local application manifest..."
-    $AllMatchingApps = Get-SameAppAllVersions $DisplayName
+    $AllMatchingApps = Get-SameAppAllVersions $DisplayName 
     $CurrentApp = $AllMatchingApps | Where-Object id -eq $Win32App.Id
-    $AllOldApps = $AllMatchingApps | Where-Object id -ne $CurrentApp.Id
+    $AllOldApps = $AllMatchingApps | Where-Object id -ne $Win32App.Id | Sort-Object displayName
     $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $displayName
     $NMinusTwoAndOlderApps = $AllOldApps | Where-Object displayName -ne $displayName
 
@@ -430,14 +430,21 @@ foreach ($ApplicationId in $Applications) {
             Move-Assignments -From $NMinusOneApp -To $CurrentApp
         }
     }
+    if ($($NMinusOneApps.count) -gt 1) {
+        $NewestNMinusOneApp = ($NMinusOneApps | Sort-Object createdDateTime -Descending)[0]
+    }
     for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
         # Move all the deployments up one number
         if ($i -eq 0) {
             # Move the app assignments in the 0 position to the nminusoneapp
-            Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusOneApp
+            if ($NMinusTwoAndOlderApps[$i] -and $NewestNMinusOneApp) {
+                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp
+            }
         }
         else {
-            Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1]
+            if ($NMinusTwoAndOlderApps[$i] -and $NMinusTwoAndOlderApps[$i - 1]) {
+                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1]
+            }
         }
     }
 
