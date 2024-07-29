@@ -1,0 +1,41 @@
+url: https://www.adobe.com/devnet-docs/acrobatetk/tools/ReleaseNotesDC/index.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Acrobat = [AdobeApplication]::new(@{
+    Name = "Acrobat"
+    ID = "Acrobat"
+    URL = $URL
+    VersionMatchStringRegex = '([0-9xX]{1,}\.){1,}[0-9xX]{1,} (Optional|Planned) update, [A-Za-z]{1,} [0-9]{1,2}, [0-9]{4}'
+    VersionLocation = 0
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Animate <VersionYear>"
+    PackageName = "Auto_Animate_<Version>_NU_NAU"
+  })
+  $Script:Animate.Update()
+  $Version = $Animate.Version
+  $VersionYear = "2024"
+  $PackageName = $Animate.PackageName
+  $InstallScript = $Animate.InstallScript
+  $UninstallScript = $Animate.UninstallScript
+downloadScript: |
+  $Script:Animate.Download()
+installScript:
+filename: setup.exe
+iconFile: Animate.png
+id: Animate
+displayName: Adobe Animate
+publisher: Adobe
+description: Adobe Animate is a desktop publishing and page layout designing software application.
+detectionType: script
+detectionScript: |
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Animate*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Animate.exe"
+  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

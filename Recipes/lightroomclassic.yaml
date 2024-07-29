@@ -29,9 +29,18 @@ publisher: Adobe
 description: Adobe Lightroom is an image organization and image processing software developed by Adobe as part of the Creative Cloud subscription family.
 detectionType: script
 detectionScript: |
+  $Version = "<version>"
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Lightroom Classic*" | Sort-Object Name -Descending)[0]).FullName
   $InstalledFileName = "Lightroom.exe"
-  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
     Write-Host "Product has installed correctly"
     exit 0
   }

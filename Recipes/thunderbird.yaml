@@ -2,9 +2,10 @@ url:
 urlredirects: false
 preDownloadScript: |
   $Content = $(Invoke-WebRequest "https://www.thunderbird.net/en-US/" -UseBasicParsing)
-  $url = ($Content.links | where href -match "https:\/\/download\.mozilla\.org\/\?product=thunderbird-[0-9]{1,3}\.[0-9]{1,2}\.{0,1}[0-9]{0,2}-msi-SSL\&os=win64&lang=en-US").href | Get-Unique
+  $url = ($Content.links | where href -match "https:\/\/download\.mozilla\.org\/\?product=thunderbird-([0-9]{1,3}\.){1,}[0-9]{0,2}.*-msi-SSL\&os=win64&lang=en-US").href | Get-Unique
   $version = ($url -split "-")[1]
   $url = "https://download.mozilla.org/?product=thunderbird-$version-msi-SSL&os=win64&lang=en-US"
+  $version = ($url -split "-")[1].split("esr")[0]
   $filename = "Thunderbird Setup $version.msi"
 installScript: msiexec /i "<filename>" /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart

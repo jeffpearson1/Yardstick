@@ -29,9 +29,18 @@ publisher: Adobe
 description: Create engaging content in 3D faster with models, materials, and lighting. Dimension makes it easy to build brand visualizations, illustrations, product mockups, and other creative work.
 detectionType: script
 detectionScript: |
+  $Version = "<version>"
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Dimension*" | Sort-Object Name -Descending)[0]).FullName
   $InstalledFileName = "Dimension.exe"
-  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
     Write-Host "Product has installed correctly"
     exit 0
   }

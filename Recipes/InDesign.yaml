@@ -6,10 +6,8 @@ preDownloadScript: |
     Name = "InDesign"
     ID = "InDesign"
     URL = $URL
-    VersionMatchStringRegex = '[0-9]{1,}\.[0-9]{1,} release \([A-Za-z]{3,} [0-9]{4}'
-    VersionYearLocation = -1
+    VersionMatchStringRegex = '[0-9]{1,}\.[0-9]{1,}(?= release)'
     VersionLocation = 0
-    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe InDesign <VersionYear>"
     PackageName = "Auto_InDesign_<Version>_NU_NAU"
   })
 
@@ -29,9 +27,18 @@ publisher: Adobe
 description: Adobe InDesign is a desktop publishing and page layout designing software application.
 detectionType: script
 detectionScript: |
+  $Version = "<version>"
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe InDesign*" | Sort-Object Name -Descending)[0]).FullName
   $InstalledFileName = "InDesign.exe"
-  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
     Write-Host "Product has installed correctly"
     exit 0
   }

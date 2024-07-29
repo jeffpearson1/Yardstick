@@ -29,9 +29,18 @@ publisher: Adobe
 description: Unlock the power of procedural design. Create seamless materials, patterns, image filters, and environment lights with infinite variations.
 detectionType: script
 detectionScript: |
+  $Version = "<version>"
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Substance 3D Designer*" | Sort-Object Name -Descending)[0]).FullName
   $InstalledFileName = "Adobe Substance 3D Designer.exe"
-  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
     Write-Host "Product has installed correctly"
     exit 0
   }

@@ -27,9 +27,18 @@ publisher: Adobe
 description: Ingest, transcode, create proxies, and output to almost any format you can imagine. Automate your workflows with presets, Watch Folders, and Destination Publishing. Use Time Tuner to invisibly adjust duration, and apply LUTs and Loudness corrections without having to re-open projects. Tight integration with Adobe Premiere Pro, After Effects, and other applications provides a seamless workflow.
 detectionType: script
 detectionScript: |
+  $Version = "<version>"
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Media Encoder*" | Sort-Object Name -Descending)[0]).FullName
   $InstalledFileName = "Adobe Media Encoder.exe"
-  if (Test-Path "$NewestVersionPath\$InstalledFileName") {
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
     Write-Host "Product has installed correctly"
     exit 0
   }
