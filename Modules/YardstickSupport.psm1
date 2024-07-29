@@ -125,8 +125,6 @@ function Move-Assignments {
         [Parameter(Mandatory, Position=1)]
         [System.Object] $To
     )
-    Write-Log "DEBUG: FROM.ID - $($From.id)"
-    Write-Log "DEBUG: TO.ID - $($To.id)"
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromAvailable = ($FromAssignments | Where-Object intent -eq "available").groupId
     $FromRequired = ($FromAssignments | Where-Object intent -eq "required").groupId
