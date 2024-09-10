@@ -10,9 +10,9 @@ function Write-Log {
     )
     Push-Location $LOG_LOCATION
     if($Init) {
-        # if (Test-Path $LOG_LOCATION\$LOG_FILE) {
-        #     Remove-Item $LOG_LOCATION\$LOG_FILE -Force
-        # }
+        if (Test-Path $LOG_LOCATION\$LOG_FILE) {
+            Remove-Item $LOG_LOCATION\$LOG_FILE -Force
+        }
         Write-Output "#######################################################" | Out-File $LOG_FILE -Append
         Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LOG_FILE -Append
         Write-Output "#######################################################" | Out-File $LOG_FILE -Append
