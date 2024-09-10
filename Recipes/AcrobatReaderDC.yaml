@@ -24,7 +24,7 @@ preDownloadScript: |
   }
   $Components = $Version.split(".")
   $Version = $Components[0] + "." + $Components[1].trim("0") + "." + $Components[2] + ".0"
-  $URL = "http://ardownload2.adobe.com/pub/adobe/reader/win/AcrobatDC/$($ReplaceVersion)/AcroRdrDC$($ReplaceVersion)_en_US.exe"
+  $URL = "https://ardownload2.adobe.com/pub/adobe/reader/win/AcrobatDC/$($ReplaceVersion)/AcroRdrDC$($ReplaceVersion)_en_US.exe"
   $fileName = ($URL -split "/")[-1]
 installScript: <filename> /SAll
 uninstallScript: MsiExec.exe /x {AC76BA86-7AD7-1033-7B44-AC0F074E4100} /qn
