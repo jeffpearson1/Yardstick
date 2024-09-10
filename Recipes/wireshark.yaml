@@ -3,9 +3,9 @@ urlredirects: false
 preDownloadScript: |
   $URL = "https://www.wireshark.org/download.html"
   $Content = Invoke-WebRequest $URL
-  $url = ($Content.links | where href -match "Wireshark-win64.*[0-9]\.exe")[0].href
+  $url = ($Content.links | where href -match "Wireshark-([0-9]\.){2}[0-9]-x64\.exe")[0].href
   $filename = $url.split("/")[-1]
-  $version = $filename.split("-")[-1].trim(".exe")
+  $version = $filename.split("-")[-2]
   $fileDetectionVersion = "$version.0"
 installScript: <filename> /S
 uninstallScript: '"C:\Program Files\Wireshark\uninstall-wireshark.exe" /S'
