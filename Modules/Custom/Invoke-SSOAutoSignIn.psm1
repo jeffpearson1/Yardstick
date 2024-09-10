@@ -11,6 +11,14 @@ function Invoke-SSOAutoSignIn {
     Invoke-SeKeys -Element $Username_Field -Keys $Credentials.username
     Invoke-SeKeys -Element $Password_Field -Keys $(ConvertFrom-SecureString $Credentials.Password -AsPlainText)
     $Button.click()
+    $TrustButton = Get-SeElement -By ID "trust-browser-button" -Timeout 300
+    if ($TrustButton) {
+        $TrustButton.click()
+    }
+    else {
+        Write-Log "Error occurred when authenticating"
+        return $false
+    }
     while($Driver.SeUrl -notlike "*$Target*") {
         Write-Log "Waiting for 2FA to be approved..."
         Write-Log "URL: $($Driver.SeURL)"
@@ -18,4 +26,5 @@ function Invoke-SSOAutoSignIn {
         Start-Sleep -Seconds 2
     }
     Start-Sleep -Seconds 10
+    return $true
 }
