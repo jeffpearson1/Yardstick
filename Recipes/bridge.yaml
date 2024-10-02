@@ -32,7 +32,7 @@ detectionType: script
 detectionScript: |
   $Version = "<version>"
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Bridge*" | Sort-Object Name -Descending)[0]).FullName
-  $InstalledFileName = "Bridge.exe"
+  $InstalledFileName = "Adobe Bridge.exe"
   $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
   $VersionSegments = $Version.split(".").count
   Switch($VersionSegments) {

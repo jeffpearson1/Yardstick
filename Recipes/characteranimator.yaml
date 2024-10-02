@@ -31,8 +31,8 @@ detectionType: script
 detectionScript: |
   $Version = "<version>"
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Character Animator*" | Sort-Object Name -Descending)[0]).FullName
-  $InstalledFileName = "CharacterAnimator.exe"
-  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $InstalledFileName = "Character Animator.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\Support Files\$InstalledFileName").VersionInfo.FileVersionRaw
   $VersionSegments = $Version.split(".").count
   Switch($VersionSegments) {
     1 {$FileVersion = "$($VersionComponents.Major)"; Break}

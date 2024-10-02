@@ -18,3 +18,4 @@ description: An open source file archiver/unarchiver
 fileType: MSI
 softwareName: "7-Zip*"
 detectionType: msi
+numVersionsToKeep: 1

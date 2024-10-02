@@ -20,7 +20,7 @@ description: Dax Studio is a tool to write, execute, and analyze DAX queries in 
 softwareName: "Dax Studio*"
 detectionType: file
 fileDetectionPath: 'C:\Program Files\DAX Studio'
-fileDetectionName: 'DAX Studio.exe'
+fileDetectionName: 'DaxStudio.exe'
 fileDetectionMethod: version
 fileDetectionVersion:
 fileDetectionOperator: equal

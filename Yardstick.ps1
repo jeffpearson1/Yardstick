@@ -415,8 +415,9 @@ foreach ($ApplicationId in $Applications) {
 
     # Define the current version, the version that is one older but shares the same name, and all the ones older than that
     Write-Log "Updating local application manifest..."
+    Start-Sleep -Seconds 4
     $AllMatchingApps = Get-SameAppAllVersions $DisplayName 
-    $CurrentApp = $AllMatchingApps | Where-Object id -eq $Win32App.Id
+    $CurrentApp = Get-IntuneWin32App -ID $Win32App.id
     $AllOldApps = $AllMatchingApps | Where-Object id -ne $Win32App.Id | Sort-Object displayName
     $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $displayName
     $NMinusTwoAndOlderApps = $AllOldApps | Where-Object displayName -ne $displayName
@@ -426,8 +427,14 @@ foreach ($ApplicationId in $Applications) {
     # Start with the N-1 app first and move all its deployments to the newest one
     if ($NMinusOneApps) {
         foreach ($NMinusOneApp in $NMinusOneApps) {
-            Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
-            Move-Assignments -From $NMinusOneApp -To $CurrentApp
+            if ($CurrentApp) {
+                Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
+                Move-Assignments -From $NMinusOneApp -To $CurrentApp
+            }
+            else {
+                Write-Log "There was an error fecthing information about the current application. Exiting"
+                Exit 5
+            }
         }
     }
     if ($($NMinusOneApps.count) -gt 1) {

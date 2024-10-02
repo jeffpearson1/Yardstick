@@ -6,7 +6,7 @@ preDownloadScript: |
   $URL = $URL + $FileName
   $Version = ($FileName | Select-String -Pattern "[0-9]{4}\.[0-9]{2}-[0-9]").Matches.Value
   $FileDetectionVersion = $Version
-installScript: <filename> /VERYSILENT /NORESTART
+installScript: '"<filename>" /S'
 uninstallScript: '"C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" /S'
 iconFile: anaconda.png
 id: anaconda
@@ -24,5 +24,5 @@ detectionScript: |
   }
   Write-Host "Product has failed to install correctly"
   exit 1
-installExperience: system
+installExperience: user
 maximumInstallationTimeInMinutes: 5

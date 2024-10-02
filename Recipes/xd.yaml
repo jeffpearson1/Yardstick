@@ -35,6 +35,6 @@ detectionScript: |
     Write-Host "Product has failed to install correctly"
     exit 1
   }
-installExperience: system
+installExperience: user
 restartBehavior: suppress
 minOSVersion: W10_20H2
