@@ -432,7 +432,7 @@ foreach ($ApplicationId in $Applications) {
                 Move-Assignments -From $NMinusOneApp -To $CurrentApp
             }
             else {
-                Write-Log "There was an error fecthing information about the current application. Exiting"
+                Write-Log "There was an error fetching information about the current application. Exiting"
                 Exit 5
             }
         }
