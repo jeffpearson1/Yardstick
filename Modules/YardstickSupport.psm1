@@ -50,15 +50,19 @@ function Get-RedirectedUrl() {
         [Parameter(Mandatory=$true)]
         [String]$URL
     )
+    $userAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::Chrome
+    $httpClient = [System.Net.Http.HttpClient]::new()
+    $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($userAgent)
 
-    $request = [System.Net.WebRequest]::Create($url)
-    $request.AllowAutoRedirect=$false
-    $response=$request.GetResponse()
-
-    If ($response.StatusCode -eq "Found")
-    {
-        return $response.GetResponseHeader("Location")
+    # Get the redirected url object
+    $Response = $httpClient.GetAsync($url).GetAwaiter().GetResult()
+    if ($Response.StatusCode -eq "OK") {
+        $RedirectedURL = $response.RequestMessage.RequestUri.AbsoluteUri
     }
+    else {
+        throw "There was an issue getting the redirected URL."
+    }
+    return $RedirectedURL
 }
 
 
@@ -195,4 +199,20 @@ function Get-SameAppAllVersions($DisplayName) {
     $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (*")})
     # Pad out each version section to 8 digits of zeroes before sorting, remove any letters, and mash it all together so that versions sort correctly
     return $sortable | Sort-Object {$($($($_.displayVersion -replace "[A-Za-z]", "0") -replace "[\-\+]", ".").split(".") | ForEach-Object {'{0:d8}' -f [int]$_}) -join ''} -Descending
+}
+
+
+# Format-FileDetectionVersion
+# Converts a version number to one padded with the appropriate number of zeroes for detection by Intune (4)
+# Param: [String] Version
+# Return: [String] FileDetectionVersion
+function Format-FileDetectionVersion($Version) {
+    $VersionComponents = $Version.split(".")
+    Switch($VersionComponents.count) {
+      1 {$FileVersion = "$($VersionComponents[0]).0.0.0"; Break}
+      2 {$FileVersion = "$($VersionComponents[0]).$($VersionComponents[1]).0.0"; Break}
+      3 {$FileVersion = "$($VersionComponents[0]).$($VersionComponents[1]).$($VersionComponents[2]).0"; Break}
+      default {$FileVersion = "$($VersionComponents[0]).$($VersionComponents[1]).$($VersionComponents[2]).$($VersionComponents[3])"}
+    }
+    return $FileVersion
 }

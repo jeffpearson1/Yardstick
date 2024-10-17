@@ -7,14 +7,14 @@ preDownloadScript: |
   $Version = $matches[0]
 downloadScript: |
   $filename = $url.split("/")[-1]
-  Start-BitsTransfer -Source $url -Destination $tempdir\$filename
-  New-Item -Path $tempDir\VSAExtracted -ItemType Directory
-  Expand-Archive -Path $tempDir\$filename -DestinationPath $tempDir\VSAExtracted
-  $filename = ((Get-ChildItem $tempDir\VSAExtracted) | Where-Object Name -match "Vernier").Name
-  $preRequisiteFilename = ((Get-ChildItem $tempDir\VSAExtracted) | Where-Object Name -match "vc").Name
+  Start-BitsTransfer -Source $url -Destination $temp\$filename
+  New-Item -Path $temp\VSAExtracted -ItemType Directory
+  Expand-Archive -Path $temp\$filename -DestinationPath $temp\VSAExtracted
+  $filename = ((Get-ChildItem $temp\VSAExtracted) | Where-Object Name -match "Vernier").Name
+  $preRequisiteFilename = ((Get-ChildItem $temp\VSAExtracted) | Where-Object Name -match "vc").Name
   $installScript = "$preRequisiteFilename /Q && msiexec /i $filename /qn /norestart"
-  Copy-Item -Path $tempDir\VSAExtracted\$filename -Destination . -Force
-  Copy-Item -Path $tempDir\VSAExtracted\$preRequisiteFilename -Destination . -Force
+  Copy-Item -Path $temp\VSAExtracted\$filename -Destination . -Force
+  Copy-Item -Path $temp\VSAExtracted\$preRequisiteFilename -Destination . -Force
 uninstallScript: msiexec /x <productcode> /qn /norestart
 iconFile: VernierSpectralAnalysis.png
 id: VernierSpectralAnalysis

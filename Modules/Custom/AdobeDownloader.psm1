@@ -48,7 +48,7 @@ class AdobeApplication {
             $this.FileDetectionPath = $this.FileDetectionPath -replace "<VersionYear>", $this.VersionYear
         }
         catch {
-            Write-Error "Issue calling update for $($this.Name)"
+            throw "Issue calling update for $($this.Name)"
         }
     }
 
@@ -61,7 +61,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot start Firefox with Selenium!"
-            Write-Error "ERROR: Cannot start Firefox with Selenium!"
+            throw "ERROR: Cannot start Firefox with Selenium: $($_)"
             return
         }
         
@@ -71,7 +71,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot retrieve stored credentials with target 'adobe'!"
-            Write-Error "ERROR: Cannot retrieve stored credentials with target 'adobe'!"
+            throw "ERROR: Cannot retrieve stored credentials with target 'adobe'!"
             return
         }
 
@@ -85,7 +85,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot pass Adobe username only sign in dialog!"
-            Write-Error "ERROR: Cannot pass Adobe username only sign in dialog!"
+            throw "ERROR: Cannot pass Adobe username only sign in dialog!"
             return
         }
         
@@ -97,7 +97,7 @@ class AdobeApplication {
             }
             catch {
                 Write-Log "ERROR: Cannot run Invoke-SSOAutoSignIn!"
-                Write-Error "ERROR: Cannot run Invoke-SSOAutoSignIn!"
+                throw "ERROR: Cannot run Invoke-SSOAutoSignIn!"
                 return
             }
         }
@@ -111,7 +111,7 @@ class AdobeApplication {
             }
             catch {
                 Write-Log "ERROR: There was an issue with sign in"
-                Write-Error "ERROR: There was an issue with sign in"
+                throw "ERROR: There was an issue with sign in"
                 return
             }
         }
@@ -130,7 +130,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot open Packages tab in Adobe Admin Console"
-            Write-Error "ERROR: Cannot open Packages tab in Adobe Admin Console"
+            throw "ERROR: Cannot open Packages tab in Adobe Admin Console"
             return
         }
         
@@ -146,7 +146,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot click 'create a package'"
-            Write-Error "ERROR: Cannot click 'create a package'"
+            throw "ERROR: Cannot click 'create a package'"
             return
         }
 
@@ -206,7 +206,7 @@ class AdobeApplication {
             }
             catch {
                 Write-Log "ERROR: There was an issue configuring new package parameters! (Managed)"
-                Write-Error "ERROR: There was an issue configuring new package parameters! (Managed)"
+                throw "ERROR: There was an issue configuring new package parameters! (Managed)"
                 return
             }
         }
@@ -238,7 +238,7 @@ class AdobeApplication {
             }
             catch {
                 Write-Log "ERROR: There was an issue configuring new package parameters! (Self Service)"
-                Write-Error "ERROR: There was an issue configuring new package parameters! (Self Service)"
+                throw "ERROR: There was an issue configuring new package parameters! (Self Service)"
                 return
             }
         }
@@ -259,7 +259,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "Failed to download"
-            Write-Error "Failed to download"
+            throw "Failed to download"
             return
         }
             
@@ -279,7 +279,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot expand downloaded archive"
-            Write-Error "ERROR: Cannot expand downloaded archive"
+            throw "ERROR: Cannot expand downloaded archive"
             return
         }
         
@@ -290,7 +290,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Moving contents to buildspace has failed."
-            Write-Error "ERROR: Moving contents to buildspace has failed."
+            throw "ERROR: Moving contents to buildspace has failed."
             return
         }
     }

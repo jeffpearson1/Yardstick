@@ -1,7 +1,9 @@
 url: 'https://corretto.aws/downloads/latest/amazon-corretto-8-x64-windows-jre.msi'
 urlRedirects: true
 preDownloadScript: |
-  $Script:url = "https://corretto.aws$($Script:url)"
+  if ($Script:url -notmatch "https:\/\/corretto\.aws") {
+    $Script:url = "https://corretto.aws$($Script:url)"
+  }
   $url -match "[0-9]{1,}.[0-9]{1,}.[0-9]{1,}.[0-9]{1,}" | Out-Null
   $version = $matches[0]
   $fileDetectionVersion = $version

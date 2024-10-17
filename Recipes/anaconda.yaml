@@ -6,7 +6,7 @@ preDownloadScript: |
   $URL = $URL + $FileName
   $Version = ($FileName | Select-String -Pattern "[0-9]{4}\.[0-9]{2}-[0-9]").Matches.Value
   $FileDetectionVersion = $Version
-installScript: '"<filename>" /S'
+installScript: '<filename> /S /InstallationType=AllUsers'
 uninstallScript: '"C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" /S'
 iconFile: anaconda.png
 id: anaconda
@@ -16,13 +16,13 @@ description: Anaconda is a distribution of the Python and R programming language
 softwareName: "Anaconda*"
 detectionType: script
 detectionScript: |
-  $Version = <version>
+  $Version = "<version>"
   $FileVersion = (Get-Item "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe").VersionInfo.FileVersion
-  if ($FileVersion -eq $Version) {
+  if ("$FileVersion" -eq "$Version") {
     Write-Host "Product has installed correctly"
     exit 0
   }
   Write-Host "Product has failed to install correctly"
   exit 1
-installExperience: user
+installExperience: system
 maximumInstallationTimeInMinutes: 5

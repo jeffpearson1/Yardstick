@@ -182,15 +182,14 @@ foreach ($ApplicationId in $Applications) {
     # Run the pre-download script
     if ($preDownloadScript) {
         Write-Log "Running pre-download script..."
-        Invoke-Command -ScriptBlock $preDownloadScript -NoNewScope
-
-        if (!$?) {
-                Write-Error "Error while running pre-download PowerShell script"
-                continue
+        try {
+            Invoke-Command -ScriptBlock $preDownloadScript -NoNewScope
         }
-        else {
-            Write-Log "Pre-download script ran successfully."
+        catch {
+            Write-Error "Error while running pre-download PowerShell script"
+            continue
         }
+        Write-Log "Pre-download script ran successfully."
     }
     else {
         Write-Log "Skipping Pre-download script"
@@ -239,14 +238,16 @@ foreach ($ApplicationId in $Applications) {
         continue
     }
     if ($downloadScript) {
-        Invoke-Command -ScriptBlock $downloadScript -NoNewScope
-        if (!$?) {
+        try {
+            Invoke-Command -ScriptBlock $downloadScript -NoNewScope
+        }
+        catch {
             Write-Error "Error while running download PowerShell script"
             continue
         }
-        else {
-            Write-Log "Download script ran successfully."
-        }
+
+        Write-Log "Download script ran successfully."
+
     }
     else {
         Start-BitsTransfer -Source $url -Destination $BUILDSPACE\$id\$version\$fileName
@@ -256,14 +257,14 @@ foreach ($ApplicationId in $Applications) {
     # Run the post-download script
     if ($postDownloadScript) {
         Write-Log "Running post download script..."
-        $result = Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
-        if (!$? -or ($result -eq $false)) {
-                Write-Error "Error while running post download PowerShell script"
-                continue
+        try {
+            Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
         }
-        else {
-            Write-Log "Post download script ran successfully."
+        catch {
+            Write-Error "Error while running post download PowerShell script"
+            continue
         }
+        Write-Log "Post download script ran successfully."
     }
     
 
