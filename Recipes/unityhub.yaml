@@ -1,0 +1,22 @@
+url: https://public-cdn.cloud.unity3d.com/hub/prod/UnityHubSetup.exe
+urlredirects: false
+preDownloadScript: |
+  $vURL = "https://unity.com/unity-hub/release-notes"
+  $content = Invoke-WebRequest $vURL
+  $content.content -match "(?<=id\=`")[0-9]\.[0-9]\.[0-9]" | Out-Null
+  $version = $matches[0]
+filename: UnityHubSetup.exe
+installScript: UnityHubSetup.exe /S
+uninstallScript: |
+ "C:\Program Files\Unity Hub\Uninstall Unity Hub.exe" /S
+iconFile: unityhub.png
+id: unityhub
+displayName: Unity Hub
+publisher: Unity
+description:  The world's most popular development platform for creating 2D and 3D multiplatform games and interactive experiences.
+detectionType: registry
+registryDetectionKey: HKEY_LOCAL_MACHINE\Software\Unity Technologies\Hub
+registryDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
