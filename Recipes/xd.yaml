@@ -6,14 +6,12 @@ preDownloadScript: |
     Name = "XD"
     ID = "XD"
     URL = $URL
-    VersionMatchStringRegex = "(?<=released with XD version )[0-9]{2,3}"
-    VersionLocation = 0
+    VersionMatchStringRegex = "(?<=released with XD version )(\.{0,1}[0-9]{1,4}){1,4}"
     PackageName = "Auto_XD_<Version>_NU_NAU"
   })
 
   $Script:XD.Update()
   $Version = $XD.Version
-  $VersionYear = $XD.VersionYear
   $PackageName = $XD.PackageName
   $InstallScript = $XD.InstallScript
   $UninstallScript = $XD.UninstallScript

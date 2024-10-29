@@ -3,8 +3,6 @@ class AdobeApplication {
     [string]$ID
     [string]$URL
     [string]$VersionMatchStringRegex
-    [string]$VersionYear
-    [string]$VersionYearLocation
     [string]$Version
     [string]$VersionLocation
     [string]$FileDetectionPath
@@ -34,18 +32,9 @@ class AdobeApplication {
         try {
             $HTML = Invoke-Expression "$($this.prefs.Tools)\curl.exe -s $($this.url)"
             [string]($HTML -match $this.VersionMatchStringRegex) -match $this.VersionMatchStringRegex | Out-Null
-            $VersionMatchString = $matches[0].trim()
-            $VersionMatchArray = $VersionMatchString -split "\>|\ "
-            if ($this.VersionLocation)
-            {
-                $this.Version = $VersionMatchArray[$this.VersionLocation]
-            }
-            if ($this.VersionYearLocation) {
-                $this.VersionYear = $VersionMatchArray[$this.VersionYearLocation]
-            }
+            $this.Version = $matches[0]
             $this.PackageName = $this.PackageName -replace "<Version>", $this.Version
             $this.UninstallScript = $this.uninstallScript -replace "<PackageName>", $this.PackageName
-            $this.FileDetectionPath = $this.FileDetectionPath -replace "<VersionYear>", $this.VersionYear
         }
         catch {
             throw "Issue calling update for $($this.Name)"

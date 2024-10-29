@@ -6,16 +6,13 @@ preDownloadScript: |
     Name = "InCopy"
     ID = "InCopy"
     URL = $URL
-    VersionMatchStringRegex = '[0-9]{1,}\.[0-9]{1,} release \([A-Za-z]{3,10} [0-9]{4}'
-    VersionYearLocation = -1
-    VersionLocation = 0
+    VersionMatchStringRegex = '(\.{0,1}[0-9]{1,4}){2,4}(?= release \()'
     FileDetectionPath = "%ProgramFiles%\Adobe\Adobe InCopy <VersionYear>"
     PackageName = "Auto_InCopy_<Version>_NU_NAU"
   })
 
   $InCopy.Update()
   $Version = $InCopy.Version
-  $VersionYear = $InCopy.VersionYear
   $PackageName = $InCopy.PackageName
   $InstallScript = $InCopy.InstallScript
   $UninstallScript = $InCopy.UninstallScript

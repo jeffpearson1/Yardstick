@@ -6,16 +6,12 @@ preDownloadScript: |
     Name = "Animate"
     ID = "Animate"
     URL = $URL
-    VersionMatchStringRegex = 'most current version of Adobe Animate is the [A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
-    VersionYearLocation = 9
-    VersionLocation = -1
-    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Animate <VersionYear>"
+    VersionMatchStringRegex = '(?<=[Vv]ersion )(\.{0,1}[0-9]{1,4}){2,4}'
     PackageName = "Auto_Animate_<Version>_NU_NAU"
   })
 
   $Script:Animate.Update()
   $Version = $Animate.Version
-  $VersionYear = "2024"
   $PackageName = $Animate.PackageName
   $InstallScript = $Animate.InstallScript
   $UninstallScript = $Animate.UninstallScript

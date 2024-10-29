@@ -6,16 +6,13 @@ preDownloadScript: |
     Name = "Lightroom"
     ID = "Lightroom"
     URL = $URL
-    VersionMatchStringRegex = '[A-Za-z]{3,10} [0-9]{4} RELEASE \(VERSION [0-9]{1,}\.[0-9]{1,}'
-    VersionYearLocation = 1
-    VersionLocation = -1
+    VersionMatchStringRegex = '(?<=[Vv]ersion )(\.{0,1}[0-9]{1,4}){2,4}'
     FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Lightroom CC"
     PackageName = "Auto_Lightroom_<Version>_NU_NAU"
   })
 
   $Lightroom.Update()
   $Version = $Lightroom.Version
-  $VersionYear = $Lightroom.VersionYear
   $PackageName = $Lightroom.PackageName
   $InstallScript = $Lightroom.InstallScript
   $UninstallScript = $Lightroom.UninstallScript

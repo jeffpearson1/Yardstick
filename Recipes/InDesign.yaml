@@ -6,14 +6,13 @@ preDownloadScript: |
     Name = "InDesign"
     ID = "InDesign"
     URL = $URL
-    VersionMatchStringRegex = '[0-9]{1,}\.[0-9]{1,}(?= release)'
+    VersionMatchStringRegex = '(\.{0,1}[0-9]{1,4}){2,4}(?= release \()'
     VersionLocation = 0
     PackageName = "Auto_InDesign_<Version>_NU_NAU"
   })
 
   $InDesign.Update()
   $Version = $InDesign.Version
-  $VersionYear = $InDesign.VersionYear
   $PackageName = $InDesign.PackageName
   $InstallScript = $InDesign.InstallScript
   $UninstallScript = $InDesign.UninstallScript

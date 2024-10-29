@@ -6,16 +6,12 @@ preDownloadScript: |
     Name = "Bridge"
     ID = "Bridge"
     URL = $URL
-    VersionMatchStringRegex = '[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
-    VersionYearLocation = 1
-    VersionLocation = -1
-    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Bridge <VersionYear>"
+    VersionMatchStringRegex = '(?<=[Vv]ersion )(\.{0,1}[0-9]{1,4}){2,4}'
     PackageName = "Auto_Bridge_<Version>_NU_NAU"
   })
 
   $Bridge.Update()
   $Version = $Bridge.Version
-  $VersionYear = $Bridge.VersionYear
   $PackageName = $Bridge.PackageName
   $InstallScript = $Bridge.InstallScript
   $UninstallScript = $Bridge.UninstallScript

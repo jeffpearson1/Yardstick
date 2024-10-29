@@ -6,16 +6,12 @@ preDownloadScript: |
     Name = "Character Animator"
     ID = "CharacterAnimator"
     URL = $URL
-    VersionMatchStringRegex = '[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
-    VersionYearLocation = 1
-    VersionLocation = -1
-    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Character Animator <VersionYear>\Support Files"
+    VersionMatchStringRegex = '(?<=[Vv]ersion )(\.{0,1}[0-9]{1,4}){2,4}'
     PackageName = "Auto_CharacterAnimator_<Version>_NU_NAU"
   })
 
   $CharacterAnimator.Update()
   $Version = $CharacterAnimator.Version
-  $VersionYear = $CharacterAnimator.VersionYear
   $PackageName = $CharacterAnimator.PackageName
   $InstallScript = $CharacterAnimator.InstallScript
   $UninstallScript = $CharacterAnimator.UninstallScript

@@ -6,7 +6,7 @@ preDownloadScript: |
     Name = "Lightroom Classic"
     ID = "LightroomClassic"
     URL = $URL
-    VersionMatchStringRegex = '[A-Za-z]{3,10} [0-9]{4} RELEASE \(VERSION [0-9]{1,}\.[0-9]{1,}'
+    VersionMatchStringRegex = '(?<=version )(\.{0,1}[0-9]{1,4}){2,4}'
     VersionYearLocation = 1
     VersionLocation = -1
     FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Lightroom Classic <VersionYear>"

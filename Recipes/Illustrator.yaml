@@ -6,16 +6,13 @@ preDownloadScript: |
     Name = "Illustrator"
     ID = "Illustrator"
     URL = $URL
-    VersionMatchStringRegex = 'desktop is the [A-Za-z]{3,10} [0-9]{4} release\, version [0-9]{1,}\.[0-9]{1,}(\.[0-9]{1,}){0,1}'
-    VersionYearLocation = 4
-    VersionLocation = -1
+    VersionMatchStringRegex = '(?<=version )(\.{0,1}[0-9]{1,4}){2,4}'
     FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Illustrator <VersionYear>\Support Files\Contents\Windows"
     PackageName = "Auto_Illustrator_<Version>_NU_NAU"
   })
 
   $Illustrator.Update()
   $Version = $Illustrator.Version
-  $VersionYear = $Illustrator.VersionYear
   $PackageName = $Illustrator.PackageName
   $InstallScript = $Illustrator.InstallScript
   $UninstallScript = $Illustrator.UninstallScript

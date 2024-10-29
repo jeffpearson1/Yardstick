@@ -6,14 +6,12 @@ preDownloadScript: |
     Name = "Substance 3D Painter"
     ID = "Substance3DPainter"
     URL = $URL
-    VersionMatchStringRegex = "(?<=\>)([0-9]{1,}\.){2}[0-9]{1,}(?=\<)"
-    VersionLocation = -1
+    VersionMatchStringRegex = "(?<=\>)(\.{0,1}[0-9]{1,4}){2,4}(?=\<)"
     PackageName = "Auto_Substance3DPainter_<Version>_NU_NAU"
   })
 
   $Script:Substance3DPainter.Update()
   $Version = $Substance3DPainter.Version
-  $VersionYear = $Substance3DPainter.VersionYear
   $PackageName = $Substance3DPainter.PackageName
   $InstallScript = $Substance3DPainter.InstallScript
   $UninstallScript = $Substance3DPainter.UninstallScript

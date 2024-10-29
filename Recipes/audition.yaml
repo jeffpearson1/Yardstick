@@ -6,16 +6,13 @@ preDownloadScript: |
     Name = "Audition"
     ID = "Audition"
     URL = $URL
-    VersionMatchStringRegex = '[A-Za-z]{3,} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}'
-    VersionYearLocation = 1
-    VersionLocation = -1
+    VersionMatchStringRegex = '(?<=release \(version )[0-9]{1,}\.[0-9]{1,}'
     FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Audition <VersionYear>"
     PackageName = "Auto_Audition_<Version>_NU_NAU"
   })
 
   $Audition.Update()
   $Version = $Audition.Version
-  $VersionYear = $Audition.VersionYear
   $PackageName = $Audition.PackageName
   $InstallScript = $Audition.InstallScript
   $UninstallScript = $Audition.UninstallScript

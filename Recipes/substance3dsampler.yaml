@@ -6,14 +6,12 @@ preDownloadScript: |
     Name = "Substance 3D Sampler"
     ID = "Substance3DSampler"
     URL = $URL
-    VersionMatchStringRegex = "(?<=\>)([0-9]{1,}\.){2}[0-9]{1,}"
-    VersionLocation = -1
+    VersionMatchStringRegex = "(?<=\>)(\.{0,1}[0-9]{1,4}){2,4}"
     PackageName = "Auto_Substance3DSampler_<Version>_NU_NAU"
   })
 
   $Script:Substance3DSampler.Update()
   $Version = $Substance3DSampler.Version
-  $VersionYear = $Substance3DSampler.VersionYear
   $PackageName = $Substance3DSampler.PackageName
   $InstallScript = $Substance3DSampler.InstallScript
   $UninstallScript = $Substance3DSampler.UninstallScript

@@ -6,15 +6,12 @@ preDownloadScript: |
     Name = "Dreamweaver"
     ID = "Dreamweaver"
     URL = $URL
-    VersionMatchStringRegex = 'latest version of Dreamweaver is the [A-Za-z]{3,} [0-9]{4}.*\(version [0-9]{1,}\.[0-9]{1,}'
-    VersionYearLocation = -4
-    VersionLocation = -1
+    VersionMatchStringRegex = '(?<=\(version )[0-9]{1,}\.[0-9]{1,}'
     PackageName = "Auto_Dreamweaver_<Version>_NU_NAU"
   })
 
   $Dreamweaver.Update()
   $Version = $Dreamweaver.Version
-  $VersionYear = $Dreamweaver.VersionYear
   $PackageName = $Dreamweaver.PackageName
   $InstallScript = $Dreamweaver.InstallScript
   $UninstallScript = $Dreamweaver.UninstallScript

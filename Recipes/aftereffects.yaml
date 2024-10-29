@@ -6,14 +6,13 @@ preDownloadScript: |
     Name = "After Effects"
     ID = "AfterEffects"
     URL = $URL
-    VersionMatchStringRegex = "(?<=\()[0-9]{1,}\.[0-9]{1,}"
+    VersionMatchStringRegex = "(?<=\()(([0-9]{1,4})\.{0,1}){2,4}(?=\))"
     VersionLocation = 0
     PackageName = "Auto_AfterEffects_<Version>_NU_NAU"
   })
 
   $Script:AfterEffects.Update()
   $Version = $AfterEffects.Version
-  $VersionYear = $AfterEffects.VersionYear
   $PackageName = $AfterEffects.PackageName
   $InstallScript = $AfterEffects.InstallScript
   $UninstallScript = $AfterEffects.UninstallScript

@@ -6,14 +6,12 @@ preDownloadScript: |
     Name = "Media Encoder"
     ID = "MediaEncoder"
     URL = $URL
-    VersionMatchStringRegex = "[A-Za-z]{3,10} [0-9]{4} release \(version [0-9]{1,}\.[0-9]{1,}"
-    VersionLocation = -1
+    VersionMatchStringRegex = "(?<=release \(version )[0-9]{1,}\.[0-9]{1,}"
     PackageName = "Auto_MediaEncoder_<Version>_NU_NAU"
   })
 
   $Script:MediaEncoder.Update()
   $Version = $MediaEncoder.Version
-  $VersionYear = $MediaEncoder.VersionYear
   $PackageName = $MediaEncoder.PackageName
   $InstallScript = $MediaEncoder.InstallScript
   $UninstallScript = $MediaEncoder.UninstallScript

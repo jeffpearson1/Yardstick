@@ -6,14 +6,12 @@ preDownloadScript: |
     Name = "Substance 3D Designer"
     ID = "Substance3DDesigner"
     URL = $URL
-    VersionMatchStringRegex = "(?<=\>)([0-9]{1,}\.){2}[0-9]{1,}(?=\<)"
-    VersionLocation = -1
+    VersionMatchStringRegex = "(?<=\>)(\.{0,1}[0-9]{1,4}){2,4}(?=</a>)"
     PackageName = "Auto_Substance3DDesigner_<Version>_NU_NAU"
   })
 
   $Script:Substance3DDesigner.Update()
   $Version = $Substance3DDesigner.Version
-  $VersionYear = $Substance3DDesigner.VersionYear
   $PackageName = $Substance3DDesigner.PackageName
   $InstallScript = $Substance3DDesigner.InstallScript
   $UninstallScript = $Substance3DDesigner.UninstallScript

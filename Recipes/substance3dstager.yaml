@@ -6,14 +6,12 @@ preDownloadScript: |
     Name = "Substance 3D Stager"
     ID = "Substance3DStager"
     URL = $URL
-    VersionMatchStringRegex = "(?<=\>)([0-9]{1,}\.){2}[0-9]{1,}(?=\<)"
-    VersionLocation = -1
+    VersionMatchStringRegex = "(?<=\>)(\.{0,1}[0-9]{1,4}){2,4}(?=\<)"
     PackageName = "Auto_Substance3DStager_<Version>_NU_NAU"
   })
 
   $Script:Substance3DStager.Update()
   $Version = $Substance3DStager.Version
-  $VersionYear = $Substance3DStager.VersionYear
   $PackageName = $Substance3DStager.PackageName
   $InstallScript = $Substance3DStager.InstallScript
   $UninstallScript = $Substance3DStager.UninstallScript

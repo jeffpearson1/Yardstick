@@ -6,7 +6,7 @@ preDownloadScript: |
     Name = "Creative Cloud Desktop"
     ID = "CreativeCloudDesktop"
     URL = $URL
-    VersionMatchStringRegex = 'Version ([0-9]{1,}\.){3}[0-9]{1,}'
+    VersionMatchStringRegex = '(?<=[Vv]ersion )(\.{0,1}[0-9]{1,4}){2,4}'
     VersionLocation = 1
     FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Creative Cloud\ACC"
     PackageName = "Auto_CCDesktop_<Version>_NU_NAU"
@@ -15,7 +15,6 @@ preDownloadScript: |
 
   $CCDesktop.Update()
   $Version = $CCDesktop.Version
-  $VersionYear = $CCDesktop.VersionYear
   $PackageName = $CCDesktop.PackageName
   $InstallScript = $CCDesktop.InstallScript
   $UninstallScript = $CCDesktop.UninstallScript

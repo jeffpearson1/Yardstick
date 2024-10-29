@@ -6,16 +6,12 @@ preDownloadScript: |
     Name = "Fresco"
     ID = "Fresco"
     URL = $URL
-    VersionMatchStringRegex = 'Fresco version ([0-9]{1,}\.){1,2}[0-9]{1,} \([A-Za-z]{3,10} [0-9]{4}'
-    VersionYearLocation = -1
-    VersionLocation = 2
-    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Fresco <VersionYear>"
+    VersionMatchStringRegex = '(?<=Windows )(\.{0,1}[0-9]{1,4}){2,4}'
     PackageName = "Auto_Fresco_<Version>_NU_NAU"
   })
 
   $Script:Fresco.Update()
   $Version = $Fresco.Version
-  $VersionYear = "2024"
   $PackageName = $Fresco.PackageName
   $InstallScript = $Fresco.InstallScript
   $UninstallScript = $Fresco.UninstallScript

@@ -6,14 +6,12 @@ preDownloadScript: |
     Name = "Premiere Pro"
     ID = "PremierePro"
     URL = $URL
-    VersionMatchStringRegex = "(?<=[A-Za-z] \()([0-9]{1,}\.){1,}[0-9]{1,}"
-    VersionLocation = 0
+    VersionMatchStringRegex = "(?<=[A-Za-z] \()(\.{0,1}[0-9]{1,4}){2,4}"
     PackageName = "Auto_PremierePro_<Version>_NU_NAU"
   })
 
   $Script:PremierePro.Update()
   $Version = $PremierePro.Version
-  $VersionYear = $PremierePro.VersionYear
   $PackageName = $PremierePro.PackageName
   $InstallScript = $PremierePro.InstallScript
   $UninstallScript = $PremierePro.UninstallScript
