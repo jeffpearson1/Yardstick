@@ -127,7 +127,9 @@ function Move-Assignments {
         [Parameter(Mandatory, Position=0)]
         [System.Object] $From,
         [Parameter(Mandatory, Position=1)]
-        [System.Object] $To
+        [System.Object] $To,
+        [Parameter(Position=2)]
+        [String] $ArchitectureFilterName
     )
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromAvailable = ($FromAssignments | Where-Object intent -eq "available").groupId
@@ -138,7 +140,14 @@ function Move-Assignments {
             $try = 0
             $successfullyAdded = $false
             while (!$successfullyAdded -and ($try -lt $maxRetries)) {
-                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
+                if ($ArchitectureFilterName) {
+                    Write-Log "Using architecture filter for $ArchitectureFilterName"
+                    Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" | Out-Null
+                }
+                else {
+                    Write-Log "Not using an architecture filter: $Architecture"
+                    Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
+                }
                 # Check that it worked
                 $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
                 if($AssignedGroups | Where-Object GroupID -eq $groupID) {

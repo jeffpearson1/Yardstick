@@ -164,6 +164,10 @@ foreach ($ApplicationId in $Applications) {
     $Script:publisher = $parameters.publisher
     $Script:is32BitApp = if($parameters.is32BitApp) {$parameters.is32BitApp} else {$prefs.defaultIs32BitApp}
     $Script:numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
+    $Script:arm64FilterName = $prefs.arm64FilterName
+    $Script:amd64FilterName = $prefs.amd64FilterName
+    $Script:architecture = if($parameters.architecture) {$parameters.architecture} else {$prefs.defaultArchitecture}
+    $Script:architectureFilterName = if ($script:architecture -eq "arm64") {$prefs.arm64FilterName} elseif ($script:architecture -eq "amd64") {$prefs.amd64FilterName} else {$null}
 
 
     if ($Repair) {
@@ -228,7 +232,7 @@ foreach ($ApplicationId in $Applications) {
 
     # Make the new BUILDSPACE directory
     New-Item -Path $BUILDSPACE\$id -ItemType Directory -Name $version
-    Set-Location $BUILDSPACE\$id\$version
+    Push-Location $BUILDSPACE\$id\$version
 
     # Download the new installer
     Write-Log "Starting download..."
@@ -319,7 +323,7 @@ foreach ($ApplicationId in $Applications) {
 
 
     # Generate the .intunewin file
-    Set-Location $PSScriptRoot
+    Pop-Location
     Write-Log "Generating .intunewin file..."
     $app = New-IntuneWin32AppPackage -SourceFolder $BUILDSPACE\$id\$version -SetupFile $filename -OutputFolder $PUBLISHED -Force
 
@@ -408,7 +412,7 @@ foreach ($ApplicationId in $Applications) {
         $CurrentApp = Get-IntuneWin32App -Id $Win32App.id
         foreach ($removeapp in $ToRemove) {
             Write-Log "Moving assignments before removal..."
-            Move-Assignments -From $removeapp -To $CurrentApp
+            Move-Assignments -From $removeapp -To $CurrentApp -ArchitectureFilterName $Script:architectureFilterName
             Write-Log "Removing App with ID $($removeapp.id)"
             Remove-IntuneWin32App -Id $removeapp.id
         }
@@ -430,7 +434,7 @@ foreach ($ApplicationId in $Applications) {
         foreach ($NMinusOneApp in $NMinusOneApps) {
             if ($CurrentApp) {
                 Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
-                Move-Assignments -From $NMinusOneApp -To $CurrentApp
+                Move-Assignments -From $NMinusOneApp -To $CurrentApp -ArchitectureFilterName $Script:architectureFilterName
             }
             else {
                 Write-Log "There was an error fetching information about the current application. Exiting"
@@ -446,12 +450,12 @@ foreach ($ApplicationId in $Applications) {
         if ($i -eq 0) {
             # Move the app assignments in the 0 position to the nminusoneapp
             if ($NMinusTwoAndOlderApps[$i] -and $NewestNMinusOneApp) {
-                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp
+                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp -ArchitectureFilterName $Script:architectureFilterName
             }
         }
         else {
             if ($NMinusTwoAndOlderApps[$i] -and $NMinusTwoAndOlderApps[$i - 1]) {
-                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1]
+                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1] -ArchitectureFilterName $Script:architectureFilterName
             }
         }
     }
@@ -461,9 +465,21 @@ foreach ($ApplicationId in $Applications) {
         $ID = $CurrentApp.Id
         $CurrentlyDeployedIDs = (Get-IntuneWin32AppAssignment -Id $ID).GroupID
         foreach ($DeploymentGroupID in $Script:defaultDeploymentGroups) {
+
             if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
                 Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
-                Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
+                if ($Script:architectureFilterName -eq "arm64") {
+                    Write-Log "Architecture filter: ARM64"
+                    Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:arm64FilterName)" | Out-Null
+                }
+                if ($Script:architectureFilterName -eq "amd64") {
+                    Write-Log "Architecture filter: AMD64"
+                    Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:amd64FilterName)" | Out-Null
+                }
+                else {
+                    Write-Log "No architecture filter selected"
+                    Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
+                }
             }
         }
     }
