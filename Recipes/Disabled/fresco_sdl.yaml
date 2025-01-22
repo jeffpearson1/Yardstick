@@ -1,0 +1,48 @@
+url: https://helpx.adobe.com/fresco/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Fresco = [AdobeApplication]::new(@{
+    Name = "Fresco"
+    ID = "Fresco_SDL"
+    URL = $URL
+    VersionMatchStringRegex = '(?<=Windows )(\.{0,1}[0-9]{1,4}){2,4}'
+    PackageName = "Auto_Fresco_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Script:Fresco.Update()
+  $Version = $Fresco.Version
+  $PackageName = $Fresco.PackageName
+  $InstallScript = $Fresco.InstallScript
+  $UninstallScript = $Fresco.UninstallScript
+downloadScript: |
+  $Script:Fresco.Download()
+filename: setup.exe
+iconFile: Fresco.png
+id: Fresco_SDL
+displayName: Adobe Fresco (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe Fresco is a vector and raster graphics editor developed by Adobe primarily for digital painting.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Fresco*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Fresco.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

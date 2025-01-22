@@ -1,0 +1,49 @@
+url: 'https://helpx.adobe.com/after-effects/release-note/release-notes-after-effects.html'
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:AfterEffects = [AdobeApplication]::new(@{
+    Name = "After Effects"
+    ID = "AfterEffects_SDL"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=\()(([0-9]{1,4})\.{0,1}){2,4}(?=\))"
+    VersionLocation = 0
+    PackageName = "Auto_AfterEffects_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Script:AfterEffects.Update()
+  $Version = $AfterEffects.Version
+  $PackageName = $AfterEffects.PackageName
+  $InstallScript = $AfterEffects.InstallScript
+  $UninstallScript = $AfterEffects.UninstallScript
+downloadScript: |
+  $Script:AfterEffects.Download()
+filename: setup.exe
+iconFile: AfterEffects.png
+id: AfterEffects_SDL
+displayName: Adobe After Effects (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe After Effects is a digital visual effects, motion graphics, and compositing application developed by Adobe; it is used in the post-production process of film making, video games and television production. Among other things, After Effects can be used for keying, tracking, compositing, and animation.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe After Effects*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "AfterFX.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\Support Files\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,48 @@
+url: https://helpx.adobe.com/dreamweaver/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Dreamweaver = [AdobeApplication]::new(@{
+    Name = "Dreamweaver"
+    ID = "Dreamweaver_SDL"
+    URL = $URL
+    VersionMatchStringRegex = '(?<=\(version )[0-9]{1,}\.[0-9]{1,}'
+    PackageName = "Auto_Dreamweaver_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Dreamweaver.Update()
+  $Version = $Dreamweaver.Version
+  $PackageName = $Dreamweaver.PackageName
+  $InstallScript = $Dreamweaver.InstallScript
+  $UninstallScript = $Dreamweaver.UninstallScript
+downloadScript: |
+  $Script:Dreamweaver.Download()
+filename: setup.exe
+iconFile: Dreamweaver.png
+id: Dreamweaver_SDL
+displayName: Adobe Dreamweaver (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe Dreamweaver is a proprietary web development tool from Adobe.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Dreamweaver*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Dreamweaver.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

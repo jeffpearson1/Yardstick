@@ -1,0 +1,39 @@
+url: https://helpx.adobe.com/xd/help/whats-new.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:XD = [AdobeApplication]::new(@{
+    Name = "XD"
+    ID = "XD_SDL"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=released with XD version )(\.{0,1}[0-9]{1,4}){1,4}"
+    PackageName = "Auto_XD_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Script:XD.Update()
+  $Version = $XD.Version
+  $PackageName = $XD.PackageName
+  $InstallScript = $XD.InstallScript
+  $UninstallScript = $XD.UninstallScript
+downloadScript: |
+  $Script:XD.Download()
+filename: setup.exe
+iconFile: XD.png
+id: XD_SDL
+displayName: Adobe XD (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe XD enables UX designers design interactive user experiences for web and mobile apps using a single app. You can design quick and simple designs on artboards in XD. Then wire the artboards together to create an interactive prototype that you can share and iterate with stakeholders.
+detectionType: script
+detectionScript: |
+  if ([string]$((Get-AppxPackage -Name "Adobe.XD").Version.Split(".")[0]) -eq "<version>") {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  else {
+    Write-Host "Product has failed to install correctly"
+    exit 1
+  }
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

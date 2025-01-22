@@ -1,0 +1,50 @@
+url: https://helpx.adobe.com/substance-3d-modeler/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Substance3DModeler = [AdobeApplication]::new(@{
+    Name = "Substance 3D Modeler"
+    ID = "Substance3DModeler_SDL"
+    URL = $URL
+    VersionMatchStringRegex = "((?<=V)([0-9]{1,4}\.){1,3}[0-9]{1,4})|((?<=Version )([0-9]{1,4}\.){1,3}[0-9]{1,4})"
+    PackageName = "Auto_Substance3DModeler_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Script:Substance3DModeler.Update()
+  $Version = $Substance3DModeler.Version
+  $PackageName = $Substance3DModeler.PackageName
+  $InstallScript = $Substance3DModeler.InstallScript
+  $UninstallScript = $Substance3DModeler.UninstallScript
+downloadScript: |
+  $Script:Substance3DModeler.Download()
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Substance3D.png
+id: Substance3DModeler_SDL
+displayName: Substance 3D Modeler (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Modeler is a 3D modeling and sculpting application that helps you create across both desktop and VR. Modeler makes working in 3D as intuitive as working with clay in real life. With Modeler, you can focus on the creative process rather than on technical limitations.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Substance 3D Modeler*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Substance 3D Modeler.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

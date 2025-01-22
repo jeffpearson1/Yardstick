@@ -1,0 +1,49 @@
+url: https://helpx.adobe.com/bridge/using/whats-new.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Bridge = [AdobeApplication]::new(@{
+    Name = "Bridge"
+    ID = "Bridge_SDL"
+    URL = $URL
+    VersionMatchStringRegex = '(?<=[Vv]ersion )(\.{0,1}[0-9]{1,4}){2,4}'
+    PackageName = "Auto_Bridge_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Bridge.Update()
+  $Version = $Bridge.Version
+  $PackageName = $Bridge.PackageName
+  $InstallScript = $Bridge.InstallScript
+  $UninstallScript = $Bridge.UninstallScript
+downloadScript: |
+  $Script:Bridge.Download()
+installScript:
+filename: setup.exe
+iconFile: Bridge.png
+id: Bridge_SDL
+displayName: Adobe Bridge (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe Bridge allows you to manage digital assets.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Bridge*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Bridge.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

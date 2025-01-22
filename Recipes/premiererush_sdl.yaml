@@ -1,0 +1,49 @@
+url: https://helpx.adobe.com/premiere-rush/release-notes/release-notes-premiere-rush.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:PremiereRush = [AdobeApplication]::new(@{
+    Name = "Premiere Rush"
+    ID = "PremiereRush_SDL"
+    URL = $URL
+    VersionMatchStringRegex = '(?<=release \(version )[0-9]{1,}\.[0-9]{1,}'
+    PackageName = "Auto_PremiereRush_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $PremiereRush.Update()
+  $Version = "2.10"
+  $PackageName = $PremiereRush.PackageName
+  $InstallScript = $PremiereRush.InstallScript
+  $UninstallScript = $PremiereRush.UninstallScript
+downloadScript: |
+  $Script:PremiereRush.Download()
+installScript:
+filename: setup.exe
+iconFile: PremiereRush.png
+id: premiererush_SDL
+displayName: Adobe Premiere Rush (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Premiere Rush lets you create and publish professional-quality video, with color, audio, and motion graphics from almost anywhere.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Premiere Rush*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Premiere Rush.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

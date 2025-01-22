@@ -1,0 +1,49 @@
+url: https://helpx.adobe.com/lightroom-classic/kb/fixed-issues.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:LightroomClassic = [AdobeApplication]::new(@{
+    Name = "Lightroom Classic"
+    ID = "LightroomClassic_SDL"
+    URL = $URL
+    VersionMatchStringRegex = '(?<=version )(\.{0,1}[0-9]{1,4}){2,4}'
+    PackageName = "Auto_LightroomClassic_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $LightroomClassic.Update()
+  $Version = $LightroomClassic.Version
+  $VersionYear = $LightroomClassic.VersionYear
+  $PackageName = $LightroomClassic.PackageName
+  $InstallScript = $LightroomClassic.InstallScript
+  $UninstallScript = $LightroomClassic.UninstallScript
+downloadScript: |
+  $Script:LightroomClassic.Download()
+filename: setup.exe
+iconFile: Lightroom.png
+id: LightroomClassic_SDL
+displayName: Adobe Lightroom Classic (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe Lightroom is an image organization and image processing software developed by Adobe as part of the Creative Cloud subscription family.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Lightroom Classic*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Lightroom.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

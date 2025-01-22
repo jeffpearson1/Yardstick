@@ -1,0 +1,49 @@
+url: https://helpx.adobe.com/incopy/release-note/incopy-cc-release-notes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:InCopy = [AdobeApplication]::new(@{
+    Name = "InCopy"
+    ID = "InCopy_SDL"
+    URL = $URL
+    VersionMatchStringRegex = '(\.{0,1}[0-9]{1,4}){2,4}(?= release \()'
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe InCopy <VersionYear>"
+    PackageName = "Auto_InCopy_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $InCopy.Update()
+  $Version = $InCopy.Version
+  $PackageName = $InCopy.PackageName
+  $InstallScript = $InCopy.InstallScript
+  $UninstallScript = $InCopy.UninstallScript
+downloadScript: |
+  $Script:InCopy.Download()
+filename: setup.exe
+iconFile: InCopy.png
+id: InCopy_SDL
+displayName: Adobe InCopy (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe InCopy is a professional word processor made by Adobe Inc. that integrates with Adobe InDesign. InCopy is used for general word processing, in contrast to InDesign, which is used to publish printed material, including newspapers and magazines. The software enables editors to write, edit, and design documents.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe InCopy*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "InCopy.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

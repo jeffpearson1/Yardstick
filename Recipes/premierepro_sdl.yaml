@@ -1,0 +1,48 @@
+url: https://helpx.adobe.com/premiere-pro/release-note/release-notes-premiere-pro.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:PremierePro = [AdobeApplication]::new(@{
+    Name = "Premiere Pro"
+    ID = "PremierePro_SDL"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=[A-Za-z] \()(\.{0,1}[0-9]{1,4}){2,4}"
+    PackageName = "Auto_PremierePro_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Script:PremierePro.Update()
+  $Version = $PremierePro.Version
+  $PackageName = $PremierePro.PackageName
+  $InstallScript = $PremierePro.InstallScript
+  $UninstallScript = $PremierePro.UninstallScript
+downloadScript: |
+  $Script:PremierePro.Download()
+filename: setup.exe
+iconFile: PremierePro.png
+id: PremierePro_SDL
+displayName: Adobe Premiere Pro (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe Premiere Pro is the leading video editing software for film, TV and the web. Creative tools, integration with other Adobe apps and services and the power of Adobe Sensei help you craft footage into polished films and videos in one seamless workflow. With its tight integration with Premiere Rush, you can capture footage and start editing on all your devices, anywhere.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Premiere Pro*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Premiere Pro.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

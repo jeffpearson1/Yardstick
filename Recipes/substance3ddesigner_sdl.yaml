@@ -1,0 +1,50 @@
+url: https://helpx.adobe.com/substance-3d-designer/release-notes/all-changes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Substance3DDesigner = [AdobeApplication]::new(@{
+    Name = "Substance 3D Designer"
+    ID = "Substance3DDesigner_SDL"
+    URL = $URL
+    VersionMatchStringRegex = "(?<=\>)(\.{0,1}[0-9]{1,4}){2,4}(?=</a>)"
+    PackageName = "Auto_Substance3DDesigner_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Script:Substance3DDesigner.Update()
+  $Version = $Substance3DDesigner.Version
+  $PackageName = $Substance3DDesigner.PackageName
+  $InstallScript = $Substance3DDesigner.InstallScript
+  $UninstallScript = $Substance3DDesigner.UninstallScript
+downloadScript: |
+  $Script:Substance3DDesigner.Download()
+installScript: |
+  setup.exe --silent --ADOBEINSTALLDIR="%ProgramFiles%\Adobe" --INSTALLLANGUAGE=en_US
+filename: setup.exe
+iconFile: Substance3D.png
+id: Substance3DDesigner_SDL
+displayName: Substance 3D Designer (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Unlock the power of procedural design. Create seamless materials, patterns, image filters, and environment lights with infinite variations.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Substance 3D Designer*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Substance 3D Designer.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = $Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

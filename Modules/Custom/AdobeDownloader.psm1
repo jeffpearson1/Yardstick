@@ -31,13 +31,28 @@ class AdobeApplication {
     [void] Update() {
         try {
             $HTML = Invoke-Expression "$($this.prefs.Tools)\curl.exe -s $($this.url)"
+        }
+        catch {
+            throw "ERROR: Cannot download version HTML for Adobe Application $($this.Name)"
+        }
+        try {
             [string]($HTML -match $this.VersionMatchStringRegex) -match $this.VersionMatchStringRegex | Out-Null
             $this.Version = $matches[0]
+        }
+        catch {
+            throw "ERROR: Cannot match regular expression $($this.VersionMatchStringRegex)"
+        }
+        try {
             $this.PackageName = $this.PackageName -replace "<Version>", $this.Version
+        }
+        catch {
+            throw "ERROR: Cannot replace <Version> with $($this.Version)"
+        }
+        try {
             $this.UninstallScript = $this.uninstallScript -replace "<PackageName>", $this.PackageName
         }
         catch {
-            throw "Issue calling update for $($this.Name)"
+            throw "ERROR: Cannot replace <PackageName> with $($this.PackageName)"
         }
     }
 
@@ -60,6 +75,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot retrieve stored credentials with target 'adobe'!"
+            $Driver.Close()
             throw "ERROR: Cannot retrieve stored credentials with target 'adobe'!"
             return
         }
@@ -74,6 +90,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot pass Adobe username only sign in dialog!"
+            $Driver.Close()
             throw "ERROR: Cannot pass Adobe username only sign in dialog!"
             return
         }
@@ -86,6 +103,7 @@ class AdobeApplication {
             }
             catch {
                 Write-Log "ERROR: Cannot run Invoke-SSOAutoSignIn!"
+                $Driver.Close()
                 throw "ERROR: Cannot run Invoke-SSOAutoSignIn!"
                 return
             }
@@ -100,6 +118,7 @@ class AdobeApplication {
             }
             catch {
                 Write-Log "ERROR: There was an issue with sign in"
+                $Driver.Close()
                 throw "ERROR: There was an issue with sign in"
                 return
             }
@@ -119,6 +138,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot open Packages tab in Adobe Admin Console"
+            $Driver.Close()
             throw "ERROR: Cannot open Packages tab in Adobe Admin Console"
             return
         }
@@ -135,6 +155,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "ERROR: Cannot click 'create a package'"
+            $Driver.Close()
             throw "ERROR: Cannot click 'create a package'"
             return
         }
@@ -195,12 +216,13 @@ class AdobeApplication {
             }
             catch {
                 Write-Log "ERROR: There was an issue configuring new package parameters! (Managed)"
+                $Driver.Close()
                 throw "ERROR: There was an issue configuring new package parameters! (Managed)"
                 return
             }
         }
 
-        if ($this.InstallType -eq "SelfService") {
+        elseif ($this.InstallType -eq "SelfService") {
             try {
                 # Named user licensing is default, so just click the next button
                 Write-Log "NU: Click next"
@@ -208,7 +230,7 @@ class AdobeApplication {
                 Start-Sleep -Seconds 2
                 # Self Service is the default - click next
                 Write-Log "Click Next"
-                (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").click()
+                (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").Click()
                 Start-Sleep -Seconds 2
                 Write-Log "Fill out package name with $($this.PackageName)"
                 $PackageName_Field = Get-SeElement -By XPATH "//*/input[@data-testid='package-name-input']"
@@ -216,22 +238,87 @@ class AdobeApplication {
                 Start-Sleep -Seconds 0.5
                 # Click the OS dropdown
                 Write-Log "Click OS select dropdown"
-                (Get-SeElement -By XPath "//*[text()='Select platform']").click()
+                (Get-SeElement -By XPath "//*[text()='Select platform']").Click()
                 Start-Sleep -Seconds 0.5
                 # Pick Windows (64-bit)
                 Write-Log "Select Windows (64-bit)"
-                (Get-SeElement -By XPath "//*[text()='Windows (64-bit)']").click()
+                (Get-SeElement -By XPath "//*[text()='Windows (64-bit)']").Click()
                 Start-Sleep -Seconds 0.5
                 # Click Create package
-                (Get-SeElement -By XPATH "//*/button[@data-testid='cta-button']").click()
+                (Get-SeElement -By XPATH "//*/button[@data-testid='cta-button']").Click()
             }
             catch {
                 Write-Log "ERROR: There was an issue configuring new package parameters! (Self Service)"
+                $Driver.Close()
                 throw "ERROR: There was an issue configuring new package parameters! (Self Service)"
                 return
             }
         }
-        
+
+        elseif ($this.InstallType -eq "ManagedSDL") {
+            try{
+                Write-Log "ManagedSDL: Change to shared device license"
+                (Get-SeElement -By Xpath "//input[@aria-label='Shared device licensing']").Click()
+                Start-Sleep -Seconds 2
+                Write-Log "ManagedSDL: Click next"
+                (Get-SeElement -By CSSSelector "div.aaz5ma_spectrum-ButtonGroup:nth-child(4) > button:nth-child(2) > span:nth-child(1)").Click()
+                Start-Sleep -Seconds 2
+                Write-Log "ManagedSDL: Select Entitlement"
+                (Get-SeElement -By CSSSelector ".src2-app-features-packages-components-create-package-modal-screens-choose-entitlements-page-entitlement-card-___EntitlementCard__entitlement-card___H_zoc > div:nth-child(1) > div:nth-child(2) > label:nth-child(1) > input:nth-child(1)").Click()
+                Start-Sleep -Seconds 2
+                Write-Log "ManagedSDL: Click next"
+                (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").Click()
+                # Click the OS dropdown
+                Write-Log "ManagedSDL: Click OS select dropdown"
+                (Get-SeElement -By XPath "//*[text()='Select platform']").click()
+                Start-Sleep -Seconds 2
+                # Pick Windows (64-bit)
+                Write-Log "ManagedSDL: Select Windows (64-bit)"
+                (Get-SeElement -By XPath "//*[text()='Windows (64-bit)']").click()
+                Start-Sleep -Seconds 2
+                # Click next
+                Write-Log "ManagedSDL: Click Next"
+                (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").click()
+                Start-Sleep -Seconds 2
+                # Add application to list
+                Write-Log "ManagedSDL: Add app to list"
+                (Get-SeElement -By XPath "//*[text()=`"$($this.Name)`"]/../../../following-sibling::*/button[@data-testid='add-product-button']").click()
+                Start-Sleep -Seconds 2
+                # Click next
+                Write-Log "ManagedSDL: Click Next"
+                (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").click()
+                Start-Sleep -Seconds 2
+                # Skip Plugins and click next
+                Write-Log "ManagedSDL: Skip Plugins: Click Next"
+                (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").click()
+                Start-Sleep -Seconds 2
+                # Adobe CC Desktop Options
+                # Disable Auto Update for Computer Labs
+                Write-Log "ManagedSDL: Disable auto update for computer labs"
+                (Get-SeElement -By XPATH "//*[text()='Enable self-service install']/../../input").click()
+                Start-Sleep -Seconds 2
+                # Click next
+                Write-Log "ManagedSDL: Click Next"
+                (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)").click()
+                Start-Sleep -Seconds 2
+                # Fill out the package name
+                Write-Log "ManagedSDL: Fill out package name with $($this.PackageName)"
+                $PackageName_Field = Get-SeElement -By XPATH "//*/input[@data-testid='package-name-input']"
+                Invoke-SeKeys -Element $PackageName_Field -Keys $this.PackageName
+                # Click Create package
+                Write-Log "ManagedSDL: Creating Package"
+                (Get-SeElement -By XPATH "//*/button[@data-testid='cta-button']").click()
+
+            }
+            catch {
+                Write-Log "ERROR: There was an issue configuring new package parameters! (ManagedSDL)"
+                $Driver.Close()
+                throw "ERROR: There was an issue configuring new package parameters! (ManagedSDL)"
+                return
+            }
+
+
+        }
         try {
             Write-Log "Package is building and will download automatically..."
             Write-Log "Filename: $zipfilename"
@@ -248,6 +335,7 @@ class AdobeApplication {
         }
         catch {
             Write-Log "Failed to download"
+            $Driver.Close()
             throw "Failed to download"
             return
         }

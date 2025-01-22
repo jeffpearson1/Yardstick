@@ -1,0 +1,49 @@
+url: https://helpx.adobe.com/illustrator/release-notes.html
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\AdobeDownloader.psm1
+  $Script:Illustrator = [AdobeApplication]::new(@{
+    Name = "Illustrator"
+    ID = "Illustrator_SDL"
+    URL = $URL
+    VersionMatchStringRegex = '(?<=version )(\.{0,1}[0-9]{1,4}){2,4}'
+    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Illustrator <VersionYear>\Support Files\Contents\Windows"
+    PackageName = "Auto_Illustrator_<Version>_SD_NAU"
+    InstallType = "ManagedSDL"
+  })
+
+  $Illustrator.Update()
+  $Version = $Illustrator.Version
+  $PackageName = $Illustrator.PackageName
+  $InstallScript = $Illustrator.InstallScript
+  $UninstallScript = $Illustrator.UninstallScript
+downloadScript: |
+  $Script:Illustrator.Download()
+filename: setup.exe
+iconFile: Illustrator.png
+id: Illustrator_SDL
+displayName: Adobe Illustrator (Shared Device License)
+publisher: Adobe
+description: Licensed for lab use only. Individuals should download the non-shared device license installer. Adobe Illustrator is a vector graphics editor and design software developed and marketed by Adobe.
+detectionType: script
+detectionScript: |
+  $Version = "<version>"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Illustrator*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Illustrator.exe"
+  $VersionComponents = (Get-Item "$NewestVersionPath\Support Files\Contents\Windows\$InstalledFileName").VersionInfo.FileVersionRaw
+  $VersionSegments = 2 #$Version.split(".").count
+  Switch($VersionSegments) {
+    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
+    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
+    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
+    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
+  }
+  if ($FileVersion -eq $Version) {
+    Write-Host "Product has installed correctly"
+    exit 0
+  }
+  Write-Host "Product has failed to install correctly"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
