@@ -18,9 +18,10 @@ Secrets:
 
 
 #####################################
-# RUNTIME PREFERENCES
+# ARCHITECTURE FILTERS
 #####################################
-
+arm64FilterName:
+amd64FilterName:
 
 #####################################
 # INTUNE CONNECTION SETTINGS
