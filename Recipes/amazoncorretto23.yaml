@@ -1,0 +1,18 @@
+url: https://corretto.aws/downloads/latest/amazon-corretto-23-x64-windows-jdk.msi
+urlRedirects: true
+preDownloadScript: |
+  if ($Script:url -notmatch "https:\/\/corretto\.aws") {
+    $Script:url = "https://corretto.aws$($Script:url)"
+  }
+  $url -match "([0-9]{1,}\.){4}[0-9]{1,}" | Out-Null
+  $version = $matches[0]
+  $fileDetectionVersion = $version
+  $fileName = $($url -split "/")[-1]
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: AmazonCorretto.png
+id: AmazonCorretto23
+displayName: Amazon Corretto JDK 23
+publisher: Amazon
+description: An OpenJDK distribution provided by Amazon
+detectionType: msi

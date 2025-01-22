@@ -7,7 +7,6 @@ preDownloadScript: |
     ID = "Audition"
     URL = $URL
     VersionMatchStringRegex = '(?<=release \(version )[0-9]{1,}\.[0-9]{1,}'
-    FileDetectionPath = "%ProgramFiles%\Adobe\Adobe Audition <VersionYear>"
     PackageName = "Auto_Audition_<Version>_NU_NAU"
   })
 

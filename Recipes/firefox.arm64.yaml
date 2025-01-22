@@ -1,0 +1,17 @@
+url: https://download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=en-US
+urlredirects: true
+preDownloadScript: |
+  $filename = $URL.split("/")[-1].replace("%20", " ")
+  $version = ($filename.split(" ")[-1] -Split "\.msi")[0]
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: firefox.png
+id: firefox.arm64
+displayName: Mozilla Firefox (ARM64)
+architecture: arm64
+publisher: The Mozilla Foundation
+description: Mozilla Firefox is a free and open-source web browser developed by the Mozilla Foundation and its subsidiary, the Mozilla Corporation.
+detectionType: registry
+registryDetectionMethod: exists
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> (AArch64 en-US)'
+numVersionsToKeep: 1

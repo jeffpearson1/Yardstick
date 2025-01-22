@@ -1,4 +1,4 @@
-url: https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64
+url: https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=winarm64
 urlredirects: true
 preDownloadScript: |
   $url -match '([0-9]{1,}\.){1,3}[0-9]{1,}' | Out-Null
@@ -8,8 +8,9 @@ installScript: msiexec /i <filename> /qn /norestart ZConfig="nogoogle=1;nofacebo
 uninstallScript: msiexec /x <productcode> /silent
 fileName: ZoomInstallerFull.msi
 iconFile: zoom.png
-id: Zoom
-displayName: Zoom
+id: zoom.arm64
+displayName: Zoom (ARM64)
+architecture: arm64
 publisher: Zoom Video Communications, Inc.
 description: Zoom is a video conferencing service used by companies and universities for remote communication.
 fileType: msi

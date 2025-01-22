@@ -30,7 +30,7 @@ detectionScript: |
   $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Illustrator*" | Sort-Object Name -Descending)[0]).FullName
   $InstalledFileName = "Illustrator.exe"
   $VersionComponents = (Get-Item "$NewestVersionPath\Support Files\Contents\Windows\$InstalledFileName").VersionInfo.FileVersionRaw
-  $VersionSegments = $Version.split(".").count
+  $VersionSegments = 2 #$Version.split(".").count
   Switch($VersionSegments) {
     1 {$FileVersion = "$($VersionComponents.Major)"; Break}
     2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}

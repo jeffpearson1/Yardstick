@@ -1,0 +1,25 @@
+url: https://www.dropbox.com/download?full=1&plat=win&arch=arm64
+urlredirects: true
+preDownloadScript: |
+  $fileName = (($url -split '/')[-1]).replace("%20", " ")
+  $fileName -match "(?<=\ )([0-9]{1,4}\.){2}[0-9]{1,4}(?=\ )" | Out-Null
+  $version = $matches[0]
+  $fileDetectionVersion = "$($version).0"
+installScript:
+  '<filename> /NOLAUNCH'
+uninstallScript:
+  '"C:\Program Files (x86)\Dropbox\Client\DropboxUninstaller.exe" /S'
+version:
+fileName:
+iconFile: dropbox.jpg
+id: dropboxforbusiness.arm64
+displayName: Dropbox for Business (ARM64)
+publisher: Dropbox
+description: A file sharing and storage software similar to Google Drive
+fileType: EXE
+softwareName: "Dropbox*"
+detectionType: file
+fileDetectionPath: 'C:\Program Files (x86)\Dropbox\Client'
+fileDetectionName: 'Dropbox.exe'
+fileDetectionMethod: version
+fileDetectionOperator: equal

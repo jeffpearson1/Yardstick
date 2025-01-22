@@ -1,34 +1,34 @@
-url: https://helpx.adobe.com/lightroom-classic/kb/fixed-issues.html
+url: https://helpx.adobe.com/premiere-rush/release-notes/release-notes-premiere-rush.html
 urlredirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
-  $Script:LightroomClassic = [AdobeApplication]::new(@{
-    Name = "Lightroom Classic"
-    ID = "LightroomClassic"
+  $Script:PremiereRush = [AdobeApplication]::new(@{
+    Name = "Premiere Rush"
+    ID = "PremiereRush"
     URL = $URL
-    VersionMatchStringRegex = '(?<=version )(\.{0,1}[0-9]{1,4}){2,4}'
-    PackageName = "Auto_LightroomClassic_<Version>_NU_NAU"
+    VersionMatchStringRegex = '(?<=release \(version )[0-9]{1,}\.[0-9]{1,}'
+    PackageName = "Auto_PremiereRush_<Version>_NU_NAU"
   })
 
-  $LightroomClassic.Update()
-  $Version = $LightroomClassic.Version
-  $VersionYear = $LightroomClassic.VersionYear
-  $PackageName = $LightroomClassic.PackageName
-  $InstallScript = $LightroomClassic.InstallScript
-  $UninstallScript = $LightroomClassic.UninstallScript
+  $PremiereRush.Update()
+  $Version = "2.10"
+  $PackageName = $PremiereRush.PackageName
+  $InstallScript = $PremiereRush.InstallScript
+  $UninstallScript = $PremiereRush.UninstallScript
 downloadScript: |
-  $Script:LightroomClassic.Download()
+  $Script:PremiereRush.Download()
+installScript:
 filename: setup.exe
-iconFile: Lightroom.png
-id: LightroomClassic
-displayName: Adobe Lightroom Classic
+iconFile: PremiereRush.png
+id: premiererush
+displayName: Adobe Premiere Rush
 publisher: Adobe
-description: Adobe Lightroom is an image organization and image processing software developed by Adobe as part of the Creative Cloud subscription family.
+description: Premiere Rush lets you create and publish professional-quality video, with color, audio, and motion graphics from almost anywhere.
 detectionType: script
 detectionScript: |
   $Version = "<version>"
-  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Lightroom Classic*" | Sort-Object Name -Descending)[0]).FullName
-  $InstalledFileName = "Lightroom.exe"
+  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe Premiere Rush*" | Sort-Object Name -Descending)[0]).FullName
+  $InstalledFileName = "Adobe Premiere Rush.exe"
   $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
   $VersionSegments = $Version.split(".").count
   Switch($VersionSegments) {
