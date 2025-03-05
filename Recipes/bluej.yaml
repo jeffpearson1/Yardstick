@@ -4,7 +4,7 @@ preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $Content.content -match "(?<=Version )[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
   $Version = $matches[0]
-  $url = ($Content.links | where href -like "*BlueJ-windows*.msi").href
+  $url = "https://www.bluej.org/download/files/BlueJ-windows-$($Version -replace '\.').msi"
   $filename = $url.split("/")[-1]
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart

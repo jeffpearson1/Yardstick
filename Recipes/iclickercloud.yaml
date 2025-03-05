@@ -1,0 +1,21 @@
+url: https://www.iclicker.com/downloads/iclicker-cloud/
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $URL = ($content.links | where-object href -like "*msi*").href
+  $readableURL = $URL -replace "%20", " "
+  $readableURL -match "([0-9]{1,}\.){1,3}[0-9]{1,}" | Out-Null
+  $version = $matches[0]
+  $filename = ($readableURL -split "/")[-1]
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+version:
+iconFile: iclickercloud.png
+id: iclickercloud
+displayName: iClicker Cloud
+publisher: iClicker
+description: Engage your students in new ways with iClicker Cloud (formerly Reef Instructor). Track attendance using GPS technology, ask target (heat map) questions, administer quizzes, and analyze student performance using a web browser. Students participate using mobile devices, laptops, and iClicker remotes.
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_22H2

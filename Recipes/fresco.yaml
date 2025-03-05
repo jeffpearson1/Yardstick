@@ -1,4 +1,4 @@
-url: https://helpx.adobe.com/fresco/release-notes.html
+url: https://helpx.adobe.com/fresco/using/whats-new.html
 urlredirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
@@ -6,7 +6,7 @@ preDownloadScript: |
     Name = "Fresco"
     ID = "Fresco"
     URL = $URL
-    VersionMatchStringRegex = '(?<=Windows )(\.{0,1}[0-9]{1,4}){2,4}'
+    VersionMatchStringRegex = '(?<=Windows version )(\.{0,1}[0-9]{1,4}){2,4}'
     PackageName = "Auto_Fresco_<Version>_NU_NAU"
   })
 

@@ -1,0 +1,35 @@
+# CAUTION - This recipe will not work correctly without Selenium, Mozilla Firefox, and the appropriate configuration to make PowerShell Selenium work.
+url:
+urlredirects: false
+preDownloadScript: |
+  $URL = "https://help.autodesk.com/view/RVT/2025/ENU/?guid=RevitReleaseNotes_2025updates_html"
+  $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')
+  $Version = (Get-SeElement -By PartialLinkText " Update" | Where-Object Text -match "[0-9]{4}\.[0-9]\ Update")[0].Text.Split(" ")[0]
+
+  $FileName = "FileZilla_$($Version)_win64-setup.exe"
+  $registryDetectionValue = $version
+  $Driver.close()
+downloadScript: |
+  $URL = "https://manage.autodesk.com/products"
+  $URL = "https://filezilla-project.org/download.php?show_all=1"
+  $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -DefaultDownloadPath "$buildSpace\$id\$version" -Arguments @('--headless')
+  $Element = Get-SeElement -By LinkText "FileZilla_$($version)_win64-setup.exe"
+  $Element.Click()
+  $i = 0
+  $timeout = 300
+  while ((Get-Item "$buildSpace\$id\$version\FileZilla_$($version)_win64-setup.exe").Length -le 0) { if ($i -ge $timeout) { Write-Error "Download Failed"; break; } Start-Sleep 1; $i++; }
+  $Driver.Close()
+installScript: '"<filename>" /S /user=all'
+uninstallScript: '"%ProgramFiles(x86)%\FileZilla FTP Client\uninstall.exe" /S'
+version:
+fileName:
+iconFile: filezilla.png
+id: FileZilla
+displayName: FileZilla
+publisher: Tim Kosse
+description: FileZilla is a free software, cross-platform FTP application, consisting of FileZilla Client and FileZilla Server. Both server and client support FTP and FTPS, while the client can in addition connect to SFTP servers.
+detectionType: registry
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\FileZilla Client'
+registryDetectionMethod: version
+registryDetectionValueName: Version
+registryDetectionOperator: equal

@@ -1,0 +1,20 @@
+url: https://ltspice.analog.com/software/LTspice64.msi
+urlredirects: true
+preDownloadScript: |
+  $VURL = "https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html"
+  $Content = Invoke-WebRequest -Uri $VURL
+  $Content.content -match "[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}" | Out-Null
+  $Version = $matches[0]
+downloadScript: Start-BitsTransfer -Source $url -Destination $BUILDSPACE\$id\$version\$fileName -Dynamic
+installScript: msiexec /i <filename> /qn /norestart ALLUSERS=1 AI_INSTALLPERUSER=3
+uninstallScript: msiexec /x <productcode> /qn /norestart
+fileName: LTspice64.msi
+iconFile: ltspice.png
+id: LTSpice
+displayName: LTSpice
+publisher: Analog Devices
+description: LTspice® is a powerful, fast, and free SPICE simulator software, schematic capture and waveform viewer with enhancements and models for improving the simulation of analog circuits.
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -27,7 +27,7 @@ class AdobeApplication {
         }
     }
     
-
+    # Populate values needed to determine if an update is needed
     [void] Update() {
         try {
             $HTML = Invoke-Expression "$($this.prefs.Tools)\curl.exe -s $($this.url)"
@@ -60,7 +60,7 @@ class AdobeApplication {
         $zipfilename = "$($this.PackageName)_en_US_WIN_64.zip"
         $ConsoleURL = "https://adminconsole.adobe.com"
         try {
-            $Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath "$($this.prefs.TEMP)\$($this.id)" -Arguments @('--headless', '--window-size=1920,1080')
+            $Driver = Start-SeDriver -Browser "Firefox" -StartURL $ConsoleURL -DefaultDownloadPath "$($this.prefs.TEMP)\$($this.id)" #-Arguments @('--headless', '--window-size=1920,1080')
             Start-Sleep -Seconds 15
         }
         catch {
