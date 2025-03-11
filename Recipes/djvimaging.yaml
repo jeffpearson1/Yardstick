@@ -1,0 +1,21 @@
+url: https://github.com/darbyjohnston/DJV
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "DJV.*win64\.exe$"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex)
+  $downloader.Update()
+  $Version = $downloader.LatestVersion
+  $URL = $downloader.URL
+  $filename = $downloader.filename
+
+installScript: <filename> /S
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: djvimaging.png
+id: djvimaging
+displayName: DJV Imaging
+publisher: Igor Pavlov
+description: An open source file archiver/unarchiver
+fileType: MSI
+detectionType: msi
+numVersionsToKeep: 1
