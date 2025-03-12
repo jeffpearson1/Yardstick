@@ -34,6 +34,17 @@ Install-Module -Name Selenium -AllowPrerelease
 
 Most of this file should be fairly self-explanatory. The TenantID, ClientID, and ClientSecrets are required for Yardstick to operate properly. Defaults do not necessarily have to be set, however recipes that don't contain all the values normally set by the defaults may fail to run correctly.
 
+
+### Populate the icon cache
+
+Icons are not included for licensing reasons. Populate the icon cache folder with the icons needed for any application recipes you will be running. Formats can be .jpg or .png, max size is the same as Intune - 512x512 and 750KB. Be sure to double check filename extensions in recipes you are using.
+
+
+### Set credentials in Windows Credential Manager
+
+Create a new Windows credential - ```yourdomainnamehere``` that contains the username and password that will be used to sign into the Intune Graph API, along with any other credential objects that may be required by recipes you are running.
+
+
 ### Recipe Tips and Tricks
 * Yardstick currently expects all recipes (and configuration files) to use the full .yaml extension. Files that use .yml will not work yet.
 * Use the defaults (configurable in preferences.yaml) for as much stuff as you can. All the available default settings are in the example preferences.yaml file.
