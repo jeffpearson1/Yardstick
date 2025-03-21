@@ -1,6 +1,7 @@
 class GithubDownloader {
     [string]$URL
     [string]$DownloaderRegex
+    [string]$VersionRegex = $null
     [string]$LatestVersion
     [string]$Filename
 
@@ -13,6 +14,12 @@ class GithubDownloader {
         $this.DownloaderRegex = $DownloaderRegex
     }
 
+    GithubDownloader([string]$URL, [string]$DownloaderRegex, [string]$VersionRegex) {
+        $this.URL = $URL
+        $this.DownloaderRegex = $DownloaderRegex
+        $this.VersionRegex = $VersionRegex
+    }
+
     GithubDownloader([hashtable]$Properties) { 
         $this.Init($Properties) 
     }
@@ -21,7 +28,13 @@ class GithubDownloader {
         $releaseEndpoint = "https://api.github.com/repos/$(($this.URL -replace "https://github.com/|/releases").trimEnd("/"))/releases"
         $releaseResponse = Invoke-RestMethod $releaseEndpoint
         $releaseLatest = ($releaseResponse | Sort-Object published_at -Descending)[0]
-        $this.LatestVersion = $releaseLatest.tag_name
+        if ($null -ne $this.VersionRegex) {
+            $releaseLatest.tag_name -match "$($this.VersionRegex)"
+            $this.LatestVersion = $matches[0]
+        }
+        else {
+            $this.LatestVersion = $releaseLatest.tag_name
+        }
         $this.URL = ($releaseLatest[0].assets | Where-Object browser_download_url -match $this.DownloaderRegex).browser_download_url
         $this.Filename = ($this.URL -split "/")[-1]
     }
