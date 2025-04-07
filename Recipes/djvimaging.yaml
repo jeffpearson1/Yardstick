@@ -9,14 +9,18 @@ preDownloadScript: |
   $Version = $downloader.LatestVersion
   $URL = $downloader.URL
   $filename = $downloader.filename
+  $registryDetectionValue = $Version
 
 installScript: <filename> /S
-uninstallScript: msiexec /x <productcode> /qn /norestart
+uninstallScript: \"%ProgramFiles%\\DJV2\\Uninstall.exe\" /S
 iconFile: djvimaging.png
 id: djvimaging
 displayName: DJV Imaging
-publisher: Igor Pavlov
-description: An open source file archiver/unarchiver
-fileType: MSI
-detectionType: msi
+publisher: Darby Johnston
+description: DJV provides professional review software for VFX, animation, and film production. Playback high resolution, high bit-depth, image sequences and videos, with frame accurate control and color management. Available for Linux, Apple macOS, and Microsoft Windows. Source code is provided under a BSD style open source license.
+detectionType: registry
+registryDetectionKey: HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\DJV2
+registryDetectionMethod: version
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual
 numVersionsToKeep: 1
