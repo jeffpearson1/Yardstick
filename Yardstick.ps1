@@ -4,6 +4,7 @@ param (
     [Alias("AppId")]
     [String] $ApplicationId = "None",
     [String] $Group,
+    [Switch] $NoInteractive,
     [Switch] $Force,
 	[Switch] $All,
     [Switch] $NoDelete,
@@ -41,7 +42,7 @@ if ("None" -eq $ApplicationId -and (($All -eq $false) -and (!$Group))) {
     Write-Log "Please provide parameter -ApplicationId"
     exit 1
 }
-$applications = [System.Collections.ArrayList]::new()
+$Applications = [System.Collections.Generic.List[PSObject]]::new()
 
 # Import preferences file:
 try {
@@ -69,8 +70,9 @@ $Global:CLIENT_ID = $prefs.ClientID
 $Global:CLIENT_SECRET = $prefs.ClientSecret
 
 if ($ApplicationId -ne "None") {
-    if (-not (Test-Path "$RECIPES\$ApplicationId.yaml")) {
-        Write-Log "ERROR: Application $ApplicationId not found in $RECIPES"
+    $MatchingApps = Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "$ApplicationId\.ya{0,1}ml"
+    if ($null -eq $MatchingApps) {
+        Write-Log "ERROR: Application $ApplicationId not found. (Excluding Disabled Folder)"
         exit 1
     }
 }
@@ -78,10 +80,19 @@ if ($ApplicationId -ne "None") {
 
 # Start updating each application if all are selected
 if ($All) {
-	$ApplicationFullNames = $(Get-ChildItem $RECIPES -File).Name
-	foreach ($Application in $ApplicationFullNames) {
-		$Applications.Add($($Application -split ".yaml")[0]) | Out-Null
-	}
+    if ($NoInteractive) {
+        $ApplicationFullNames = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object (Name -ne 'Disabled') -and (Name -ne 'Interactive') | Get-ChildItem -File -Force).Name
+        foreach ($Application in $ApplicationFullNames) {
+            $Applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
+        }
+    }
+    else {
+        $ApplicationFullNames = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Force).Name
+        foreach ($Application in $ApplicationFullNames) {
+            $Applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
+        }
+    }
+
 }
 elseif ($Group) {
     # Open the RecipeGroups.yaml file and read in the appropriate list of application ids
@@ -90,7 +101,6 @@ elseif ($Group) {
         $groupFile[$Group] | ForEach-Object {
             $Applications.Add($_) | Out-Null
         }
-    
     }
     catch {
         Write-Log "ERROR: There was an issue importing the application group! Exiting."
@@ -114,7 +124,8 @@ foreach ($ApplicationId in $Applications) {
 
     # Open the YAML file and collect all necessary attributes
     try {
-        $parameters = Get-Content "$RECIPES\$ApplicationId.yaml" | ConvertFrom-Yaml
+        $appName = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "$ApplicationId\.ya{0,1}ml")[0].FullName
+        $parameters = Get-Content "$appName" | ConvertFrom-Yaml
     }
     catch {
         Write-Error "Unable to open parameters file for $ApplicationId"
