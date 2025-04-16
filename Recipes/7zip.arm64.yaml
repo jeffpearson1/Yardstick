@@ -7,14 +7,16 @@ preDownloadScript: |
   $fileName = $($href -split "/")[1]
   $content.content -match "[0-9]{2}\.[0-9]{2}" | Out-Null
   $version = $matches[0]
-  $fileDetectionVersion = $version
+  $fileDetectionVersion = "$version.0.0"
 installScript: '"<filename>" /S'
-uninstallScript: msiexec /x <productcode> /qn /norestart
+uninstallScript: '"%ProgramFiles%\7-Zip\Uninstall.exe" /S'
 iconFile: 7zip.png
 id: 7zip.arm64
 displayName: 7-Zip (ARM64)
 publisher: Igor Pavlov
 description: An open source file archiver/unarchiver
-fileType: exe
-detectionType: msi
-numVersionsToKeep: 1
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\7-Zip'
+fileDetectionName: 7z.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal

@@ -70,7 +70,7 @@ $Global:CLIENT_ID = $prefs.ClientID
 $Global:CLIENT_SECRET = $prefs.ClientSecret
 
 if ($ApplicationId -ne "None") {
-    $MatchingApps = Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "$ApplicationId\.ya{0,1}ml"
+    $MatchingApps = Get-ChildItem $RECIPES | Where-Object Name -ne 'Disabled' | Get-ChildItem -File | Where-Object Name -match "$ApplicationId\.ya{0,1}ml"
     if ($null -eq $MatchingApps) {
         Write-Log "ERROR: Application $ApplicationId not found. (Excluding Disabled Folder)"
         exit 1
@@ -81,13 +81,13 @@ if ($ApplicationId -ne "None") {
 # Start updating each application if all are selected
 if ($All) {
     if ($NoInteractive) {
-        $ApplicationFullNames = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object (Name -ne 'Disabled') -and (Name -ne 'Interactive') | Get-ChildItem -File -Force).Name
+        $ApplicationFullNames = (Get-ChildItem $RECIPES | Where-Object (Name -ne 'Disabled') -and (Name -ne 'Interactive') | Get-ChildItem -File).Name
         foreach ($Application in $ApplicationFullNames) {
             $Applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
         }
     }
     else {
-        $ApplicationFullNames = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Force).Name
+        $ApplicationFullNames = (Get-ChildItem $RECIPES | Where-Object Name -ne 'Disabled' | Get-ChildItem -File).Name
         foreach ($Application in $ApplicationFullNames) {
             $Applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
         }

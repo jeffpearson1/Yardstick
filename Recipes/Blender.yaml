@@ -5,7 +5,7 @@ preDownloadScript: |
   $Script:URL = (($Content.Links | where href -match "-windows-x64\.msi").href)
   $Script:fileName = ($Script:URL -split "/")[-2]
   $fileName -match "([0-9]{1,}\.){2}[0-9]{1,}" | Out-Null
-  $Script:URL = "https://mirror.clarkson.edu/blender/release/$(($Script:URL -split "/")[-3])/$($Script:filename)"
+  $Script:URL = "https://mirrors.iu13.net/blender/release/$(($Script:URL -split "/")[-3])/$($Script:filename)"
   $Script:version = ($filename -split "-")[1]
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
