@@ -84,7 +84,7 @@ class AdobeApplication {
             # Enter the username into the sign-in dialog
             $Element = Get-SeElement -By ID "EmailPage-EmailField"
             Invoke-SeKeys -Element $Element -Keys $Credentials.Username
-            $Button = Get-SeElement -By CSSSelector ".spectrum-Button"
+            $Button = Get-SeElement -By XPath '//*[@class="EmailPage__buttons"]/button'
             $Button.click()
             Start-Sleep -Seconds 15
         }

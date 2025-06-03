@@ -1,0 +1,24 @@
+url: https://www.zotero.org/download/client/dl?channel=release&platform=win32
+urlredirects: true
+preDownloadScript: |
+  $filename = ($url -split "\/")[-1]
+  $version = (($filename -split "-")[1] -split "_")[0]
+  $fileDetectionVersion = "$version.0"
+installScript: |
+  start /wait "" <filename> -ms
+uninstallScript: |
+  "%ProgramFiles%\Zotero\uninstall\helper.exe" -ms
+iconFile: zotero.png
+id: zotero
+displayName: Zotero
+publisher: Roy Rosenzweig Center for History and New Media
+description: "Zotero is a free, open-source research tool that helps you collect, organize, and analyze research and share it in a variety of ways. Zotero includes the best parts of older reference manager software - the ability to store author, title, and publication fields and to export that information as formatted references - and the best aspects of modern software and web applications, such as the ability to organize, tag, and search in advanced ways. Zotero interacts seamlessly with online resources: when it senses you are viewing a book, article, or other object on the web, it can automatically extract and save complete bibliographic references. Zotero effortlessly transmits information to and from other web services and applications, and it runs both as a web service and offline on your personal devices."
+detectionType: file
+fileDetectionPath: |
+  "%ProgramFiles%\Zotero"
+fileDetectionName: "zotero.exe"
+fileDetectionMethod: version
+fileDetectionOperator: equal
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_22H2

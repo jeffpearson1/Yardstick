@@ -1,0 +1,26 @@
+url: https://www.virtualbox.org/wiki/Downloads
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL
+  $URL = ($Content.links | Where-Object href -like "*Win*").href
+  $filename = $($url -split "/")[-1]
+  $filename -match "[0-9]{0,}\.[0-9]{0,}\.[0-9]{0,}" | Out-Null
+  $version = $matches[0]
+  $fileDetectionVersion = "$($version).0"
+installScript:
+  '<filename> --silent'
+uninstallScript:
+  '"C:\Program Files\Microsoft VS Code\unins000.exe" /VERYSILENT'
+version:
+fileName:
+iconFile: visualstudiocode.png
+id: visualstudiocode
+displayName: Visual Studio Code
+publisher: Microsoft
+description: An open source IDE by Microsoft
+fileType: EXE
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Microsoft VS Code'
+fileDetectionName: 'Code.exe'
+fileDetectionMethod: version
+fileDetectionOperator: equal

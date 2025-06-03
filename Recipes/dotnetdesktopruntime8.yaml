@@ -1,0 +1,29 @@
+url: https://dotnet.microsoft.com/en-us/download/dotnet/8.0
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL
+  ($Content.links | Where-Object OuterHTML -like "*runtime-desktop*-windows-x64*")[0].OuterHTML -match '(?<=href\=\").*(?=\")' | Out-Null
+  $URL = "https://dotnet.microsoft.com$($matches[0])"
+  ($url -split "\/")[-1]
+  $filename = $matches[0]
+  $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}"
+  $Version = $matches[0]
+
+installScript: |
+  <filename> /install /quiet /norestart
+uninstallScript: |
+  <filename> /uninstall /quiet /norestart
+iconFile: icon.png
+id: dotnetdesktopruntime8
+displayName: ".NET Desktop Runtime 8"
+publisher: Microsoft
+description: ".NET is a free, cross-platform, open-source developer platform for building many different types of applications."
+detectionType: file
+fileDetectionPath: 
+fileDetectionName: 
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: equal
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

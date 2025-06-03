@@ -1,0 +1,19 @@
+url: https://qgis.org/download/
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $url
+  $URL = "https://qgis.org$(($Content.Links | Where-Object href -like "*msi*" | Where-Object outerHTML -like "*Latest*" | Where-Object outerHTML -notlike "*experimental*").href)"
+  $filename = ($URL -split "\/")[-1]
+  $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
+  $Version = $matches[0]
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: qgis.png
+id: qgis
+displayName: QGIS
+publisher: QGIS
+description: QGIS is a geographic information system (GIS) software that is free and open-source. It supports viewing, editing, printing, and analysis of geospatial data in a range of data formats. [Source\:Wikipedia]
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
