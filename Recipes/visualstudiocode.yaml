@@ -22,3 +22,6 @@ fileDetectionPath: '%ProgramFiles%\Microsoft VS Code'
 fileDetectionName: 'Code.exe'
 fileDetectionMethod: version
 fileDetectionOperator: equal
+scopeTags:
+  - scopeTag1
+  - scopeTag2

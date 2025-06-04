@@ -19,3 +19,6 @@ fileType: MSI
 softwareName: "7-Zip*"
 detectionType: msi
 numVersionsToKeep: 1
+scopeTags:
+  - scopeTag1
+  - scopeTag2

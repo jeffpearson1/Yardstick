@@ -16,3 +16,6 @@ displayName: Amazon Corretto JDK 23
 publisher: Amazon
 description: An OpenJDK distribution provided by Amazon
 detectionType: msi
+scopeTags:
+  - scopeTag1
+  - scopeTag2

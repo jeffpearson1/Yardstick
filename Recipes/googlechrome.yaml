@@ -17,3 +17,6 @@ description: A web browser by Google
 fileType: msi
 detectionType: msi
 numVersionsToKeep: 2
+scopeTags:
+  - scopeTag1
+  - scopeTag2

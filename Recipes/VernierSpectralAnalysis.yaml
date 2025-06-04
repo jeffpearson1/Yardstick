@@ -22,3 +22,6 @@ displayName: Vernier Spectral Analysis
 publisher: Vernier
 description: Vernier Spectral Analysis is a program that allows you to collect, analyze, and interpret data from Vernier spectrometers.
 detectionType: msi
+scopeTags:
+  - scopeTag1
+  - scopeTag2

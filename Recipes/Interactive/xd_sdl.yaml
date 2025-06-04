@@ -37,3 +37,5 @@ detectionScript: |
 installExperience: user
 restartBehavior: suppress
 minOSVersion: W10_20H2
+scopeTags:
+  - scopeTag2

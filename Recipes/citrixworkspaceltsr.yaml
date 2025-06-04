@@ -45,3 +45,6 @@ fileDetectionOperator: equal
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2
+scopeTags:
+  - scopeTag1
+  - scopeTag2

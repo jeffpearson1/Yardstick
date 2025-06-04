@@ -41,3 +41,6 @@ fileDetectionPath: 'C:\Program Files (x86)\Notepad++'
 fileDetectionName: notepad++.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
+scopeTags:
+  - scopeTag1
+  - scopeTag2

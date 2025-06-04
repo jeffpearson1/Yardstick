@@ -204,7 +204,7 @@ function Move-Assignments {
 # Return: @(PSCustomObject) 
 function Get-SameAppAllVersions($DisplayName) {
     $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName*"
-    # Only return apps that have the same name (not ones that look the same)
+    # Only return apps that have the same name (not ones that look the same) and apps that are pending approval
     $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (*")})
     # Pad out each version section to 8 digits of zeroes before sorting, remove any letters, and mash it all together so that versions sort correctly
     return $sortable | Sort-Object {$($($($_.displayVersion -replace "[A-Za-z]", "0") -replace "[\-\+]", ".").split(".") | ForEach-Object {'{0:d8}' -f [int]$_}) -join ''} -Descending

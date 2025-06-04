@@ -16,3 +16,6 @@ displayName: PuTTY
 publisher: The PuTTY Project
 description: PuTTY is a free and open-source terminal emulator, serial console and network file transfer application. It supports several network protocols, including SCP, SSH, Telnet, rlogin, and raw socket connection. It can also connect to a serial port.
 detectionType: msi
+scopeTags:
+  - scopeTag1
+  - scopeTag2s

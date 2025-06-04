@@ -22,5 +22,8 @@ fileDetectionPath: '%ProgramFiles%\VideoLAN\VLC'
 fileDetectionMethod: version
 fileDetectionOperator: equal
 fileDetectionName: vlc.exe
+scopeTags:
+  - scopeTag1
+  - scopeTag2
 
 
