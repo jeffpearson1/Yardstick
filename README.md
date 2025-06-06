@@ -64,6 +64,11 @@ Create a new Windows credential - ```yourdomainnamehere``` that contains the use
 .\Yardstick.ps1 -AppId googlechrome
 ```
 
+### Version Locking
+
+Versions can be locked to a specific value, or set of values by adding the ```versionLock:``` parameter to any preferences file. Valid characters are numbers (0-9), decimals (.) and x. When the value is processed, x will be replaced with numbers of any length. 
+Example: ```versionLock: 19.42.2.x``` will match versions ```19.42.2.24335``` and ```19.42.2.1``` but not ```19.42.3.442```.
+
 #### Other Parameters
 
 * ```-Force``` will overwrite the latest version of any targeted applications if they are the same as the new version, and run normally if a new version is available.

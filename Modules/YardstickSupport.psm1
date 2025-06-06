@@ -225,3 +225,28 @@ function Format-FileDetectionVersion($Version) {
     }
     return $FileVersion
 }
+
+
+# Get-VersionLocked
+# Returns $true if the version is allowed to update, false if the versionlock parameter will not allow it.
+# If the versionLock is null, it will always return $true.
+# In the $versionLock parameter, values with x are ignored, i.e. 1.2.x is locked to 1.2
+# Param: [String] $version, [String] $versionLock
+# Return: [Boolean] $true if locked, otherwise $false
+function Get-VersionLocked {
+    param (
+        [Parameter(Mandatory=$true)]
+        [String]$version,
+        [Parameter(Mandatory=$false)]
+        [String]$versionLock
+    )
+    # If versionLock is null, return true
+    if (-not $versionLock) {
+        return $true
+    }
+    # Compare the version and versionLock
+    $versionPattern = $versionLock -replace "[Xx]{1,}", "[0-9]{1,}"
+    $versionPattern = $versionPattern -replace "\.", "\."
+    return $version -match "^$versionPattern$"
+}
+

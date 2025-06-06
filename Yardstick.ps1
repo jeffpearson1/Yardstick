@@ -174,11 +174,21 @@ foreach ($ApplicationId in $Applications) {
     $Script:description = $parameters.description
     $Script:publisher = $parameters.publisher
     $Script:is32BitApp = if($parameters.is32BitApp) {$parameters.is32BitApp} else {$prefs.defaultIs32BitApp}
-    $Script:numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
     $Script:arm64FilterName = $prefs.arm64FilterName
     $Script:amd64FilterName = $prefs.amd64FilterName
     $Script:architecture = if($parameters.architecture) {$parameters.architecture} else {$prefs.defaultArchitecture}
     $Script:architectureFilterName = if ($script:architecture -eq "arm64") {$prefs.arm64FilterName} elseif ($script:architecture -eq "amd64") {$prefs.amd64FilterName} else {$null}
+    $Script:versionLock = $parameters.versionLock
+    # If the version lock is set, set the max number of versions to keep to 1
+    if ($versionLock) {
+        $Script:numVersionsToKeep = 1
+        if($parameters.numVersionsToKeep -gt 1) {
+            Write-Log "Warning: Version lock is set, but numVersionsToKeep is set to $($parameters.numVersionsToKeep). This will be ignored."
+        }
+    }
+    else {
+        $Script:numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
+    }
 
 
     if ($Repair) {
@@ -214,14 +224,19 @@ foreach ($ApplicationId in $Applications) {
     # Check if there is an up-to-date version in the repo already
     Write-Log "Checking if $displayName $version is a new version..."
     $ExistingVersions = Get-SameAppAllVersions $DisplayName
-    if ($ExistingVersions.displayVersion -contains $version) {
-        if ($force) {
-            Write-Log "Package up-to-date. -Force applied. Recreating package."
-        }
-        else {
-            Write-Log "$id already up-to-date!"
-            continue
-        }
+    if ($force) {
+        Write-Log "Force flag is set. Forcing update of $displayName $version"
+    }
+    elseif (!(Get-VersionLocked -Version $version -VersionLock $VersionLock)) {
+        Write-Log "Version is locked to $VersionLock. Skipping update."
+        continue
+    }
+    elseif ($ExistingVersions.displayVersion -contains $version) {
+        Write-Log "$id $displayName $version is already in the repo. Skipping update."
+        continue
+    }
+    else {
+        Write-Log "$displayName $version is not in the repo. Continuing with update."
     }
 
 
