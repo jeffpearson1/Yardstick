@@ -18,4 +18,4 @@ description: PuTTY is a free and open-source terminal emulator, serial console a
 detectionType: msi
 scopeTags:
   - scopeTag1
-  - scopeTag2s
+  - scopeTag2
