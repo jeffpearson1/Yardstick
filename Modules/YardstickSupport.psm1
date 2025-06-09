@@ -120,6 +120,7 @@ function Connect-AutoMSIntuneGraph() {
 # MOVE-ASSIGNMENTS
 # Gets all assignments for an application and adds them to a target (To)
 # Removes successfully moved assignments from the (From) application
+# Also reassigns any app dependencies that are assigned to the From application
 # Param: [Application]$From, [Application]$To
 # Return: None
 function Move-Assignments {
@@ -132,6 +133,7 @@ function Move-Assignments {
         [String] $ArchitectureFilterName
     )
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
+    $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
     $FromAvailable = ($FromAssignments | Where-Object intent -eq "available").groupId
     $FromRequired = ($FromAssignments | Where-Object intent -eq "required").groupId
     if ($FromAvailable) {
@@ -173,7 +175,7 @@ function Move-Assignments {
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
-            while (!$successfullyAdded -and ($try -lt $maxRetries)) {
+            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
                 Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" | Out-Null
                 # Check that it worked
                 $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
@@ -192,6 +194,53 @@ function Move-Assignments {
             if (!$successfullyAdded) {
                 Write-Log "ERROR: Cannot add required app assignment to $($To.id) for group $groupID. Will not remove original assignment."
             }
+        }
+    }
+    if($FromDependencies) {
+        foreach ($dependency in $FromDependencies) {
+            $maxRetries = 3
+            $try = 0
+            $successfullyAdded = $false
+            $dependentApps = Get-IntuneWin32AppDependency -ID $dependency.sourceId
+            if ($dependentApps -and $dependentApps.Count -gt 1) {
+                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                    Write-Log "Multiple dependencies found for $($dependency.sourceId)"
+                    foreach ($dependentApp in $dependentApps) {
+                        $appDependenciesToMigrate = Get-IntuneWin32AppDependency -ID $dependentApp.id
+                        # Clear all existing dependencies
+                        Remove-IntuneWin32AppDependency -ID $dependentApp.targetId
+                        # Add all dependencies back that are not the one we are moving
+                        foreach ($appDependency in $appDependenciesToMigrate) {
+                            if ($appDependency.targetId -ne $dependency.targetId) {
+                                $toAdd = New-IntuneWin32AppDependency -ID $appDependency.id -DependencyType $appDependency.dependencyType
+                                Add-IntuneWin32AppDependency -ID $dependentApp.targetId -Dependency $toAdd | Out-Null
+                            }
+                            else {
+                                # Add the new dependency instead
+                                $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
+                                Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
+                            }
+                        }
+
+                    }
+                }
+            }
+            elseif ($dependentApps) {
+                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                    $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
+                    Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
+                    # Check that it worked
+                    $AssignedDependencies = Get-IntuneWin32AppDependency -ID $To.id
+                    if($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
+                        $successfullyAdded = $true
+                        Write-Log "Dependency $($dependency.dependencyId) added successfully to $($To.id)"
+                    }
+                }
+            }
+            else {
+                Write-Log "No dependencies found for $($dependency.sourceId). Skipping dependency move."
+            }
+            
         }
     }
 }
