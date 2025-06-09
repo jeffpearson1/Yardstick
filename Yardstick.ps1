@@ -1,12 +1,83 @@
+<#
+.DESCRIPTION
+    Yardstick is a PowerShell script designed to automate the process of updating and managing Win32 applications in Microsoft Intune. It allows users to specify applications to update, either individually or in groups, and handles the downloading, packaging, and deployment of these applications.
+
+.SYNOPSIS
+    Adds and Updates Win32 applications in Microsoft Intune.
+
+.PARAMETER ApplicationId
+    The ID of the application to update. This parameter is used when updating a single application.
+    May only be used with -Force, -NoDelete, and -Repair parameters.
+
+.PARAMETER Group
+    The name of the group of applications to update. This parameter is used when updating a group of applications.
+    May only be used with -Force, -NoDelete and -Repair parameters.
+
+.PARAMETER All
+    A switch parameter that indicates whether to update all applications in the repository. If specified, all applications will be processed.
+    May only be used with -NoInteractive, -Force, -NoDelete and -Repair parameters.
+
+.PARAMETER NoInteractive
+    A switch parameter that, when specified, excludes interactive applications from the update process. This is denoted by recipes that are in the "Interactive" folder.
+    May be used with all other parameters except ApplicationId.
+
+.PARAMETER Force
+    A switch parameter that forces the replacement of an application, even if it is already up-to-date.
+    May be used with all other parameters.
+
+.PARAMETER NoDelete
+    A switch parameter that prevents the deletion of old versions of applications after an update. This is useful for debugging or testing purposes.
+    May be used with all other parameters.
+
+.PARAMETER Repair
+    A switch parameter that repairs the application by renaming any incorrectly named applications to their correct format.
+    May be used with all other parameters.
+
+.EXAMPLE
+    .\Yardstick.ps1 -All
+    The recommended way to update all applications in the repository. This will update all applications.
+
+.EXAMPLE
+    .\Yardstick.ps1 -All -NoInteractive
+    The recommended way to automate Yardstick. This will update all applications in the repository, excluding interactive applications.
+
+.EXAMPLE
+    .\Yardstick.ps1 -ApplicationId "ExampleApp" -Force -NoDelete
+    This command updates the application with the ID "ExampleApp", forcing the update and preventing the deletion of old versions.
+
+.EXAMPLE
+    .\Yardstick.ps1 -Group "ExampleGroup" -NoInteractive -Force
+    This command updates all applications in the group "ExampleGroup", and forces the update.
+
+.EXAMPLE
+    .\Yardstick.ps1 -All -NoInteractive -Force -NoDelete
+    This command updates all applications in the repository, excluding interactive applications, forcing the update and preventing the deletion of old versions.
+#>
+
 using module .\Modules\Custom\AdobeDownloader.psm1
 
 param (
     [Alias("AppId")]
+    [parameter(ParameterSetName="SingleApp")]
     [String] $ApplicationId = "None",
+
+    [parameter(ParameterSetName="GroupApps")]
     [String] $Group,
+
+    [parameter(ParameterSetName="AllApps")]
+    [Switch] $All,
+
+    [parameter(ParameterSetName="AllApps")]
     [Switch] $NoInteractive,
+
+    [parameter(ParameterSetName="SingleApp")]
+    [parameter(ParameterSetName="GroupApps")]
+    [parameter(ParameterSetName="AllApps")]
     [Switch] $Force,
-	[Switch] $All,
+
+    [parameter(ParameterSetName="SingleApp")]
+    [parameter(ParameterSetName="GroupApps")]
+    [parameter(ParameterSetName="AllApps")]
     [Switch] $NoDelete,
     [Switch] $Repair
 )
@@ -81,7 +152,7 @@ if ($ApplicationId -ne "None") {
 # Start updating each application if all are selected
 if ($All) {
     if ($NoInteractive) {
-        $ApplicationFullNames = (Get-ChildItem $RECIPES | Where-Object (Name -ne 'Disabled') -and (Name -ne 'Interactive') | Get-ChildItem -File).Name
+        $ApplicationFullNames = (Get-ChildItem $RECIPES | Where-Object Name -ne 'Disabled' | Where-Object Name -ne 'Interactive' | Get-ChildItem -File).Name
         foreach ($Application in $ApplicationFullNames) {
             $Applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
         }
