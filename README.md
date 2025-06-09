@@ -46,7 +46,6 @@ Create a new Windows credential - ```yourdomainnamehere``` that contains the use
 
 
 ### Recipe Tips and Tricks
-* Yardstick currently expects all recipes (and configuration files) to use the full .yaml extension. Files that use .yml will not work yet.
 * Use the defaults (configurable in preferences.yaml) for as much stuff as you can. All the available default settings are in the example preferences.yaml file.
 * The installScript, uninstallScript, detectionScript and registryDetectionKey have an extra function - if you use ```<version>```, ```<filename>```, or ```<productcode>``` in them it will be replaced with the appropriate value after all the parameters and defaults are imported, processed, and the preDownloadScript has run.
 * You can use recipes for locally hosted files as well - even if they are in a file share. Just define a custom downloadScript to make sure that file retrieval is handled correctly.
@@ -74,6 +73,8 @@ Example: ```versionLock: 19.42.2.x``` will match versions ```19.42.2.24335``` an
 * ```-Force``` will overwrite the latest version of any targeted applications if they are the same as the new version, and run normally if a new version is available.
 * ```-Repair``` will fix any name discrepancies of (N-X) for any target applications (i.e. if multiple applications are named N-1 - although this is normally fixed after an update anyway).
 * ```-NoDelete``` will stop the script from automatically deleting old versions when it is done. 
+* ```-NoInteractive``` will skip any recipes that are located in the "Interactive" folder in Recipes.
+* ```-Group``` will parse RecipeGroups.yaml and run any applications corresponding to the group provided
 
 
 ## License
