@@ -3,12 +3,9 @@ urlredirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   ($Content.links | Where-Object OuterHTML -like "*runtime-desktop*-windows-x64*")[0].OuterHTML -match '(?<=href\=\").*(?=\")' | Out-Null
-  $URL = "https://dotnet.microsoft.com$($matches[0])"
-  ($url -split "\/")[-1]
-  $filename = $matches[0]
-  $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}"
+  ($matches[0] -split "\/")[-1] -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
   $Version = $matches[0]
-
+  $url = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/$version/windowsdesktop-runtime-$version-win-x64.exe"
 installScript: |
   <filename> /install /quiet /norestart
 uninstallScript: |
