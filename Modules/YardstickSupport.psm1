@@ -247,6 +247,6 @@ function Get-VersionLocked {
     # Compare the version and versionLock
     $versionPattern = $versionLock -replace "[Xx]{1,}", "[0-9]{1,}"
     $versionPattern = $versionPattern -replace "\.", "\."
-    return $version -match "^$versionPattern$"
+    return $version -match "^$versionPattern"
 }
 

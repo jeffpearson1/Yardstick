@@ -49,3 +49,4 @@ restartBehavior: suppress
 minOSVersion: W10_20H2
 scopeTags:
   - scopeTag2
+versionLock: 14.x
