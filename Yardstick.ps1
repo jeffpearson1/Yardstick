@@ -298,7 +298,7 @@ foreach ($ApplicationId in $Applications) {
     if ($force) {
         Write-Log "Force flag is set. Forcing update of $displayName $version"
     }
-    elseif (!(Get-VersionLocked -Version $version -VersionLock $VersionLock)) {
+    elseif (Get-VersionLocked -Version $version -VersionLock $VersionLock) {
         Write-Log "Version is locked to $VersionLock. Skipping update."
         continue
     }
