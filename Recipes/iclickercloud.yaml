@@ -19,3 +19,6 @@ detectionType: msi
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W11_22H2
+scopeTags:
+  - scopeTag1
+  - scopeTag2
