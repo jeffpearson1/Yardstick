@@ -6,21 +6,20 @@ preDownloadScript: |
   ($matches[0] -split "\/")[-1] -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
   $Version = $matches[0]
   $url = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/$version/windowsdesktop-runtime-$version-win-x64.exe"
+  $filename = ($url -split "/")[-1]
+  $registryDetectionValueName = $version
 installScript: |
   <filename> /install /quiet /norestart
 uninstallScript: |
   <filename> /uninstall /quiet /norestart
-iconFile: icon.png
+iconFile: dotnet.png
 id: dotnetdesktopruntime8
 displayName: ".NET Desktop Runtime 8"
 publisher: Microsoft
 description: ".NET is a free, cross-platform, open-source developer platform for building many different types of applications."
-detectionType: file
-fileDetectionPath: 
-fileDetectionName: 
-fileDetectionMethod: version
-fileDetectionVersion:
-fileDetectionOperator: equal
+detectionType: registry
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App'
+registryDetectionMethod: exists
 installExperience: system
 restartBehavior: suppress
-minOSVersion: W10_20H2
+minOSVersion: W11_22H2
