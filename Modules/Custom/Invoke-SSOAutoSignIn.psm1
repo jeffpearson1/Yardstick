@@ -9,6 +9,7 @@ function Invoke-SSOAutoSignIn {
     $Button = Get-SeElement -By CSSSelector ".btn"
     try {
         $Credentials = Get-StoredCredential -Target "cred1"
+        Start-Sleep -Seconds 10
         Invoke-SeKeys -Element $Username_Field -Keys $Credentials.username
         Invoke-SeKeys -Element $Password_Field -Keys $(ConvertFrom-SecureString $Credentials.Password -AsPlainText)
     }
