@@ -295,6 +295,7 @@ foreach ($ApplicationId in $Applications) {
     # Check if there is an up-to-date version in the repo already
     Write-Log "Checking if $displayName $version is a new version..."
     $ExistingVersions = Get-SameAppAllVersions $DisplayName
+    $VersionCompareResult = Compare-AppVersions $version $($ExistingVersions.displayVersion[0])
     if ($force) {
         Write-Log "Force flag is set. Forcing update of $displayName $version"
     }
@@ -304,6 +305,13 @@ foreach ($ApplicationId in $Applications) {
     }
     elseif ($ExistingVersions.displayVersion -contains $version) {
         Write-Log "$id $displayName $version is already in the repo. Skipping update."
+        continue
+    }
+    elseif ($VersionCompareResult -eq 1) {
+        Write-Log "$displayName $version is a newer version. Continuing with update."
+    }
+    elseif ($VersionCompareResult -eq -1) {
+        Write-Log "$displayName $version is older than the currently newest available version $($ExistingVersions.displayVersion[0]). Skipping update."
         continue
     }
     else {

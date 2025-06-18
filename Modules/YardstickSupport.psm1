@@ -299,3 +299,31 @@ function Get-VersionLocked {
     return $version -notmatch "^$versionPattern"
 }
 
+
+# Compare-AppVersions
+# Compares two versions and returns -1 if $version1 is less than $version2, 0 if they are equal, and 1 if $version1 is greater than $version2
+# Param: [String] $version1, [String] $version2
+# Return: [Int] -1 if $version1 is less than $version2, 0 if they are equal, and 1 if $version1 is greater than $version2
+function Compare-AppVersions {
+    param (
+        [Parameter(Mandatory=$true)]
+        [String]$version1,
+        [Parameter(Mandatory=$true)]
+        [String]$version2
+    )
+    $version1Components = $version1.split(".")
+    $version2Components = $version2.split(".")
+    $maxLength = [Math]::Max($version1Components.Count, $version2Components.Count)
+    for ($i = 0; $i -lt $maxLength; $i++) {
+        $v1 = if ($i -lt $version1Components.Count) { [int]$version1Components[$i] } else { 0 }
+        $v2 = if ($i -lt $version2Components.Count) { [int]$version2Components[$i] } else { 0 }
+        if ($v1 -lt $v2) {
+            return -1
+        }
+        elseif ($v1 -gt $v2) {
+            return 1
+        }
+    }
+    return 0
+}
+
