@@ -1,0 +1,15 @@
+url: https://downloads.cloudflareclient.com/v1/download/windows/ga
+urlredirects: true
+preDownloadScript: |
+  $version = $url -split '/' | Select-Object -Last 1
+  $fileDetectionVersion = $version
+installScript: msiexec /i <filename> /qn /norestart ORGANIZATION="DEF" ONBOARDING=false
+uninstallScript: msiexec /x <productcode> /silent
+fileName: CloudflareWarp.msi
+iconFile: cloudflare.png
+id: warp
+displayName: Cloudflare Warp
+publisher: Cloudflare, Inc.
+description: Cloudflare Warp is a VPN service that provides secure access to certain internal resources.
+fileType: msi
+detectionType: msi

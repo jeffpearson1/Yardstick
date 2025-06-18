@@ -1,0 +1,20 @@
+url: https://github.com/powershell/powershell
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "powershell-.*x64\.msi$"
+  $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $Version = $downloader.LatestVersion
+  $URL = $downloader.URL
+  $filename = $downloader.filename
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: powershell7.png
+id: powershell7
+displayName: PowerShell 7
+publisher: Microsoft Corporation
+description: A free, cross-platform, open-source shell and scripting language.
+fileType: msi
+detectionType: msi
