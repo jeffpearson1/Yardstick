@@ -118,9 +118,6 @@ function Connect-AutoMSIntuneGraph() {
 }
 
 
-
-
-
 # Move-AssignmentsAndDependencies
 # Moves all assignments and dependencies from one application to another
 # Param:
