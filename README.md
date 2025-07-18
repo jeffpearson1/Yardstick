@@ -22,7 +22,6 @@ Yardstick depends on (and we are extremely grateful for) a handful of PowerShell
 ### Installing
 
 * Before starting, install all necessary PowerShell Modules
-
     * These modules can be installed from the PowerShell Gallery
 ```powershell
 Install-Module -Name Powershell-Yaml, TUN.CredentialManager
