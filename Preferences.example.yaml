@@ -29,17 +29,21 @@ ClientId:
 # PACKAGED APPLICATION DEFAULTS
 #####################################
 defaultNumVersionsToKeep: 3
-defaultOwner: 
+defaultOwner:
 defaultMaximumInstallationTimeInMinutes: 60
 defaultMinOSVersion: W10_20H2
 defaultInstallExperience: system
 defaultRestartBehavior: suppress
 defaultAllowUserUninstall: true
 defaultIs32BitApp: false
+defaultArchitecture: none
+defaultRequiresApproval: false
 defaultDetectionScriptFileExtension: ps1
 defaultDetectionScriptRunAs32Bit: false
 defaultDetectionScriptEnforceSignatureCheck: false
-defaultScopeTags:
-  - Scope Tags Go Here
-defaultAvailableDateOffset: 0
 defaultDeadlineDateOffset: 0
+defaultAvailableDateOffset: 7
+defaultScopeTags:
+  - Scope Tags Go Here (Can be Multiple)
+defaultDeploymentGroups:
+  - Group IDs go here and will receive a default available deployment for testing purposes
