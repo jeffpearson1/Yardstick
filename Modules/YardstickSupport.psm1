@@ -130,26 +130,53 @@ function Move-Assignments {
         [Parameter(Mandatory, Position=1)]
         [System.Object] $To,
         [Parameter(Position=2)]
-        [String] $ArchitectureFilterName
+        [String] $ArchitectureFilterName,
+        [Parameter(Position=3)]
+        [Switch] $CopyDeploymentTime
     )
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
-    $FromAvailable = ($FromAssignments | Where-Object intent -eq "available").groupId
-    $FromRequired = ($FromAssignments | Where-Object intent -eq "required").groupId
+    $FromAvailable = ($FromAssignments | Where-Object intent -eq "available")
+    $FromRequired = ($FromAssignments | Where-Object intent -eq "required")
+
+    $CurrentDate = (Get-Date).ToString("MM/dd/yyyy")
     if ($FromAvailable) {
-        foreach ($groupId in $FromAvailable) {
+        foreach ($groupId in $FromAvailable.groupId) {
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
-            while (!$successfullyAdded -and ($try -lt $maxRetries)) {
-                if ($ArchitectureFilterName) {
-                    Write-Log "Using architecture filter for $ArchitectureFilterName"
-                    Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" | Out-Null
+            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                if ($CopyDeploymentTime) {
+                    $AvailableTimeObject = ($FromAvailable | Where-Object groupId -eq $groupId).InstallTimeSettings
+                    if ($null -ne $AvailableTimeObject) {
+                        $AvailableTime = ($AvailableTimeObject.startDateTime.ToString("HH:mm"))
+                        $AvailableTime = Get-Date -Date "$CurrentDate $AvailableTime"
+                    }
+                    else {
+                        $AvailableTime = $null
+                    }
+                }
+                if ($AvailableTime) {
+                    if ($ArchitectureFilterName) {
+                        Write-Log "Using architecture filter for $ArchitectureFilterName"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" -AvailableTime $AvailableTime | Out-Null
+                    }
+                    else {
+                        Write-Log "Not using an architecture filter: $Architecture"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -AvailableTime $AvailableTime | Out-Null
+                    }
                 }
                 else {
-                    Write-Log "Not using an architecture filter: $Architecture"
-                    Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
+                    if ($ArchitectureFilterName) {
+                        Write-Log "Using architecture filter for $ArchitectureFilterName"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" | Out-Null
+                    }
+                    else {
+                        Write-Log "Not using an architecture filter: $Architecture"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
+                    }
                 }
+
                 # Check that it worked
                 $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
                 if($AssignedGroups | Where-Object GroupID -eq $groupID) {
@@ -171,12 +198,41 @@ function Move-Assignments {
         
     }
     if ($FromRequired) {
-        foreach ($groupId in $FromRequired) {
+        foreach ($groupId in $FromRequired.groupId) {
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
             while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" | Out-Null
+                if ($CopyDeploymentTime) {
+                    $AvailableTimeObject = ($FromAvailable | Where-Object groupId -eq $groupId).InstallTimeSettings
+                    if ($null -ne $AvailableTimeObject) {
+                        $AvailableTime = ($AvailableTimeObject.startDateTime.ToString("HH:mm"))
+                        $AvailableTime = Get-Date -Date "$CurrentDate $AvailableTime"
+                    }
+                    else {
+                        $AvailableTime = $null
+                    }
+                }
+                if ($AvailableTime) {
+                    if ($ArchitectureFilterName) {
+                        Write-Log "Using architecture filter for $ArchitectureFilterName"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" -AvailableTime $AvailableTime | Out-Null
+                    }
+                    else {
+                        Write-Log "Not using an architecture filter: $Architecture"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" -AvailableTime $AvailableTime | Out-Null
+                    }
+                }
+                else {
+                    if ($ArchitectureFilterName) {
+                        Write-Log "Using architecture filter for $ArchitectureFilterName"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" | Out-Null
+                    }
+                    else {
+                        Write-Log "Not using an architecture filter: $Architecture"
+                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" | Out-Null
+                    }
+                }
                 # Check that it worked
                 $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
                 if($AssignedGroups | Where-Object GroupID -eq $groupID) {
@@ -246,13 +302,235 @@ function Move-Assignments {
 }
 
 
+
+# Move-AssignmentsAndDependencies
+# Moves all assignments and dependencies from one application to another
+# This will replace Move-Assignments and will also move dependencies
+function Move-AssignmentsAndDependencies {
+    param(
+        [Parameter(Mandatory, Position=0)]
+        [System.Object] $From,
+        [Parameter(Mandatory, Position=1)]
+        [System.Object] $To,
+        [Parameter(Position=2)]
+        [Int] $DeadlineDateOffset = 0,
+        [Parameter(Position=3)]
+        [Int] $AvailableDateOffset = 0
+
+    )
+    Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
+    $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
+    $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
+    $AvailableDate = (Get-Date).AddDays($AvailableDateOffset).ToString("MM/dd/yyyy")
+    $DeadlineDate = (Get-Date).AddDays($DeadlineDateOffset).ToString("MM/dd/yyyy")
+    if ($FromAssignments) {
+        foreach ($Assignment in $FromAssignments) {
+            $maxRetries = 3
+            $try = 0
+            $successfullyAdded = $false
+            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                if ($Assignment.InstallTimeSettings) {
+                    $useLocalTime = [bool]$Assignment.InstallTimeSettings.useLocalTime
+                    $startDateTime = $Assignment.InstallTimeSettings.startDateTime
+                    $deadlineDateTime = $Assignment.InstallTimeSettings.deadlineDateTime
+                    if ($null -ne $startDateTime) {
+                        $startDateTime = Get-Date -Date "$AvailableDate $($startDateTime.ToString("HH:mm"))"
+                    }
+                    if ($null -ne $deadlineDateTime) {
+                        $deadlineDateTime = Get-Date -Date "$DeadlineDate $($deadlineDateTime.ToString("HH:mm"))"
+                    }
+                }
+                if ($Assignment.FilterType -eq "none") {
+                    if ($Assignment.InstallTimeSettings) {
+                        if ($startDateTime -and $deadlineDateTime) {
+                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline and available time settings."
+                            try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime | Out-Null
+                            }
+                            catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                            }
+                            $successfullyAdded = $true
+                        }
+                        elseif ($startDateTime) {
+                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with available time settings."
+                            try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime | Out-Null
+                            }
+                            catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                            }
+                            $successfullyAdded = $true
+                        }
+                        elseif ($deadlineDateTime) {
+                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline time settings."
+                            try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime | Out-Null
+                            }
+                            catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                            }
+                            $successfullyAdded = $true
+                        }
+                        else {
+                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
+                            try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications | Out-Null
+                            }
+                            catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                            }
+                            $successfullyAdded = $true
+                        }
+                    }
+                }
+                else {
+                    # If there is a filter
+                    if ($startDateTime -and $deadlineDateTime) {
+                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline and available time settings."
+                        try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                        }
+                        catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                        }
+                        $successfullyAdded = $true
+                    }
+                    elseif ($startDateTime) {
+                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with available time settings."
+                        try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                        }
+                        catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                        }
+                        $successfullyAdded = $true
+                    }
+                    elseif ($deadlineDateTime) {
+                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline time settings."
+                        try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                        }
+                        catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                        }
+                        $successfullyAdded = $true
+                    }
+                    else {
+                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
+                        try {
+                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                        }
+                        catch {
+                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
+                        }
+                        $successfullyAdded = $true
+                    }
+                } 
+            }
+            # Remove the old assignment
+            if ($successfullyAdded) {
+                for ($i = 0; $i -le 3; $i++) {
+                    try {
+                        Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID | Out-Null
+                        if ($?) {
+                            Write-Log "Successfully removed assignment from $($From.id) for group $($Assignment.GroupID)"
+                            break
+                        }
+                    }
+                    catch {
+                        Write-Log "Failed to remove assignment $($Assignment.GroupID) from group $($From.id):"
+                        if ($i -eq 3) {
+                            Write-Log "Failed to remove assignment after 3 attempts. Skipping removal."
+                            break
+                        }
+                        else {
+                            Write-Log "Retrying removal of assignment from $($From.id) for group $($Assignment.GroupID). Attempt $($i + 1) of 3."
+                            Start-Sleep -Seconds 2
+                            continue
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if($FromDependencies) {
+        foreach ($dependency in $FromDependencies) {
+            $maxRetries = 3
+            $try = 0
+            $successfullyAdded = $false
+            $dependentApps = Get-IntuneWin32AppDependency -ID $dependency.sourceId
+            if ($dependentApps -and $dependentApps.Count -gt 1) {
+                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                    Write-Log "Multiple dependencies found for $($dependency.sourceId)"
+                    foreach ($dependentApp in $dependentApps) {
+                        $appDependenciesToMigrate = Get-IntuneWin32AppDependency -ID $dependentApp.id
+                        # Clear all existing dependencies
+                        Remove-IntuneWin32AppDependency -ID $dependentApp.targetId
+                        # Add all dependencies back that are not the one we are moving
+                        foreach ($appDependency in $appDependenciesToMigrate) {
+                            if ($appDependency.targetId -ne $dependency.targetId) {
+                                $toAdd = New-IntuneWin32AppDependency -ID $appDependency.id -DependencyType $appDependency.dependencyType
+                                Add-IntuneWin32AppDependency -ID $dependentApp.targetId -Dependency $toAdd | Out-Null
+                            }
+                            else {
+                                # Add the new dependency instead
+                                $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
+                                Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
+                            }
+                        }
+
+                    }
+                }
+            }
+            elseif ($dependentApps) {
+                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                    $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
+                    Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
+                    # Check that it worked
+                    $AssignedDependencies = Get-IntuneWin32AppDependency -ID $To.id
+                    if($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
+                        $successfullyAdded = $true
+                        Write-Log "Dependency $($dependency.dependencyId) added successfully to $($To.id)"
+                    }
+                }
+            }
+            else {
+                Write-Log "No dependencies found for $($dependency.sourceId). Skipping dependency move."
+            }
+            
+        }
+    }
+}
+
 # Get-SameAppAllVersions
 # Returns all versions of an app sorted from newest to oldest
 # Accounts for edge cases where an application name might be similar to others, i.e. Mozilla Firefox vs. Mozilla Firefox ESR
 # Param: [String] DisplayName
 # Return: @(PSCustomObject) 
 function Get-SameAppAllVersions($DisplayName) {
-    $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName"
+    # Attempt to connect to Intune up to 3 times
+    for ($i = 0; $i -lt 3; $i++) {
+        try {
+            $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName" -ErrorAction SilentlyContinue
+        }
+        catch {
+            Write-Log "Error retrieving applications with the name $DisplayName"
+            if ($i -eq 2) {
+                Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
+                exit 1001
+            }
+            else {
+                Write-Log "Retrying to retrieve applications with the name $DisplayName. Attempt $($i + 1) of 3."
+                Start-Sleep -Seconds 5
+            }
+        }
+    }
+    
+    if (-not $AllSimilarApps) {
+        Write-Log "No applications found with the name $DisplayName"
+        return @()
+    }
     # Only return apps that have the same name (not ones that look the same) and apps that are pending approval
     $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (N-*")})
     # Pad out each version section to 8 digits of zeroes before sorting, remove any letters, and mash it all together so that versions sort correctly
@@ -311,6 +589,8 @@ function Compare-AppVersions {
         [Parameter(Mandatory=$true)]
         [String]$version2
     )
+    $version1 = $version1 -replace "[^0-9.]", ""
+    $version2 = $version2 -replace "[^0-9.]", ""
     $version1Components = $version1.split(".")
     $version2Components = $version2.split(".")
     $maxLength = [Math]::Max($version1Components.Count, $version2Components.Count)

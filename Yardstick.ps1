@@ -248,8 +248,9 @@ foreach ($ApplicationId in $Applications) {
     $Script:arm64FilterName = $prefs.arm64FilterName
     $Script:amd64FilterName = $prefs.amd64FilterName
     $Script:architecture = if($parameters.architecture) {$parameters.architecture} else {$prefs.defaultArchitecture}
-    $Script:architectureFilterName = if ($script:architecture -eq "arm64") {$prefs.arm64FilterName} elseif ($script:architecture -eq "amd64") {$prefs.amd64FilterName} else {$null}
     $Script:versionLock = $parameters.versionLock
+    $Script:deadlineDateOffset = if ($parameters.deadlineDateOffset) {$parameters.deadlineDateOffset} else {$prefs.defaultDeadlineDateOffset}
+    $Script:availableDateOffset = if ($parameters.availableDateOffset) {$parameters.availableDateOffset} else {$prefs.defaultAvailableDateOffset}
     # If the version lock is set, set the max number of versions to keep to 1
     if ($versionLock) {
         $Script:numVersionsToKeep = 1
@@ -295,7 +296,14 @@ foreach ($ApplicationId in $Applications) {
     # Check if there is an up-to-date version in the repo already
     Write-Log "Checking if $displayName $version is a new version..."
     $ExistingVersions = Get-SameAppAllVersions $DisplayName
-    $VersionCompareResult = Compare-AppVersions $version $($ExistingVersions.displayVersion[0])
+    
+    if (-not $ExistingVersions) {
+        Write-Log "No existing versions found for $displayName. Continuing with update."
+        $VersionCompareResult = 0
+    }
+    else {
+        $VersionCompareResult = Compare-AppVersions $version $($ExistingVersions.displayVersion[0])
+    }
     if ($force) {
         Write-Log "Force flag is set. Forcing update of $displayName $version"
     }
@@ -313,9 +321,6 @@ foreach ($ApplicationId in $Applications) {
     elseif ($VersionCompareResult -eq -1) {
         Write-Log "$displayName $version is older than the currently newest available version $($ExistingVersions.displayVersion[0]). Skipping update."
         continue
-    }
-    else {
-        Write-Log "$displayName $version is not in the repo. Continuing with update."
     }
 
 
@@ -515,11 +520,11 @@ foreach ($ApplicationId in $Applications) {
         # Remove conflicting versions
         Write-Log "Removing conflicting versions"
         $CurrentApp = Get-IntuneWin32App -Id $Win32App.id
-        foreach ($removeapp in $ToRemove) {
+        foreach ($RemoveApp in $ToRemove) {
             Write-Log "Moving assignments before removal..."
-            Move-Assignments -From $removeapp -To $CurrentApp -ArchitectureFilterName $Script:architectureFilterName
-            Write-Log "Removing App with ID $($removeapp.id)"
-            Remove-IntuneWin32App -Id $removeapp.id
+            Move-AssignmentsAndDependencies -From $RemoveApp -To $CurrentApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
+            Write-Log "Removing App with ID $($RemoveApp.id)"
+            Remove-IntuneWin32App -Id $RemoveApp.id
         }
     }
 
@@ -539,7 +544,8 @@ foreach ($ApplicationId in $Applications) {
         foreach ($NMinusOneApp in $NMinusOneApps) {
             if ($CurrentApp) {
                 Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
-                Move-Assignments -From $NMinusOneApp -To $CurrentApp -ArchitectureFilterName $Script:architectureFilterName
+                Move-AssignmentsAndDependencies -From $NMinusOneApp -To $CurrentApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
+
             }
             else {
                 Write-Log "There was an error fetching information about the current application. Exiting"
@@ -555,12 +561,12 @@ foreach ($ApplicationId in $Applications) {
         if ($i -eq 0) {
             # Move the app assignments in the 0 position to the nminusoneapp
             if ($NMinusTwoAndOlderApps[$i] -and $NewestNMinusOneApp) {
-                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp -ArchitectureFilterName $Script:architectureFilterName
+                Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
             }
         }
         else {
             if ($NMinusTwoAndOlderApps[$i] -and $NMinusTwoAndOlderApps[$i - 1]) {
-                Move-Assignments -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1] -ArchitectureFilterName $Script:architectureFilterName
+                Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1] -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
             }
         }
     }
