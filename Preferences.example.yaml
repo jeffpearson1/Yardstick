@@ -18,12 +18,6 @@ Secrets:
 
 
 #####################################
-# ARCHITECTURE FILTERS
-#####################################
-arm64FilterName:
-amd64FilterName:
-
-#####################################
 # INTUNE CONNECTION SETTINGS
 #####################################
 TenantID: 
@@ -47,3 +41,5 @@ defaultDetectionScriptRunAs32Bit: false
 defaultDetectionScriptEnforceSignatureCheck: false
 defaultScopeTags:
   - Scope Tags Go Here
+defaultAvailableDateOffset: 0
+defaultDeadlineDateOffset: 0
