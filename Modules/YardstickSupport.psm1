@@ -117,195 +117,22 @@ function Connect-AutoMSIntuneGraph() {
     } 
 }
 
-# MOVE-ASSIGNMENTS
-# Gets all assignments for an application and adds them to a target (To)
-# Removes successfully moved assignments from the (From) application
-# Also reassigns any app dependencies that are assigned to the From application
-# Param: [Application]$From, [Application]$To
-# Return: None
-function Move-Assignments {
-    param(
-        [Parameter(Mandatory, Position=0)]
-        [System.Object] $From,
-        [Parameter(Mandatory, Position=1)]
-        [System.Object] $To,
-        [Parameter(Position=2)]
-        [String] $ArchitectureFilterName,
-        [Parameter(Position=3)]
-        [Switch] $CopyDeploymentTime
-    )
-    $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
-    $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
-    $FromAvailable = ($FromAssignments | Where-Object intent -eq "available")
-    $FromRequired = ($FromAssignments | Where-Object intent -eq "required")
 
-    $CurrentDate = (Get-Date).ToString("MM/dd/yyyy")
-    if ($FromAvailable) {
-        foreach ($groupId in $FromAvailable.groupId) {
-            $maxRetries = 3
-            $try = 0
-            $successfullyAdded = $false
-            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                if ($CopyDeploymentTime) {
-                    $AvailableTimeObject = ($FromAvailable | Where-Object groupId -eq $groupId).InstallTimeSettings
-                    if ($null -ne $AvailableTimeObject) {
-                        $AvailableTime = ($AvailableTimeObject.startDateTime.ToString("HH:mm"))
-                        $AvailableTime = Get-Date -Date "$CurrentDate $AvailableTime"
-                    }
-                    else {
-                        $AvailableTime = $null
-                    }
-                }
-                if ($AvailableTime) {
-                    if ($ArchitectureFilterName) {
-                        Write-Log "Using architecture filter for $ArchitectureFilterName"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" -AvailableTime $AvailableTime | Out-Null
-                    }
-                    else {
-                        Write-Log "Not using an architecture filter: $Architecture"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -AvailableTime $AvailableTime | Out-Null
-                    }
-                }
-                else {
-                    if ($ArchitectureFilterName) {
-                        Write-Log "Using architecture filter for $ArchitectureFilterName"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" | Out-Null
-                    }
-                    else {
-                        Write-Log "Not using an architecture filter: $Architecture"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "available" -Notification "hideAll" | Out-Null
-                    }
-                }
-
-                # Check that it worked
-                $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
-                if($AssignedGroups | Where-Object GroupID -eq $groupID) {
-                    $successfullyAdded = $true
-                    Write-Log "$GroupID (Available) added successfully to $($To.id)"
-                    Write-Log "Removing $groupID available assignment from $($From.id)"
-                    Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
-                }
-                else {
-                    # Wait 1 second and retry
-                    Start-Sleep -Seconds 1
-                }
-            }
-            
-            if (!$successfullyAdded) {
-                Write-Log "ERROR: Cannot add available app assignment to $($To.id) for group $groupID. Will not remove original assignment."
-            }
-        }
-        
-    }
-    if ($FromRequired) {
-        foreach ($groupId in $FromRequired.groupId) {
-            $maxRetries = 3
-            $try = 0
-            $successfullyAdded = $false
-            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                if ($CopyDeploymentTime) {
-                    $AvailableTimeObject = ($FromAvailable | Where-Object groupId -eq $groupId).InstallTimeSettings
-                    if ($null -ne $AvailableTimeObject) {
-                        $AvailableTime = ($AvailableTimeObject.startDateTime.ToString("HH:mm"))
-                        $AvailableTime = Get-Date -Date "$CurrentDate $AvailableTime"
-                    }
-                    else {
-                        $AvailableTime = $null
-                    }
-                }
-                if ($AvailableTime) {
-                    if ($ArchitectureFilterName) {
-                        Write-Log "Using architecture filter for $ArchitectureFilterName"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" -AvailableTime $AvailableTime | Out-Null
-                    }
-                    else {
-                        Write-Log "Not using an architecture filter: $Architecture"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" -AvailableTime $AvailableTime | Out-Null
-                    }
-                }
-                else {
-                    if ($ArchitectureFilterName) {
-                        Write-Log "Using architecture filter for $ArchitectureFilterName"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" -FilterMode Include -FilterName "$ArchitectureFilterName" | Out-Null
-                    }
-                    else {
-                        Write-Log "Not using an architecture filter: $Architecture"
-                        Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $groupId -Intent "required" -Notification "hideAll" | Out-Null
-                    }
-                }
-                # Check that it worked
-                $AssignedGroups = Get-IntuneWin32AppAssignment -ID $To.id
-                if($AssignedGroups | Where-Object GroupID -eq $groupID) {
-                    $successfullyAdded = $true
-                    Write-Log "$GroupID (Required) added successfully to $($To.id)"
-                    Write-Log "Removing $groupID required assignment from $($From.id)"
-                    Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $groupId | Out-Null
-                }
-                else {
-                    # Wait 1 second and retry
-                    Start-Sleep -Seconds 1
-                }
-            }
-            
-            if (!$successfullyAdded) {
-                Write-Log "ERROR: Cannot add required app assignment to $($To.id) for group $groupID. Will not remove original assignment."
-            }
-        }
-    }
-    if($FromDependencies) {
-        foreach ($dependency in $FromDependencies) {
-            $maxRetries = 3
-            $try = 0
-            $successfullyAdded = $false
-            $dependentApps = Get-IntuneWin32AppDependency -ID $dependency.sourceId
-            if ($dependentApps -and $dependentApps.Count -gt 1) {
-                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                    Write-Log "Multiple dependencies found for $($dependency.sourceId)"
-                    foreach ($dependentApp in $dependentApps) {
-                        $appDependenciesToMigrate = Get-IntuneWin32AppDependency -ID $dependentApp.id
-                        # Clear all existing dependencies
-                        Remove-IntuneWin32AppDependency -ID $dependentApp.targetId
-                        # Add all dependencies back that are not the one we are moving
-                        foreach ($appDependency in $appDependenciesToMigrate) {
-                            if ($appDependency.targetId -ne $dependency.targetId) {
-                                $toAdd = New-IntuneWin32AppDependency -ID $appDependency.id -DependencyType $appDependency.dependencyType
-                                Add-IntuneWin32AppDependency -ID $dependentApp.targetId -Dependency $toAdd | Out-Null
-                            }
-                            else {
-                                # Add the new dependency instead
-                                $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
-                                Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
-                            }
-                        }
-
-                    }
-                }
-            }
-            elseif ($dependentApps) {
-                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                    $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
-                    Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
-                    # Check that it worked
-                    $AssignedDependencies = Get-IntuneWin32AppDependency -ID $To.id
-                    if($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
-                        $successfullyAdded = $true
-                        Write-Log "Dependency $($dependency.dependencyId) added successfully to $($To.id)"
-                    }
-                }
-            }
-            else {
-                Write-Log "No dependencies found for $($dependency.sourceId). Skipping dependency move."
-            }
-            
-        }
-    }
-}
 
 
 
 # Move-AssignmentsAndDependencies
 # Moves all assignments and dependencies from one application to another
-# This will replace Move-Assignments and will also move dependencies
+# Param:
+# [Parameter(Mandatory, Position=0)]
+# [System.Object] $From - The application to move assignments and dependencies from
+# [Parameter(Mandatory, Position=1)]
+# [System.Object] $To - The application to move assignments and dependencies to
+# [Parameter(Position=2)]
+# [Int] $DeadlineDateOffset - The number of days to offset the deadline date by
+# [Parameter(Position=3)]
+# [Int] $AvailableDateOffset - The number of days to offset the available date by
+# Returns: None
 function Move-AssignmentsAndDependencies {
     param(
         [Parameter(Mandatory, Position=0)]
