@@ -6,7 +6,7 @@ preDownloadScript: |
     Name = "Substance 3D Sampler"
     ID = "Substance3DSampler"
     URL = $URL
-    VersionMatchStringRegex = "(?<=\>)(\.{0,1}[0-9]{1,4}){2,4}"
+    VersionMatchStringRegex = "(?<=\<b\>)(\.{0,1}[0-9]{1,4}){2,4}"
     PackageName = "Auto_Substance3DSampler_<Version>_NU_NAU"
   })
 

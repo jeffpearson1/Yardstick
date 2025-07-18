@@ -6,7 +6,7 @@ preDownloadScript: |
     Name = "Substance 3D Modeler"
     ID = "Substance3DModeler_SDL"
     URL = $URL
-    VersionMatchStringRegex = "((?<=V)([0-9]{1,4}\.){1,3}[0-9]{1,4})|((?<=Version )([0-9]{1,4}\.){1,3}[0-9]{1,4})"
+    VersionMatchStringRegex = "((?<=Modeler V)([0-9]{1,4}\.){1,3}[0-9]{1,4})"
     PackageName = "Auto_Substance3DModeler_<Version>_SD_NAU"
     InstallType = "ManagedSDL"
   })
@@ -50,4 +50,4 @@ restartBehavior: suppress
 minOSVersion: W10_20H2
 scopeTags:
   - scopeTag2
-versionLock: 3.x
+versionLock: 1.22.X
