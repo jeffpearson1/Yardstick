@@ -42,7 +42,7 @@ defaultDetectionScriptFileExtension: ps1
 defaultDetectionScriptRunAs32Bit: false
 defaultDetectionScriptEnforceSignatureCheck: false
 defaultDeadlineDateOffset: 0
-defaultAvailableDateOffset: 7
+defaultAvailableDateOffset: 0
 defaultScopeTags:
   - Scope Tags Go Here (Can be Multiple)
 defaultDeploymentGroups:
