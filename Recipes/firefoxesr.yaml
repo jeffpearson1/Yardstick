@@ -4,7 +4,8 @@ preDownloadScript: |
   $filename = $URL.split("/")[-1].replace("%20", " ")
   $version = ($filename.split(" ")[-1] -Split("esr\.msi"))[0]
 installScript: msiexec /i "<filename>" /qn /norestart
-uninstallScript: msiexec /x <productcode> /qn /norestart
+uninstallScript: |
+  "%ProgramFiles%\Mozilla Firefox\uninstall\helper.exe" -ms
 iconFile: firefox.png
 id: firefox
 displayName: Mozilla Firefox ESR
@@ -14,3 +15,6 @@ detectionType: registry
 registryDetectionMethod: exists
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> ESR (x64 en-US)'
 numVersionsToKeep: 1
+scopeTags:
+  - scopeTag1
+  - scopeTag2

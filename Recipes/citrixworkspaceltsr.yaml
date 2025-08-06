@@ -23,13 +23,7 @@ downloadScript: |
 installScript: |
   <filename> /silent /AutoUpdateCheck=disabled /AutoUpdateStream=LTSR ADDLOCAL=`"ReceiverInside,ICA_Client,WebHelper,DesktopViewer,USB,Flash,Vd3d,WorkspaceHub`" /ENABLE_SSON=No /ALLOWADDSTORE=N /noreboot
 uninstallScript: |
-  $NewestVersionPath = ((Get-ChildItem "C:\Program Files (x86)\Citrix\Citrix Workspace*" | Sort-Object Name -Descending)[0]).FullName
-  $FullPath = "$NewestVersionPath\bootstrapperhelper.exe"
-  Start-Process -FilePath "$FullPath" -ArgumentList "/silent /uninstall /cleanup" -Wait
-  If(Test-Path -Path "C:\Program Files (x86)\Citrix") {
-    Get-ChildItem -Path "C:\Program Files (x86)\Citrix" -Recurse | Remove-Item -Recurse -Force
-    Remove-Item -Path "C:\Program Files (x86)\Citrix" -Recurse -Force
-  }
+  powershell.exe -Command "$NewestVersionPath = ((Get-ChildItem 'C:\Program Files (x86)\Citrix\Citrix Workspace*' | Sort-Object Name -Descending)[0]).FullName; $FullPath = Join-Path $NewestVersionPath 'bootstrapperhelper.exe'; Start-Process -FilePath $FullPath -ArgumentList '/silent /uninstall /cleanup' -Wait; if (Test-Path 'C:\Program Files (x86)\Citrix') {Remove-Item -Path 'C:\Program Files (x86)\Citrix' -Recurse -Force}"
 version:
 fileName: CitrixWorkspaceFullInstaller.exe
 iconFile: citrixworkspace.png

@@ -4,10 +4,10 @@ urlredirects: false
 preDownloadScript: |
   $URL = "https://filezilla-project.org/download.php?show_all=1"
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')
-  $VersionElement = Get-SeElement -By Xpath "/html/body/div[1]/div[2]/div[2]/div/p[1]"
+  $VersionElement = Get-SeElement -By Xpath "/html/body/div[1]/div[2]/div[2]/div/div/div[2]/div[1]/p/a"
   $VersionString = [string]$($VersionElement.Text)
-  $Version = ($VersionString -split "\ ")[-1]
-  $FileName = "FileZilla_$($Version)_win64-setup.exe"
+  $FileName = ($VersionString -split "\ ")[-1]
+  $Version = ($Filename -split "_")[1]
   $registryDetectionValue = $version
   $Driver.close()
 downloadScript: |

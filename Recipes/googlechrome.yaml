@@ -1,7 +1,7 @@
 url: https://dl.google.com/tag/s/appguid%3D%7B8A69D345-D564-463C-AFF1-A69D9E530F96%7D%26iid%3D%7B04890063-2FDC-8C69-AA75-7BE52EF733F1%7D%26lang%3Den%26browser%3D4%26usagestats%3D0%26appname%3DGoogle%2520Chrome%26needsadmin%3Dtrue%26ap%3Dx64-stable-statsdef_0%26brand%3DGCEA/dl/chrome/install/googlechromestandaloneenterprise64.msi
 urlredirects: false
 preDownloadScript: |
-  $VURL = "https://versionhistory.googleapis.com/v1/chrome/platforms/win64/channels/stable/versions/all/releases?filter=endtime=none&order_by=version%20desc"
+  $VURL = "https://versionhistory.googleapis.com/v1/chrome/platforms/win64/channels/stable/versions/all/releases?filter=endtime=none&order_by=fraction%20desc"
   $Content = Invoke-WebRequest $VURL
   $JSON = $Content.content | ConvertFrom-JSON
   $Version = $JSON.releases[0].version

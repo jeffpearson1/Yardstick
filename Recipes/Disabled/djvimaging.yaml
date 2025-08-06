@@ -2,7 +2,7 @@ url: https://github.com/darbyjohnston/DJV
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
-  $downloadFileRegex = "DJV.*win64\.exe$"
+  $downloadFileRegex = "DJV.*AMD64.zip$"
   $versionRegex = "(\.{0,1}[0-9]{1,2}){2,4}"
   $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
   $downloader.Update()
