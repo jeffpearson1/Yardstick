@@ -195,13 +195,15 @@ foreach ($ApplicationId in $Applications) {
 
     # Open the YAML file and collect all necessary attributes
     try {
-        $appName = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "$ApplicationId\.ya{0,1}ml")[0].FullName
+        $appName = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "^$ApplicationId\.ya{0,1}ml")[0].FullName
         $parameters = Get-Content "$appName" | ConvertFrom-Yaml
     }
     catch {
         Write-Error "Unable to open parameters file for $ApplicationId"
         continue
     }
+
+    # Set all variables from default preferences and the application recipe
     $Script:url = if ($parameters.urlRedirects -eq $true) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
     $Script:id = $parameters.id
     $Script:version = $parameters.version
