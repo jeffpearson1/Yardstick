@@ -158,9 +158,11 @@ function Move-AssignmentsAndDependencies {
                     $startDateTime = $Assignment.InstallTimeSettings.startDateTime
                     $deadlineDateTime = $Assignment.InstallTimeSettings.deadlineDateTime
                     if ($null -ne $startDateTime) {
+                        Write-Log "StartDateTime: $startDateTime"
                         $startDateTime = Get-Date -Date "$AvailableDate $($startDateTime.ToString("HH:mm"))"
                     }
                     if ($null -ne $deadlineDateTime) {
+                        Write-Log "DeadlineDateTime: $deadlineDateTime"
                         $deadlineDateTime = Get-Date -Date "$DeadlineDate $($deadlineDateTime.ToString("HH:mm"))"
                     }
                 }
@@ -170,41 +172,41 @@ function Move-AssignmentsAndDependencies {
                             Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline and available time settings."
                             try {
                                 Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime | Out-Null
+                                $successfullyAdded = $true
                             }
                             catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                             }
-                            $successfullyAdded = $true
                         }
                         elseif ($startDateTime) {
                             Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with available time settings."
                             try {
                                 Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime | Out-Null
+                                $successfullyAdded = $true
                             }
                             catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                             }
-                            $successfullyAdded = $true
                         }
                         elseif ($deadlineDateTime) {
                             Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline time settings."
                             try {
                                 Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime | Out-Null
+                                $successfullyAdded = $true
                             }
                             catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                             }
-                            $successfullyAdded = $true
                         }
                         else {
                             Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
                             try {
                                 Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications | Out-Null
+                                $successfullyAdded = $true
                             }
                             catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                             }
-                            $successfullyAdded = $true
                         }
                     }
                 }
@@ -213,42 +215,42 @@ function Move-AssignmentsAndDependencies {
                     if ($startDateTime -and $deadlineDateTime) {
                         Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline and available time settings."
                         try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                            $successfullyAdded = $true
                         }
                         catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
-                        $successfullyAdded = $true
                     }
                     elseif ($startDateTime) {
                         Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with available time settings."
                         try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                            $successfullyAdded = $true
                         }
                         catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
-                        $successfullyAdded = $true
                     }
                     elseif ($deadlineDateTime) {
                         Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline time settings."
                         try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                            $successfullyAdded = $true
                         }
                         catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
-                        $successfullyAdded = $true
                     }
                     else {
                         Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
                         try {
                                 Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
+                                $successfullyAdded = $true
                         }
                         catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
-                        $successfullyAdded = $true
                     }
                 } 
             }
