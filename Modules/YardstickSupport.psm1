@@ -2,38 +2,91 @@
 
 # Write-Log
 # Prints both to the console and also to the log
-# Param: [String] $ContentToWriteToLog, [Switch] $Init (Erase log and print big timestamp for new script run)
+# Param: [String] $Content, [Switch] $Init (Erase log and print big timestamp for new script run)
 function Write-Log {
+    <#
+    .SYNOPSIS
+    Writes timestamped log entries to both console and log file.
+    
+    .DESCRIPTION
+    This function writes log messages with timestamps to both the console output
+    and a log file. It can also initialize the log file with a header.
+    
+    .PARAMETER Content
+    The content to write to the log.
+    
+    .PARAMETER Init
+    Switch to initialize/clear the log file and write a header.
+    #>
     param(
         [String]$Content,
         [Switch]$Init
     )
-    Push-Location $LOG_LOCATION
-    if($Init) {
-        if (Test-Path $LOG_LOCATION\$LOG_FILE) {
-            Remove-Item $LOG_LOCATION\$LOG_FILE -Force
+    
+    if (-not $LOG_LOCATION -or -not $LOG_FILE) {
+        Write-Warning "LOG_LOCATION or LOG_FILE variables are not set. Cannot write to log."
+        if ($Content) {
+            Write-Output "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
-        Write-Output "#######################################################" | Out-File $LOG_FILE -Append
-        Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LOG_FILE -Append
-        Write-Output "#######################################################" | Out-File $LOG_FILE -Append
+        return
     }
-    if ($Content) {
-        $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
-        Write-Output $Content | Out-File $LOG_FILE -Append
-        Write-Output $Content
+    
+    Push-Location $LOG_LOCATION
+    try {
+        if($Init) {
+            if (Test-Path $LOG_LOCATION\$LOG_FILE) {
+                Remove-Item $LOG_LOCATION\$LOG_FILE -Force
+            }
+            Write-Output "#######################################################" | Out-File $LOG_FILE -Append
+            Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LOG_FILE -Append
+            Write-Output "#######################################################" | Out-File $LOG_FILE -Append
+        }
+        if ($Content) {
+            $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
+            Write-Output $Content | Out-File $LOG_FILE -Append
+            Write-Output $Content
+        }
     }
-    Pop-Location
+    catch {
+        Write-Warning "Failed to write to log file: $_"
+        if ($Content) {
+            Write-Output "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 
 # ArrayToString
-# Converts an array to a string
-function ArrayToString() {
+# Converts an array to a string representation
+function ArrayToString {
+    <#
+    .SYNOPSIS
+    Converts an array to a PowerShell array string representation.
+    
+    .DESCRIPTION
+    This function takes an array and converts it to a string representation
+    that looks like a PowerShell array literal (@(value1,value2,value3)).
+    
+    .PARAMETER Array
+    The array to convert to string format.
+    
+    .OUTPUTS
+    String representation of the array.
+    #>
     param (
-        [Array] $array
+        [Parameter(Mandatory=$true)]
+        [Array] $Array
     )
+    
+    if (-not $Array -or $Array.Count -eq 0) {
+        return "@()"
+    }
+    
     $arrayString = "@("
-    foreach ($value in $array) {
+    foreach ($value in $Array) {
         $arrayString = "$($arrayString)$([String]$value),"
     }
     $arrayString = $arrayString.TrimEnd(",")
@@ -43,74 +96,175 @@ function ArrayToString() {
 
 # Get-RedirectedUrl
 # Follows redirects and returns the actual URL of a resource
-# Param: [String] URL
-# Return: [String] The last URL that is linked to that does not redirect
-function Get-RedirectedUrl() {
+function Get-RedirectedUrl {
+    <#
+    .SYNOPSIS
+    Follows HTTP redirects and returns the final URL.
+    
+    .DESCRIPTION
+    This function follows HTTP redirects to determine the final destination URL
+    of a given URL. Useful for handling shortened URLs or redirects.
+    
+    .PARAMETER URL
+    The URL to follow redirects for.
+    
+    .OUTPUTS
+    The final redirected URL as a string.
+    #>
     param (
         [Parameter(Mandatory=$true)]
         [String]$URL
     )
+    
     $userAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::Chrome
-    $httpClient = [System.Net.Http.HttpClient]::new()
-    $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($userAgent)
+    $httpClient = $null
+    
+    try {
+        $httpClient = [System.Net.Http.HttpClient]::new()
+        $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($userAgent)
 
-    # Get the redirected url object
-    $Response = $httpClient.GetAsync($url).GetAwaiter().GetResult()
-    if ($Response.StatusCode -eq "OK") {
-        $RedirectedURL = $response.RequestMessage.RequestUri.AbsoluteUri
+        # Get the redirected url object
+        $Response = $httpClient.GetAsync($URL).GetAwaiter().GetResult()
+        if ($Response.StatusCode -eq "OK") {
+            $RedirectedURL = $Response.RequestMessage.RequestUri.AbsoluteUri
+        }
+        else {
+            throw "HTTP request failed with status: $($Response.StatusCode)"
+        }
+        return $RedirectedURL
     }
-    else {
-        throw "There was an issue getting the redirected URL."
+    catch {
+        Write-Error "Error getting redirected URL for '$URL': $_"
+        throw
     }
-    return $RedirectedURL
+    finally {
+        if ($httpClient) {
+            $httpClient.Dispose()
+        }
+    }
 }
 
 
 # Get-MsiProductCode
-# Returns the product code of an MSI file in the current directory only
-# Param: [String] $filePath
-# Return: [String] The MSI Product Code
-function Get-MsiProductCode() {
+# Returns the product code of an MSI file
+function Get-MsiProductCode {
+    <#
+    .SYNOPSIS
+    Extracts the ProductCode from an MSI file.
+    
+    .DESCRIPTION
+    This function uses the Windows Installer COM object to read the ProductCode
+    property from an MSI database file.
+    
+    .PARAMETER FilePath
+    The full path to the MSI file.
+    
+    .OUTPUTS
+    The MSI ProductCode as a string.
+    #>
     param (
         [Parameter(Mandatory=$true)]
-        [String]$filePath
+        [String]$FilePath
     )
-    # Read property from MSI database
-    $windowsInstallerObject = New-Object -ComObject WindowsInstaller.Installer
-    $msiDatabase = $windowsInstallerObject.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $windowsInstallerObject, @($filePath, 0))
-    $query = "SELECT Value FROM Property WHERE Property = 'ProductCode'"
-    $view = $msiDatabase.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $msiDatabase, ($query))
-    $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
-    $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
-    $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
-    $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($windowsInstallerObject) 
-    return [String]$value
+    
+    if (-not (Test-Path $FilePath)) {
+        throw "MSI file not found: $FilePath"
+    }
+    
+    $windowsInstallerObject = $null
+    $msiDatabase = $null
+    $view = $null
+    
+    try {
+        # Read property from MSI database
+        $windowsInstallerObject = New-Object -ComObject WindowsInstaller.Installer
+        $msiDatabase = $windowsInstallerObject.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $windowsInstallerObject, @($FilePath, 0))
+        $query = "SELECT Value FROM Property WHERE Property = 'ProductCode'"
+        $view = $msiDatabase.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $msiDatabase, ($query))
+        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+        $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+        
+        if ($record) {
+            $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+        }
+        else {
+            throw "ProductCode not found in MSI file"
+        }
+        
+        return [String]$value
+    }
+    catch {
+        Write-Error "Error reading ProductCode from MSI file '$FilePath': $_"
+        throw
+    }
+    finally {
+        # Clean up COM objects
+        if ($view) { 
+            $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($view) 
+        }
+        if ($msiDatabase) { 
+            $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($msiDatabase) 
+        }
+        if ($windowsInstallerObject) { 
+            $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($windowsInstallerObject) 
+        }
+    }
 }
 
 # Connect-AutoMSIntuneGraph
 # Automatically connects to the Microsoft Graph API using the Intune module
-# Param: None
-# Returns: None
-function Connect-AutoMSIntuneGraph() {
+function Connect-AutoMSIntuneGraph {
+    <#
+    .SYNOPSIS
+    Automatically manages Microsoft Intune Graph API connection with token refresh.
+    
+    .DESCRIPTION
+    This function manages the connection to Microsoft Intune Graph API, automatically
+    refreshing tokens when they expire or are close to expiring. It uses global
+    variables for tenant configuration.
+    #>
+    
+    if (-not $Global:TENANT_ID -or -not $Global:CLIENT_ID -or -not $Global:CLIENT_SECRET) {
+        throw "Required global variables not set: TENANT_ID, CLIENT_ID, CLIENT_SECRET"
+    }
+    
     # Check if the current token is invalid
     if (-not $Global:Token) {
-        Write-Log "Getting an Intune Graph Client APItoken..."
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TENANT_ID -ClientID $CLIENT_ID -ClientSecret $CLIENT_SECRET
+        Write-Log "Getting an Intune Graph Client API token..."
+        try {
+            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TENANT_ID -ClientID $Global:CLIENT_ID -ClientSecret $Global:CLIENT_SECRET
+        }
+        catch {
+            Write-Error "Failed to get initial token: $_"
+            throw
+        }
     }
     elseif ($Global:Token.ExpiresOn.ToLocalTime() -lt (Get-Date)) {
         # If not, get a new token
         Write-Log "Token is expired. Refreshing token..."
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TENANT_ID -ClientID $CLIENT_ID -ClientSecret $CLIENT_SECRET
-        Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
+        try {
+            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TENANT_ID -ClientID $Global:CLIENT_ID -ClientSecret $Global:CLIENT_SECRET
+            Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
+        }
+        catch {
+            Write-Error "Failed to refresh expired token: $_"
+            throw
+        }
     }
     elseif ($Global:Token.ExpiresOn.AddMinutes(-30).ToLocalTime() -lt (Get-Date)) {
         # For whatever reason, this API stops working 10 minutes before a token refresh
         # Set at 30 minutes in case we are uploading large files. 
         Write-Log "Token expires soon - Refreshing token..."
-        # Required to force a refresh
-        Clear-MsalTokenCache
-        $Global:Token = Connect-MSIntuneGraph -TenantID $TENANT_ID -ClientID $CLIENT_ID -ClientSecret $CLIENT_SECRET
-        Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
+        try {
+            # Required to force a refresh
+            Clear-MsalTokenCache
+            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TENANT_ID -ClientID $Global:CLIENT_ID -ClientSecret $Global:CLIENT_SECRET
+            Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
+        }
+        catch {
+            Write-Error "Failed to refresh token: $_"
+            throw
+        }
     }
     else {
         Write-Log "Token is still valid. Skipping token refresh."
@@ -120,17 +274,28 @@ function Connect-AutoMSIntuneGraph() {
 
 # Move-AssignmentsAndDependencies
 # Moves all assignments and dependencies from one application to another
-# Param:
-# [Parameter(Mandatory, Position=0)]
-# [System.Object] $From - The application to move assignments and dependencies from
-# [Parameter(Mandatory, Position=1)]
-# [System.Object] $To - The application to move assignments and dependencies to
-# [Parameter(Position=2)]
-# [Int] $DeadlineDateOffset - The number of days to offset the deadline date by
-# [Parameter(Position=3)]
-# [Int] $AvailableDateOffset - The number of days to offset the available date by
-# Returns: None
 function Move-AssignmentsAndDependencies {
+    <#
+    .SYNOPSIS
+    Moves assignments and dependencies from one Intune application to another.
+    
+    .DESCRIPTION
+    This function transfers all group assignments and application dependencies
+    from a source application to a target application, with options to offset
+    availability and deadline dates.
+    
+    .PARAMETER From
+    The source application object to move assignments and dependencies from.
+    
+    .PARAMETER To
+    The target application object to move assignments and dependencies to.
+    
+    .PARAMETER DeadlineDateOffset
+    Number of days to offset the deadline date by (default: 0).
+    
+    .PARAMETER AvailableDateOffset
+    Number of days to offset the available date by (default: 0).
+    #>
     param(
         [Parameter(Mandatory, Position=0)]
         [System.Object] $From,
@@ -140,7 +305,6 @@ function Move-AssignmentsAndDependencies {
         [Int] $DeadlineDateOffset = 0,
         [Parameter(Position=3)]
         [Int] $AvailableDateOffset = 0
-
     )
     Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
@@ -331,14 +495,33 @@ function Move-AssignmentsAndDependencies {
 
 # Get-SameAppAllVersions
 # Returns all versions of an app sorted from newest to oldest
-# Accounts for edge cases where an application name might be similar to others, i.e. Mozilla Firefox vs. Mozilla Firefox ESR
-# Param: [String] DisplayName
-# Return: @(PSCustomObject) 
-function Get-SameAppAllVersions($DisplayName) {
+function Get-SameAppAllVersions {
+    <#
+    .SYNOPSIS
+    Retrieves all versions of an application sorted from newest to oldest.
+    
+    .DESCRIPTION
+    This function finds all applications with the same display name (including
+    versioned names with N- prefix) and returns them sorted by version in
+    descending order. Accounts for edge cases where application names might
+    be similar to others.
+    
+    .PARAMETER DisplayName
+    The display name of the application to search for.
+    
+    .OUTPUTS
+    Array of application objects sorted by version (newest first).
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [String]$DisplayName
+    )
+    
     # Attempt to connect to Intune up to 3 times
     for ($i = 0; $i -lt 3; $i++) {
         try {
             $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName" -ErrorAction SilentlyContinue
+            break
         }
         catch {
             Write-Log "Error retrieving applications with the name $DisplayName"
@@ -357,18 +540,37 @@ function Get-SameAppAllVersions($DisplayName) {
         Write-Log "No applications found with the name $DisplayName"
         return @()
     }
+    
     # Only return apps that have the same name (not ones that look the same) and apps that are pending approval
     $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (N-*")})
+    
     # Pad out each version section to 8 digits of zeroes before sorting, remove any letters, and mash it all together so that versions sort correctly
     return $sortable | Sort-Object {$($($($_.displayVersion -replace "[A-Za-z]", "0") -replace "[\-\+]", ".").split(".") | ForEach-Object {'{0:d8}' -f [int]$_}) -join ''} -Descending
 }
 
 
 # Format-FileDetectionVersion
-# Converts a version number to one padded with the appropriate number of zeroes for detection by Intune (4)
-# Param: [String] Version
-# Return: [String] FileDetectionVersion
-function Format-FileDetectionVersion($Version) {
+# Converts a version number to one padded with the appropriate number of zeroes for detection by Intune
+function Format-FileDetectionVersion {
+    <#
+    .SYNOPSIS
+    Formats a version number for Intune file detection.
+    
+    .DESCRIPTION
+    Converts a version number to a 4-part version string padded with zeroes
+    as required by Intune for file detection rules.
+    
+    .PARAMETER Version
+    The version string to format.
+    
+    .OUTPUTS
+    A properly formatted 4-part version string (e.g., "1.2.3.0").
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [String]$Version
+    )
+    
     $VersionComponents = $Version.split(".")
     Switch($VersionComponents.count) {
       1 {$FileVersion = "$($VersionComponents[0]).0.0.0"; Break}
@@ -381,48 +583,87 @@ function Format-FileDetectionVersion($Version) {
 
 
 # Get-VersionLocked
-# Returns $false if the version is allowed to update, $true if the versionlock parameter will not allow it.
-# If the versionLock is null, it will always return $false.
-# In the $versionLock parameter, values with x are ignored, i.e. 1.2.x is locked to 1.2
-# Param: [String] $version, [String] $versionLock
-# Return: [Boolean] $false if locked, otherwise $true
+# Returns whether a version is locked based on version lock pattern
 function Get-VersionLocked {
+    <#
+    .SYNOPSIS
+    Determines if a version is locked based on a version lock pattern.
+    
+    .DESCRIPTION
+    Checks if a version should be blocked from updating based on a version
+    lock pattern. The pattern can use 'x' as wildcards (e.g., "1.2.x" locks
+    to version 1.2 but allows any patch version).
+    
+    .PARAMETER Version
+    The version to check against the lock pattern.
+    
+    .PARAMETER VersionLock
+    The version lock pattern. Use 'x' for wildcards.
+    
+    .OUTPUTS
+    $true if the version is locked (should not update), $false otherwise.
+    #>
     param (
         [Parameter(Mandatory=$true)]
-        [String]$version,
+        [String]$Version,
         [Parameter(Mandatory=$false)]
-        [String]$versionLock
+        [String]$VersionLock
     )
-    # If versionLock is null, return false
-    if (-not $versionLock) {
+    
+    # If versionLock is null or empty, return false (not locked)
+    if (-not $VersionLock) {
         return $false
     }
+    
     # Compare the version and versionLock
-    $versionPattern = $versionLock -replace "[Xx]{1,}", "[0-9]{1,}"
+    $versionPattern = $VersionLock -replace "[Xx]{1,}", "[0-9]{1,}"
     $versionPattern = $versionPattern -replace "\.", "\."
-    return $version -notmatch "^$versionPattern"
+    return $Version -notmatch "^$versionPattern"
 }
 
 
 # Compare-AppVersions
-# Compares two versions and returns -1 if $version1 is less than $version2, 0 if they are equal, and 1 if $version1 is greater than $version2
-# Param: [String] $version1, [String] $version2
-# Return: [Int] -1 if $version1 is less than $version2, 0 if they are equal, and 1 if $version1 is greater than $version2
+# Compares two version strings and returns comparison result
 function Compare-AppVersions {
+    <#
+    .SYNOPSIS
+    Compares two application version strings.
+    
+    .DESCRIPTION
+    Compares two version strings numerically and returns -1, 0, or 1
+    based on whether the first version is less than, equal to, or
+    greater than the second version.
+    
+    .PARAMETER Version1
+    The first version string to compare.
+    
+    .PARAMETER Version2
+    The second version string to compare.
+    
+    .OUTPUTS
+    -1 if Version1 < Version2
+     0 if Version1 = Version2
+     1 if Version1 > Version2
+    #>
     param (
         [Parameter(Mandatory=$true)]
-        [String]$version1,
+        [String]$Version1,
         [Parameter(Mandatory=$true)]
-        [String]$version2
+        [String]$Version2
     )
-    $version1 = $version1 -replace "[^0-9.]", ""
-    $version2 = $version2 -replace "[^0-9.]", ""
-    $version1Components = $version1.split(".")
-    $version2Components = $version2.split(".")
+    
+    # Clean version strings to contain only numbers and dots
+    $Version1 = $Version1 -replace "[^0-9.]", ""
+    $Version2 = $Version2 -replace "[^0-9.]", ""
+    
+    $version1Components = $Version1.split(".")
+    $version2Components = $Version2.split(".")
     $maxLength = [Math]::Max($version1Components.Count, $version2Components.Count)
+    
     for ($i = 0; $i -lt $maxLength; $i++) {
         $v1 = if ($i -lt $version1Components.Count) { [int]$version1Components[$i] } else { 0 }
         $v2 = if ($i -lt $version2Components.Count) { [int]$version2Components[$i] } else { 0 }
+        
         if ($v1 -lt $v2) {
             return -1
         }

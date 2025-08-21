@@ -79,10 +79,16 @@ param (
     [parameter(ParameterSetName="GroupApps")]
     [parameter(ParameterSetName="AllApps")]
     [Switch] $NoDelete,
+
+    [parameter(ParameterSetName="SingleApp")]
+    [parameter(ParameterSetName="GroupApps")]
+    [parameter(ParameterSetName="AllApps")]
     [Switch] $Repair
 )
 
-
+# Constants
+$Global:LOG_LOCATION = "$PSScriptRoot"
+$Global:LOG_FILE = "YLog.log"
 
 # Modules required:
 # powershell-yaml
@@ -93,15 +99,15 @@ Import-Module IntuneWin32App -Scope Local
 Import-Module Selenium -Scope Local
 Import-Module TUN.CredentialManager -Scope Local
 Import-Module $PSScriptRoot\Modules\YardstickSupport.psm1 -Scope Global -Force
+
 $CustomModules = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
 foreach ($Module in $CustomModules) {
     # Force allows us to reload them for testing
     Import-Module "$($Module.FullName)" -Scope Global -Force
 }
 
-# Constants
-$Global:LOG_LOCATION = "$PSScriptRoot"
-$Global:LOG_FILE = "YLog.log"
+# Initialize script variables
+$Script:Applications = [System.Collections.Generic.List[PSObject]]::new()
 
 # So we can pop at the end
 Push-Location $PSScriptRoot
@@ -109,11 +115,11 @@ Push-Location $PSScriptRoot
 # Initialize the log file
 Write-Log -Init
 
+# Validate parameters
 if ("None" -eq $ApplicationId -and (($All -eq $false) -and (!$Group))) {
     Write-Log "Please provide parameter -ApplicationId"
     exit 1
 }
-$Applications = [System.Collections.Generic.List[PSObject]]::new()
 
 # Import preferences file:
 try {
@@ -124,7 +130,112 @@ catch {
     exit 1
 }
 
-# Import Folder Locations
+# Function to set script variables from parameters and preferences
+function Set-ScriptVariables {
+    <#
+    .SYNOPSIS
+    Sets script-scoped variables from application parameters and global preferences.
+    
+    .DESCRIPTION
+    This function centralizes the logic for setting script variables, using application-specific
+    parameters when available and falling back to global preferences with null coalescing.
+    
+    .PARAMETER Parameters
+    Hashtable containing application-specific parameters from the YAML recipe.
+    
+    .PARAMETER Preferences
+    Hashtable containing global preferences from the preferences.yaml file.
+    #>
+    param(
+        [hashtable]$Parameters,
+        [hashtable]$Preferences
+    )
+    
+    # Import Folder Locations
+    $Script:TEMP = $Preferences.Temp
+    $Script:BUILDSPACE = $Preferences.Buildspace
+    $Script:SCRIPTS = $Preferences.Scripts
+    $Script:PUBLISHED = $Preferences.Published
+    $Script:RECIPES = $Preferences.Recipes
+    $Script:ICONS = $Preferences.Icons
+    $Script:TOOLS = $Preferences.Tools
+    $Script:SECRETS = $Preferences.Secrets
+
+    # Import Intune Connection Settings
+    $Global:TENANT_ID = $Preferences.TenantID
+    $Global:CLIENT_ID = $Preferences.ClientID
+    $Global:CLIENT_SECRET = $Preferences.ClientSecret
+
+    # Set all variables from default preferences and the application recipe
+    $Script:url = if ($Parameters.urlRedirects -eq $true) {Get-RedirectedUrl $Parameters.url} else {$Parameters.url}
+    $Script:id = $Parameters.id
+    $Script:version = $Parameters.version
+    $Script:fileDetectionVersion = $Parameters.fileDetectionVersion
+    $Script:displayName = $Parameters.displayName
+    $Script:displayVersion = $Parameters.displayVersion
+    $Script:fileName = $Parameters.fileName
+    $Script:fileDetectionPath = $Parameters.fileDetectionPath
+    $Script:preDownloadScript = if ($Parameters.preDownloadScript) { [ScriptBlock]::Create($Parameters.preDownloadScript)}
+    $Script:postDownloadScript = if ($Parameters.postDownloadScript) { [ScriptBlock]::Create($Parameters.postDownloadScript) }
+    $Script:downloadScript = if ($Parameters.downloadScript) { [ScriptBlock]::Create($Parameters.downloadScript) }
+    $Script:installScript = $Parameters.installScript
+    $Script:uninstallScript = $Parameters.uninstallScript
+    
+    # Use parameters or fall back to preferences with null coalescing
+    $Script:scopeTags = $Parameters.scopeTags ?? $Preferences.defaultScopeTags
+    $Script:owner = $Parameters.owner ?? $Preferences.defaultOwner
+    $Script:maximumInstallationTimeInMinutes = $Parameters.maximumInstallationTimeInMinutes ?? $Preferences.defaultMaximumInstallationTimeInMinutes
+    $Script:minOSVersion = $Parameters.minOSVersion ?? $Preferences.defaultMinOSVersion
+    $Script:installExperience = $Parameters.installExperience ?? $Preferences.defaultInstallExperience
+    $Script:restartBehavior = $Parameters.restartBehavior ?? $Preferences.defaultRestartBehavior
+    $Script:availableGroups = $Parameters.availableGroups ?? $Preferences.defaultAvailableGroups
+    $Script:requiredGroups = $Parameters.requiredGroups ?? $Preferences.defaultRequiredGroups
+    $Script:defaultDeploymentGroups = $Parameters.defaultDeploymentGroups ?? $Preferences.defaultDeploymentGroups
+    $Script:allowUserUninstall = $Parameters.allowUserUninstall ?? $Preferences.defaultAllowUserUninstall
+    $Script:is32BitApp = $Parameters.is32BitApp ?? $Preferences.defaultIs32BitApp
+    $Script:architecture = $Parameters.architecture ?? $Preferences.defaultArchitecture
+    $Script:deadlineDateOffset = $Parameters.deadlineDateOffset ?? $Preferences.defaultDeadlineDateOffset
+    $Script:availableDateOffset = $Parameters.availableDateOffset ?? $Preferences.defaultAvailableDateOffset
+    
+    # Detection-related variables
+    $Script:detectionType = $Parameters.detectionType
+    $Script:fileDetectionVersion = $Parameters.fileDetectionVersion
+    $Script:fileDetectionMethod = $Parameters.fileDetectionMethod
+    $Script:fileDetectionName = $Parameters.fileDetectionName
+    $Script:fileDetectionOperator = $Parameters.fileDetectionOperator
+    $Script:fileDetectionDateTime = $Parameters.fileDetectionDateTime
+    $Script:fileDetectionValue = $Parameters.fileDetectionValue
+    $Script:registryDetectionMethod = $Parameters.registryDetectionMethod
+    $Script:registryDetectionKey = $Parameters.registryDetectionKey
+    $Script:registryDetectionValueName = $Parameters.registryDetectionValueName
+    $Script:registryDetectionValue = $Parameters.registryDetectionValue
+    $Script:registryDetectionOperator = $Parameters.registryDetectionOperator
+    $Script:detectionScript = $Parameters.detectionScript
+    $Script:detectionScriptFileExtension = $Parameters.detectionScriptFileExtension ?? $Preferences.defaultDetectionScriptFileExtension
+    $Script:detectionScriptRunAs32Bit = $Parameters.detectionScriptRunAs32Bit ?? $Preferences.defaultdetectionScriptRunAs32Bit
+    $Script:detectionScriptEnforceSignatureCheck = $Parameters.detectionScriptEnforceSignatureCheck ?? $Preferences.defaultdetectionScriptEnforceSignatureCheck
+    
+    # Additional variables
+    $Script:iconFile = $Parameters.iconFile
+    $Script:description = $Parameters.description
+    $Script:publisher = $Parameters.publisher
+    $Script:arm64FilterName = $Preferences.arm64FilterName
+    $Script:amd64FilterName = $Preferences.amd64FilterName
+    $Script:versionLock = $Parameters.versionLock
+    
+    # Handle version lock logic
+    if ($Script:versionLock) {
+        $Script:numVersionsToKeep = 1
+        if($Parameters.numVersionsToKeep -gt 1) {
+            Write-Log "Warning: Version lock is set, but numVersionsToKeep is set to $($Parameters.numVersionsToKeep). This will be ignored."
+        }
+    }
+    else {
+        $Script:numVersionsToKeep = $Parameters.numVersionsToKeep ?? $Preferences.defaultNumVersionsToKeep
+    }
+}
+
+# Import Folder Locations from preferences
 $Script:TEMP = $prefs.Temp
 $Script:BUILDSPACE = $prefs.Buildspace
 $Script:SCRIPTS = $prefs.Scripts
@@ -134,12 +245,12 @@ $Script:ICONS = $prefs.Icons
 $Script:TOOLS = $prefs.Tools
 $Script:SECRETS = $prefs.Secrets
 
-
 # Import Intune Connection Settings
 $Global:TENANT_ID = $prefs.TenantID
 $Global:CLIENT_ID = $prefs.ClientID
 $Global:CLIENT_SECRET = $prefs.ClientSecret
 
+# Validate ApplicationId parameter
 if ($ApplicationId -ne "None") {
     $MatchingApps = Get-ChildItem $RECIPES | Where-Object Name -ne 'Disabled' | Get-ChildItem -File | Where-Object Name -match "$ApplicationId\.ya{0,1}ml"
     if ($null -eq $MatchingApps) {
@@ -148,42 +259,286 @@ if ($ApplicationId -ne "None") {
     }
 }
 
-
-# Start updating each application if all are selected
-if ($All) {
-    if ($NoInteractive) {
-        $ApplicationFullNames = (Get-ChildItem $RECIPES | Where-Object Name -ne 'Disabled' | Where-Object Name -ne 'Interactive' | Get-ChildItem -File).Name
+# Function to get applications based on parameters
+function Get-ApplicationsToProcess {
+    <#
+    .SYNOPSIS
+    Determines which applications to process based on command-line parameters.
+    
+    .DESCRIPTION
+    This function encapsulates the logic for selecting applications to process,
+    whether processing a single app, a group, or all applications.
+    
+    .PARAMETER ApplicationId
+    The ID of a single application to process.
+    
+    .PARAMETER Group
+    The name of an application group to process.
+    
+    .PARAMETER All
+    Switch to process all applications.
+    
+    .PARAMETER NoInteractive
+    Switch to exclude interactive applications when processing all.
+    #>
+    param(
+        [string]$ApplicationId,
+        [string]$Group,
+        [switch]$All,
+        [switch]$NoInteractive
+    )
+    
+    $applications = [System.Collections.Generic.List[PSObject]]::new()
+    
+    if ($All) {
+        $folderFilter = if ($NoInteractive) { 
+            { $_.Name -ne 'Disabled' -and $_.Name -ne 'Interactive' }
+        } else { 
+            { $_.Name -ne 'Disabled' }
+        }
+        
+        $ApplicationFullNames = (Get-ChildItem $RECIPES | Where-Object $folderFilter | Get-ChildItem -File).Name
         foreach ($Application in $ApplicationFullNames) {
-            $Applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
+            $applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
+        }
+    }
+    elseif ($Group) {
+        try {
+            $groupFile = Get-Content $PSScriptRoot\RecipeGroups.yaml | ConvertFrom-Yaml
+            $groupFile[$Group] | ForEach-Object {
+                $applications.Add($_) | Out-Null
+            }
+        }
+        catch {
+            Write-Log "ERROR: There was an issue importing the application group! Exiting."
+            exit 3
         }
     }
     else {
-        $ApplicationFullNames = (Get-ChildItem $RECIPES | Where-Object Name -ne 'Disabled' | Get-ChildItem -File).Name
-        foreach ($Application in $ApplicationFullNames) {
-            $Applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
-        }
+        $applications.Add($ApplicationId) | Out-Null
+    }
+    
+    return $applications
+}
+
+# Function to replace placeholders in scripts
+function Update-ScriptPlaceholders {
+    <#
+    .SYNOPSIS
+    Replaces placeholders in script strings with actual values.
+    
+    .DESCRIPTION
+    This function handles the replacement of common placeholders like <filename>,
+    <productcode>, and <version> in install, uninstall, and detection scripts.
+    
+    .PARAMETER FileName
+    The actual filename to replace <filename> placeholders with.
+    
+    .PARAMETER ProductCode
+    The MSI product code to replace <productcode> placeholders with.
+    
+    .PARAMETER Version
+    The version string to replace <version> placeholders with.
+    #>
+    param(
+        [string]$FileName,
+        [string]$ProductCode = "",
+        [string]$Version
+    )
+    
+    # Replace the <filename> placeholder with the actual filename
+    if ($Script:installScript) {
+        $Script:installScript = $Script:installScript.replace("<filename>", $FileName)
+    }
+    if ($Script:uninstallScript) {
+        $Script:uninstallScript = $Script:uninstallScript.replace("<filename>", $FileName)
+    }
+    if ($Script:detectionScript) {
+        $Script:detectionScript = $Script:detectionScript.replace("<filename>", $FileName)
+    }
+    if ($Script:registryDetectionKey) {
+        $Script:registryDetectionKey = $Script:registryDetectionKey.replace("<filename>", $FileName)
     }
 
-}
-elseif ($Group) {
-    # Open the RecipeGroups.yaml file and read in the appropriate list of application ids
-    try {
-        $groupFile = Get-Content $PSScriptRoot\RecipeGroups.yaml | ConvertFrom-Yaml
-        $groupFile[$Group] | ForEach-Object {
-            $Applications.Add($_) | Out-Null
+    # Replace the <productcode> placeholder with the actual product code
+    if ($ProductCode) {
+        if ($Script:installScript) {
+            $Script:installScript = $Script:installScript.replace("<productcode>", $ProductCode)
         }
+        if ($Script:uninstallScript) {
+            $Script:uninstallScript = $Script:uninstallScript.replace("<productcode>", $ProductCode)
+        }
+        if ($Script:detectionScript) {
+            $Script:detectionScript = $Script:detectionScript.replace("<productcode>", $ProductCode)
+        }
+        if ($Script:registryDetectionKey) {
+            $Script:registryDetectionKey = $Script:registryDetectionKey.replace("<productcode>", $ProductCode)
+        }
+    }
+    
+    # Replace <version> placeholder with the actual version
+    if ($Script:installScript) {
+        $Script:installScript = $Script:installScript.replace("<version>", $Version)
+    }
+    if ($Script:uninstallScript) {
+        $Script:uninstallScript = $Script:uninstallScript.replace("<version>", $Version) 
+    }
+    if ($Script:detectionScript) {
+        $Script:detectionScript = $Script:detectionScript.replace("<version>", $Version) 
+    } 
+    if ($Script:registryDetectionKey) {
+        $Script:registryDetectionKey = $Script:registryDetectionKey.replace("<version>", $Version)
+    }
+}
+
+# Function to create detection rules
+function New-DetectionRule {
+    <#
+    .SYNOPSIS
+    Creates Intune Win32 app detection rules based on detection type.
+    
+    .DESCRIPTION
+    This function creates the appropriate detection rule object based on the
+    specified detection type (file, msi, registry, or script).
+    
+    .PARAMETER DetectionType
+    The type of detection rule to create (file, msi, registry, script).
+    
+    .PARAMETER ProductCode
+    The MSI product code (required for MSI detection type).
+    #>
+    param(
+        [string]$DetectionType,
+        [string]$ProductCode = ""
+    )
+    
+    switch ($DetectionType) {
+        "file" {
+            switch ($Script:fileDetectionMethod) {
+                "exists" {
+                    return New-IntuneWin32AppDetectionRuleFile -Existence -DetectionType "exists" -Path $Script:fileDetectionPath -FileOrFolder $Script:fileDetectionName
+                }
+                "modified" {
+                    return New-IntuneWin32AppDetectionRuleFile -DateModified -Path $Script:fileDetectionPath -FileOrFolder $Script:fileDetectionName -Operator $Script:fileDetectionOperator -DateTimeValue $Script:fileDetectionDateTime
+                }
+                "created" {
+                    return New-IntuneWin32AppDetectionRuleFile -DateCreated -Path $Script:fileDetectionPath -FileOrFolder $Script:fileDetectionName -Operator $Script:fileDetectionOperator -DateTimeValue (Get-Date $Script:fileDetectionDateTime)
+                }
+                "version" {
+                    return New-IntuneWin32AppDetectionRuleFile -Version -Path $Script:fileDetectionPath -FileOrFolder $Script:fileDetectionName -Operator $Script:fileDetectionOperator -VersionValue $Script:fileDetectionVersion
+                }
+                "size" {
+                    return New-IntuneWin32AppDetectionRuleFile -Size -Path $Script:fileDetectionPath -FileOrFolder $Script:fileDetectionName -Operator $Script:fileDetectionOperator -SizeinMBValue $Script:fileDetectionValue
+                }
+            }
+        }
+        "msi" {
+            return New-IntuneWin32AppDetectionRuleMsi -ProductCode $ProductCode -ProductVersion $Script:fileDetectionVersion
+        }
+        "registry" {
+            switch ($Script:registryDetectionMethod) {
+                "exists" {
+                    if ($Script:registryDetectionValue) {
+                        return New-IntuneWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:registryDetectionKey -ValueName $Script:registryDetectionValueName -DetectionType "exists"
+                    }
+                    else {
+                        return New-IntuneWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:registryDetectionKey -DetectionType "exists"
+                    }
+                }
+                "version" {
+                    return New-IntuneWin32AppDetectionRuleRegistry -VersionComparison -KeyPath $Script:registryDetectionKey -ValueName $Script:registryDetectionValueName -Check32BitOn64System $Script:is32BitApp -VersionComparisonOperator $Script:registryDetectionOperator -VersionComparisonValue $Script:registryDetectionValue
+                }
+                "integer" {
+                    return New-IntuneWin32AppDetectionRuleRegistry -IntegerComparison -KeyPath $Script:registryDetectionKey -ValueName $Script:registryDetectionValueName -Check32BitOn64System $Script:is32BitApp -IntegerComparisonOperator $Script:registryDetectionOperator -IntegerComparisonValue $Script:registryDetectionValue
+                }
+                "string" {
+                    return New-IntuneWin32AppDetectionRuleRegistry -StringComparison -KeyPath $Script:registryDetectionKey -ValueName $Script:registryDetectionValueName -Check32BitOn64System $Script:is32BitApp -StringComparisonOperator $Script:registryDetectionOperator -StringComparisonValue $Script:registryDetectionValue
+                }
+            }
+        }
+        "script" {
+            if (!(Test-Path $Script:SCRIPTS\$Script:id)) {
+                New-Item -Name $Script:id -ItemType Directory -Path $Script:SCRIPTS
+            }
+            $ScriptLocation = "$($Script:SCRIPTS)\$($Script:id)\$($Script:version).$($Script:detectionScriptFileExtension)"
+            Write-Output $Script:detectionScript | Out-File $ScriptLocation
+            return New-IntuneWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $Script:detectionScriptEnforceSignatureCheck -RunAs32Bit $Script:detectionScriptRunAs32Bit
+        }
+    }
+}
+
+# Function to add deployment with architecture filtering
+function Add-DeploymentWithArchitecture {
+    <#
+    .SYNOPSIS
+    Adds a deployment assignment with optional architecture filtering.
+    
+    .DESCRIPTION
+    This function handles the assignment of applications to groups with
+    optional architecture-specific filtering for ARM64 or AMD64.
+    
+    .PARAMETER AppId
+    The ID of the application to deploy.
+    
+    .PARAMETER GroupId
+    The ID of the group to deploy to.
+    
+    .PARAMETER Architecture
+    The target architecture (arm64, amd64, or default for no filtering).
+    #>
+    param(
+        [string]$AppId,
+        [string]$GroupId,
+        [string]$Architecture
+    )
+    
+    switch ($Architecture) {
+        "arm64" {
+            Write-Log "Architecture filter: ARM64"
+            Add-IntuneWin32AppAssignmentGroup -Include -ID $AppId -GroupID $GroupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:arm64FilterName)" | Out-Null
+        }
+        "amd64" {
+            Write-Log "Architecture filter: AMD64"
+            Add-IntuneWin32AppAssignmentGroup -Include -ID $AppId -GroupID $GroupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:amd64FilterName)" | Out-Null
+        }
+        default {
+            Write-Log "No architecture filter selected"
+            Add-IntuneWin32AppAssignmentGroup -Include -ID $AppId -GroupID $GroupId -Intent "available" -Notification "hideAll" | Out-Null
+        }
+    }
+}
+
+# Function to perform cleanup operations
+function Invoke-Cleanup {
+    <#
+    .SYNOPSIS
+    Performs cleanup operations on build and published directories.
+    
+    .DESCRIPTION
+    This function cleans up temporary files and directories created during
+    the application processing, with error handling for non-critical failures.
+    #>
+    Write-Log "Cleaning up the Buildspace..."
+    try {
+        Get-ChildItem $BUILDSPACE -Exclude ".gitkeep" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
     catch {
-        Write-Log "ERROR: There was an issue importing the application group! Exiting."
-        exit 3
+        Write-Log "Warning: Could not clean buildspace completely: $_"
+    }
+    
+    Write-Log "Removing .intunewin files..."
+    try {
+        Get-ChildItem $PUBLISHED -Exclude ".gitkeep" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Log "Warning: Could not clean published files completely: $_"
     }
 }
-else {
-    # Just do the one specified if -All is not specified
-    $Applications.Add($ApplicationId) | Out-Null
-}
 
+# Get the list of applications to process
+$Applications = Get-ApplicationsToProcess -ApplicationId $ApplicationId -Group $Group -All:$All -NoInteractive:$NoInteractive
 
+# Main processing loop
 foreach ($ApplicationId in $Applications) {
     Write-Log "Starting update for $ApplicationId..."
     # Refresh token if necessary
@@ -203,72 +558,14 @@ foreach ($ApplicationId in $Applications) {
         continue
     }
 
-    # Set all variables from default preferences and the application recipe
-    $Script:url = if ($parameters.urlRedirects -eq $true) {Get-RedirectedUrl $parameters.url} else {$parameters.url}
-    $Script:id = $parameters.id
-    $Script:version = $parameters.version
-    $Script:fileDetectionVersion = $parameters.fileDetectionVersion
-    $Script:displayName = $parameters.displayName
-    $Script:displayVersion = $parameters.displayVersion
-    $Script:fileName = $parameters.fileName
-    $Script:fileDetectionPath = $parameters.fileDetectionPath
-    $Script:preDownloadScript = if ($parameters.preDownloadScript) { [ScriptBlock]::Create($parameters.preDownloadScript)}
-    $Script:postDownloadScript = if ($parameters.postDownloadScript) { [ScriptBlock]::Create($parameters.postDownloadScript) }
-    $Script:downloadScript = if ($parameters.downloadScript) { [ScriptBlock]::Create($parameters.downloadScript) }
-    $Script:installScript = $parameters.installScript
-    $Script:uninstallScript = $parameters.uninstallScript
-    $Script:scopeTags = if($parameters.scopeTags) {$parameters.scopeTags} else {$prefs.defaultScopeTags}
-    $Script:owner = if($parameters.owner) {$parameters.owner} else {$prefs.defaultOwner}
-    $Script:maximumInstallationTimeInMinutes = if($parameters.maximumInstallationTimeInMinutes) {$parameters.maximumInstallationTimeInMinutes} else {$prefs.defaultMaximumInstallationTimeInMinutes}
-    $Script:minOSVersion = if($parameters.minOSVersion) {$parameters.minOSVersion} else {$prefs.defaultMinOSVersion}
-    $Script:installExperience = if($parameters.installExperience) {$parameters.installExperience} else {$prefs.defaultInstallExperience}
-    $Script:restartBehavior = if($parameters.restartBehavior) {$parameters.restartBehavior} else {$prefs.defaultRestartBehavior}
-    $Script:availableGroups = if($parameters.availableGroups) {$parameters.availableGroups} else {$prefs.defaultAvailableGroups}
-    $Script:requiredGroups = if($parameters.requiredGroups) {$parameters.requiredGroups} else {$prefs.defaultRequiredGroups}
-    $Script:defaultDeploymentGroups = if($parameters.defaultDeploymentGroups) {$parameters.defaultDeploymentGroups} else {$prefs.defaultDeploymentGroups}
-    $Script:detectionType = $parameters.detectionType
-    $Script:fileDetectionVersion = $parameters.fileDetectionVersion
-    $Script:fileDetectionMethod = $parameters.fileDetectionMethod
-    $Script:fileDetectionName = $parameters.fileDetectionName
-    $Script:fileDetectionOperator = $parameters.fileDetectionOperator
-    $Script:fileDetectionDateTime = $parameters.fileDetectionDateTime
-    $Script:fileDetectionValue = $parameters.fileDetectionValue
-    $Script:registryDetectionMethod = $parameters.registryDetectionMethod
-    $Script:registryDetectionKey = $parameters.registryDetectionKey
-    $Script:registryDetectionValueName = $parameters.registryDetectionValueName
-    $Script:registryDetectionValue = $parameters.registryDetectionValue
-    $Script:registryDetectionOperator = $parameters.registryDetectionOperator
-    $Script:detectionScript = $parameters.detectionScript
-    $Script:detectionScriptFileExtension = if($parameters.detectionScriptFileExtension) {$parameters.detectionScriptFileExtension} else {$prefs.defaultDetectionScriptFileExtension}
-    $Script:detectionScriptRunAs32Bit = if($parameters.detectionScriptRunAs32Bit) {$parameters.detectionScriptRunAs32Bit} else {$prefs.defaultdetectionScriptRunAs32Bit}
-    $Script:detectionScriptEnforceSignatureCheck = if($parameters.detectionScriptEnforceSignatureCheck) {$parameters.detectionScriptEnforceSignatureCheck} else {$prefs.defaultdetectionScriptEnforceSignatureCheck}
-    $Script:allowUserUninstall = if($parameters.allowUserUninstall) {$parameters.allowUserUninstall} else {$prefs.defaultAllowUserUninstall}
-    $Script:iconFile = $parameters.iconFile
-    $Script:description = $parameters.description
-    $Script:publisher = $parameters.publisher
-    $Script:is32BitApp = if($parameters.is32BitApp) {$parameters.is32BitApp} else {$prefs.defaultIs32BitApp}
-    $Script:arm64FilterName = $prefs.arm64FilterName
-    $Script:amd64FilterName = $prefs.amd64FilterName
-    $Script:architecture = if($parameters.architecture) {$parameters.architecture} else {$prefs.defaultArchitecture}
-    $Script:versionLock = $parameters.versionLock
-    $Script:deadlineDateOffset = if ($parameters.deadlineDateOffset) {$parameters.deadlineDateOffset} else {$prefs.defaultDeadlineDateOffset}
-    $Script:availableDateOffset = if ($parameters.availableDateOffset) {$parameters.availableDateOffset} else {$prefs.defaultAvailableDateOffset}
-    # If the version lock is set, set the max number of versions to keep to 1
-    if ($versionLock) {
-        $Script:numVersionsToKeep = 1
-        if($parameters.numVersionsToKeep -gt 1) {
-            Write-Log "Warning: Version lock is set, but numVersionsToKeep is set to $($parameters.numVersionsToKeep). This will be ignored."
-        }
-    }
-    else {
-        $Script:numVersionsToKeep = if($parameters.numVersionsToKeep) {$parameters.numVersionsToKeep} else {$prefs.defaultNumVersionsToKeep}
-    }
+    # Set all script variables from parameters and preferences
+    Set-ScriptVariables -Parameters $parameters -Preferences $prefs
 
 
     if ($Repair) {
         # Correct any naming discrepancies before we continue
         # Rename any apps if they are named incorrectly
-        $CurrentApps = Get-SameAppAllVersions $DisplayName
+        $CurrentApps = Get-SameAppAllVersions $displayName
         for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
             if ($CurrentApps[$i].DisplayName -ne "$displayName (N-$i)") {
                 Write-Log "Setting name for $displayName (N-$i)"
@@ -297,7 +594,7 @@ foreach ($ApplicationId in $Applications) {
 
     # Check if there is an up-to-date version in the repo already
     Write-Log "Checking if $displayName $version is a new version..."
-    $ExistingVersions = Get-SameAppAllVersions $DisplayName
+    $ExistingVersions = Get-SameAppAllVersions $displayName
     
     if (-not $ExistingVersions) {
         Write-Log "No existing versions found for $displayName. Continuing with update."
@@ -306,11 +603,13 @@ foreach ($ApplicationId in $Applications) {
     else {
         $VersionCompareResult = Compare-AppVersions $version $($ExistingVersions.displayVersion[0])
     }
-    if ($force) {
+    
+    # Check various conditions to determine if we should proceed
+    if ($Force) {
         Write-Log "Force flag is set. Forcing update of $displayName $version"
     }
-    elseif (Get-VersionLocked -Version $version -VersionLock $VersionLock) {
-        Write-Log "Version is locked to $VersionLock. Skipping update."
+    elseif (Get-VersionLocked -Version $version -VersionLock $versionLock) {
+        Write-Log "Version is locked to $versionLock. Skipping update."
         continue
     }
     elseif ($ExistingVersions.displayVersion -contains $version) {
@@ -353,20 +652,26 @@ foreach ($ApplicationId in $Applications) {
         Write-Error "URL is empty - cannot continue."
         continue
     }
+    
     if ($downloadScript) {
         try {
             Invoke-Command -ScriptBlock $downloadScript -NoNewScope
+            Write-Log "Download script ran successfully."
         }
         catch {
-            Write-Error "Error while running download PowerShell script"
+            Write-Error "Error while running download PowerShell script: $_"
             continue
         }
-
-        Write-Log "Download script ran successfully."
-
     }
     else {
-        Start-BitsTransfer -Source $url -Destination $BUILDSPACE\$id\$version\$fileName
+        try {
+            Start-BitsTransfer -Source $url -Destination $BUILDSPACE\$id\$version\$fileName
+            Write-Log "File downloaded successfully using BITS transfer."
+        }
+        catch {
+            Write-Error "Error downloading file: $_"
+            continue
+        }
     }
 
 
@@ -375,124 +680,38 @@ foreach ($ApplicationId in $Applications) {
         Write-Log "Running post download script..."
         try {
             Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
+            Write-Log "Post download script ran successfully."
         }
         catch {
-            Write-Error "Error while running post download PowerShell script"
+            Write-Error "Error while running post download PowerShell script: $_"
             continue
         }
-        Write-Log "Post download script ran successfully."
     }
     
 
-    # Script Files:
-    # Replace the <filename> placeholder with the actual filename
-    if ($installScript) {
-        $installScript = $installScript.replace("<filename>", $fileName)
+    # Handle script placeholder replacement
+    $productCode = ""
+    if ($fileName -match "\.msi$") {
+        $productCode = Get-MSIProductCode $BUILDSPACE\$id\$version\$fileName
+        Write-Log "Product Code: $productCode"
     }
-    if ($uninstallScript) {
-        $uninstallScript = $uninstallScript.replace("<filename>", $fileName)
-    }
-    if ($detectionScript) {
-        $detectionScript = $detectionScript.replace("<filename>", $fileName)
-    }
-    if ($registryDetectionKey) {
-        $registryDetectionKey = $registryDetectionKey.replace("<filename>", $fileName)
-    }
-
-
-    # Replace the <productcode> placeholder with the actual product code
-    if ($filename -match "\.msi$") {
-        $ProductCode = Get-MSIProductCode $BUILDSPACE\$id\$version\$fileName
-        Write-Log "Product Code: $ProductCode"
-        if ($installScript) {
-            $installScript = $installScript.replace("<productcode>", $productCode)
-        }
-        if ($uninstallScript) {
-            $uninstallScript = $uninstallScript.replace("<productcode>", $productCode)
-        }
-        if ($detectionScript) {
-            $detectionScript = $detectionScript.replace("<productcode>", $productCode)
-        }
-        if ($registryDetectionKey) {
-            $registryDetectionKey = $registryDetectionKey.replace("<productcode>", $productCode)
-        }
-    }
-
     
-    # Replace <version> placeholder with the actual version
-    if ($installScript) {
-        $installScript = $installScript.replace("<version>", $version)
-    }
-    if ($uninstallScript) {
-        $uninstallScript = $uninstallScript.replace("<version>", $version) 
-    }
-    if ($detectionScript) {
-        $detectionScript = $detectionScript.replace("<version>", $version) 
-    } 
-    if ($registryDetectionKey) {
-        $registryDetectionKey = $registryDetectionKey.replace("<version>", $version)
-    }  
+    Update-ScriptPlaceholders -FileName $fileName -ProductCode $productCode -Version $version  
 
 
     # Generate the .intunewin file
     Pop-Location
     Write-Log "Generating .intunewin file..."
-    $app = New-IntuneWin32AppPackage -SourceFolder $BUILDSPACE\$id\$version -SetupFile $filename -OutputFolder $PUBLISHED -Force
+    $app = New-IntuneWin32AppPackage -SourceFolder $BUILDSPACE\$id\$version -SetupFile $fileName -OutputFolder $PUBLISHED -Force
 
     # Upload .intunewin file to Intune
     # Detection Types
     $Icon = New-IntuneWin32AppIcon -FilePath "$($ICONS)\$($iconFile)"
-    if ( -not ($fileDetectionVersion)) {
+    if (-not $fileDetectionVersion) {
         $fileDetectionVersion = $version
     }
 
-    if ($detectionType -eq "file") {
-        if ($fileDetectionMethod -eq "exists") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleFile -Existence -DetectionType "exists" -Path $fileDetectionPath -FileOrFolder $fileDetectionName
-        }
-        elseif ($fileDetectionMethod -eq "modified") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleFile -DateModified -Path $fileDetectionPath -FileOrFolder $fileDetectionName -Operator $fileDetectionOperator -DateTimeValue $fileDetectionDateTime
-        }
-        elseif ($fileDetectionMethod -eq "created") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleFile -DateCreated -Path $fileDetectionPath -FileOrFolder $fileDetectionName -Operator $fileDetectionOperator -DateTimeValue (Get-Date $fileDetectionDateTime)
-        }
-        elseif ($fileDetectionMethod -eq "version") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleFile -Version -Path $fileDetectionPath -FileOrFolder $fileDetectionName -Operator $fileDetectionOperator -VersionValue $fileDetectionVersion
-        }
-        elseif ($fileDetectionMethod -eq "size") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleFile -Size -Path $fileDetectionPath -FileOrFolder $fileDetectionName -Operator $fileDetectionOperator -SizeinMBValue $fileDetectionValue
-        }
-    }
-    elseif ($detectionType -eq "msi") {
-        $DetectionRule = New-IntuneWin32AppDetectionRuleMsi -ProductCode "$ProductCode" -ProductVersion $fileDetectionVersion 
-    }
-    elseif ($detectionType -eq "registry") {
-        if($registryDetectionMethod -eq "exists") {
-            if ($registryDetectionValue) {
-                $DetectionRule = New-IntuneWin32AppDetectionRuleRegistry -Existence -KeyPath $registryDetectionKey -ValueName $registryDetectionValueName -DetectionType "exists"
-            }
-            else {
-                $DetectionRule = New-IntuneWin32AppDetectionRuleRegistry -Existence -KeyPath $registryDetectionKey -DetectionType "exists"
-            }
-        }
-        elseif($registryDetectionMethod -eq "version") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleRegistry -VersionComparison -KeyPath $registryDetectionKey -ValueName $registryDetectionValueName -Check32BitOn64System $is32BitApp -VersionComparisonOperator $registryDetectionOperator -VersionComparisonValue $registryDetectionValue
-        }
-        elseif($registryDetectionMethod -eq "integer") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleRegistry -IntegerComparison -KeyPath $registryDetectionKey -ValueName $registryDetectionValueName -Check32BitOn64System $is32BitApp -IntegerComparisonOperator $registryDetectionOperator -IntegerComparisonValue $registryDetectionValue
-        }
-        elseif($registryDetectionMethod -eq "string") {
-            $DetectionRule = New-IntuneWin32AppDetectionRuleRegistry -StringComparison -KeyPath $registryDetectionKey -ValueName $registryDetectionValueName -Check32BitOn64System $is32BitApp -StringComparisonOperator $registryDetectionOperator -StringComparisonValue $registryDetectionValue
-        }
-    }
-    elseif ($detectionType -eq "script") {
-        if (!(Test-Path $SCRIPTS\$id)) {
-            New-Item -Name $id -ItemType Directory -Path $SCRIPTS
-        }
-        $ScriptLocation = "$SCRIPTS\$id\$version.$detectionScriptFileExtension"
-        Write-Output $detectionScript | Out-File $ScriptLocation
-        $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $detectionScriptEnforceSignatureCheck -RunAs32Bit $detectionScriptRunAs32Bit
-    }
+    $DetectionRule = New-DetectionRule -DetectionType $detectionType -ProductCode $productCode
 
     # Generate the min OS requirement rule
     $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture "All" -MinimumSupportedWindowsRelease $minOSVersion
@@ -503,10 +722,10 @@ foreach ($ApplicationId in $Applications) {
     Write-Log "Uploading $displayName to Intune..."
     Connect-AutoMSIntuneGraph
     if ($allowUserUninstall) {
-        $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $DisplayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallScript -UninstallCommandLine $UninstallScript -Icon $Icon -AppVersion "$Version" -ScopeTagName $ScopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes -AllowAvailableUninstall
+        $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $displayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $installScript -UninstallCommandLine $uninstallScript -Icon $Icon -AppVersion "$version" -ScopeTagName $scopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes -AllowAvailableUninstall
     }
     else {
-        $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $DisplayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallScript -UninstallCommandLine $UninstallScript -Icon $Icon -AppVersion "$Version" -ScopeTagName $ScopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes
+        $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $displayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $installScript -UninstallCommandLine $uninstallScript -Icon $Icon -AppVersion "$version" -ScopeTagName $scopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes
     }
 
 
@@ -533,7 +752,7 @@ foreach ($ApplicationId in $Applications) {
     # Define the current version, the version that is one older but shares the same name, and all the ones older than that
     Write-Log "Updating local application manifest..."
     Start-Sleep -Seconds 4
-    $AllMatchingApps = Get-SameAppAllVersions $DisplayName 
+    $AllMatchingApps = Get-SameAppAllVersions $displayName 
     $CurrentApp = Get-IntuneWin32App -ID $Win32App.id
     $AllOldApps = $AllMatchingApps | Where-Object id -ne $Win32App.Id | Sort-Object displayName
     $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $displayName
@@ -578,21 +797,9 @@ foreach ($ApplicationId in $Applications) {
         $ID = $CurrentApp.Id
         $CurrentlyDeployedIDs = (Get-IntuneWin32AppAssignment -Id $ID).GroupID
         foreach ($DeploymentGroupID in $Script:defaultDeploymentGroups) {
-
             if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
                 Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
-                if ($Script:architectureFilterName -eq "arm64") {
-                    Write-Log "Architecture filter: ARM64"
-                    Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:arm64FilterName)" | Out-Null
-                }
-                if ($Script:architectureFilterName -eq "amd64") {
-                    Write-Log "Architecture filter: AMD64"
-                    Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:amd64FilterName)" | Out-Null
-                }
-                else {
-                    Write-Log "No architecture filter selected"
-                    Add-IntuneWin32AppAssignmentGroup -Include -ID $id -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
-                }
+                Add-DeploymentWithArchitecture -AppId $ID -GroupId $DeploymentGroupID -Architecture $Script:architecture
             }
         }
     }
@@ -616,13 +823,10 @@ foreach ($ApplicationId in $Applications) {
         }
     }
     Write-Log "Updates complete for $displayName"
-}   
+}
 
 # Clean up
-Write-Log "Cleaning up the Buildspace..."
-Get-ChildItem $BUILDSPACE -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
-Write-Log "Removing .intunewin files..."
-Get-ChildItem $PUBLISHED -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+Invoke-Cleanup
 
 # Return to the original directory
 Pop-Location
