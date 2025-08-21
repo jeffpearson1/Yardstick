@@ -6,8 +6,8 @@ preDownloadScript: |
   $URL = $URL + $FileName
   $Version = ($FileName | Select-String -Pattern "[0-9]{4}\.[0-9]{2}-[0-9]").Matches.Value
   $FileDetectionVersion = $Version
-installScript: '<filename> /S /InstallationType=AllUsers'
-uninstallScript: '"C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" /S'
+installScript: 'powershell.exe -ExecutionPolicy Bypass -Command Start-Process -Wait \"<filename>\" -ArgumentList \"/S /InstallationType=AllUsers /RegisterPython=1 /D=C:\ProgramData\Anaconda3\"; $procName = \"<filename>\".trim(\".exe\"); while ((Get-Process -Name \"_conda\" -ErrorAction SilentlyContinue) -or (Get-Process -Name \"$procName\" -ErrorAction SilentlyContinue)) {Start-Sleep -Seconds 5}'
+uninstallScript: 'powershell.exe -ExecutionPolicy Bypass -Command Start-Process -Wait \"C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe\" -ArgumentList \"/S\"; while (Get-Process -Name \"_conda\" -ErrorAction SilentlyContinue) {Start-Sleep -Seconds 5}; Remove-Item -Recurse -Force \"C:\ProgramData\anaconda3\"'
 iconFile: anaconda.png
 id: anaconda
 displayName: Anaconda
@@ -26,3 +26,6 @@ detectionScript: |
   exit 1
 installExperience: system
 maximumInstallationTimeInMinutes: 5
+scopeTags:
+  - scopeTag1
+  - scopeTag2
