@@ -9,7 +9,7 @@ preDownloadScript: |
   $version -match "[0-9]{1,3}\.[0-9]{1,3}" | Out-Null
   $fileDetectionPath = "C:\Program Files\Python$($matches[0] -replace `"\.`")"
 installScript:
-  '<filename> /quiet InstallAllUsers=1 PrependPath=1 Shortcuts=0'
+  '<filename> /quiet InstallAllUsers=1 PrependPath=1'
 uninstallScript:
   '<filename> /quiet /uninstall'
 version:
