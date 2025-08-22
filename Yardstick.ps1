@@ -538,291 +538,337 @@ function Invoke-Cleanup {
 # Get the list of applications to process
 $Applications = Get-ApplicationsToProcess -ApplicationId $ApplicationId -Group $Group -All:$All -NoInteractive:$NoInteractive
 
+# Initialize application tracking for email notifications
+Initialize-ApplicationTracker
+
+# Build run parameters string for email report
+$runParametersArray = @()
+if ($ApplicationId -ne "None") { $runParametersArray += "-ApplicationId $ApplicationId" }
+if ($Group) { $runParametersArray += "-Group $Group" }
+if ($All) { $runParametersArray += "-All" }
+if ($NoInteractive) { $runParametersArray += "-NoInteractive" }
+if ($Force) { $runParametersArray += "-Force" }
+if ($NoDelete) { $runParametersArray += "-NoDelete" }
+if ($Repair) { $runParametersArray += "-Repair" }
+$runParameters = $runParametersArray -join " "
+
 # Main processing loop
 foreach ($ApplicationId in $Applications) {
     Write-Log "Starting update for $ApplicationId..."
-    # Refresh token if necessary
-    Connect-AutoMSIntuneGraph
     
-    # Clear the temp file
-    Write-Log "Clearing the temp directory..."
-    Get-ChildItem $TEMP -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
-
-    # Open the YAML file and collect all necessary attributes
+    # Initialize variables for tracking
+    $currentDisplayName = $ApplicationId
+    
     try {
-        $appName = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "^$ApplicationId\.ya{0,1}ml")[0].FullName
-        $parameters = Get-Content "$appName" | ConvertFrom-Yaml
-    }
-    catch {
-        Write-Error "Unable to open parameters file for $ApplicationId"
-        continue
-    }
+        # Refresh token if necessary
+        Connect-AutoMSIntuneGraph
+        
+        # Clear the temp file
+        Write-Log "Clearing the temp directory..."
+        Get-ChildItem $TEMP -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
 
-    # Set all script variables from parameters and preferences
-    Set-ScriptVariables -Parameters $parameters -Preferences $prefs
+        # Open the YAML file and collect all necessary attributes
+        try {
+            $appName = (Get-ChildItem $RECIPES -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "^$ApplicationId\.ya{0,1}ml")[0].FullName
+            $parameters = Get-Content "$appName" | ConvertFrom-Yaml
+        }
+        catch {
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $ApplicationId -Version "Unknown" -ErrorMessage "Unable to open parameters file for $ApplicationId" -FailureStage "Configuration"
+            Write-Error "Unable to open parameters file for $ApplicationId"
+            continue
+        }
+
+        # Set all script variables from parameters and preferences
+        Set-ScriptVariables -Parameters $parameters -Preferences $prefs
+        
+        # Update tracking variables with actual values
+        $currentDisplayName = $displayName
 
 
-    if ($Repair) {
-        # Correct any naming discrepancies before we continue
-        # Rename any apps if they are named incorrectly
-        $CurrentApps = Get-SameAppAllVersions $displayName
-        for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
-            if ($CurrentApps[$i].DisplayName -ne "$displayName (N-$i)") {
-                Write-Log "Setting name for $displayName (N-$i)"
-                Set-IntuneWin32App -Id $CurrentApps[$i].Id -DisplayName "$displayName (N-$i)"
+        if ($Repair) {
+            # Correct any naming discrepancies before we continue
+            # Rename any apps if they are named incorrectly
+            $CurrentApps = Get-SameAppAllVersions $displayName
+            for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
+                if ($CurrentApps[$i].DisplayName -ne "$displayName (N-$i)") {
+                    Write-Log "Setting name for $displayName (N-$i)"
+                    Set-IntuneWin32App -Id $CurrentApps[$i].Id -DisplayName "$displayName (N-$i)"
+                }
             }
         }
-    }
 
 
-    # Run the pre-download script
-    if ($preDownloadScript) {
-        Write-Log "Running pre-download script..."
-        try {
-            Invoke-Command -ScriptBlock $preDownloadScript -NoNewScope
+        # Run the pre-download script
+        if ($preDownloadScript) {
+            Write-Log "Running pre-download script..."
+            try {
+                Invoke-Command -ScriptBlock $preDownloadScript -NoNewScope
+                Write-Log "Pre-download script ran successfully."
+            }
+            catch {
+                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "Error while running pre-download PowerShell script: $_" -FailureStage "Pre-Download Script"
+                Write-Error "Error while running pre-download PowerShell script"
+                continue
+            }
         }
-        catch {
-            Write-Error "Error while running pre-download PowerShell script"
+        else {
+            Write-Log "Skipping Pre-download script"
+        }
+        # Check if there is an up-to-date version in the repo already
+        Write-Log "Checking if $displayName $version is a new version..."
+        $ExistingVersions = Get-SameAppAllVersions $displayName
+        
+        if (-not $ExistingVersions) {
+            Write-Log "No existing versions found for $displayName. Continuing with update."
+            $VersionCompareResult = 0
+        }
+        else {
+            $VersionCompareResult = Compare-AppVersions $version $($ExistingVersions.displayVersion[0])
+        }
+        
+        # Check various conditions to determine if we should proceed
+        if ($Force) {
+            Write-Log "Force flag is set. Forcing update of $displayName $version"
+        }
+        elseif (Get-VersionLocked -Version $version -VersionLock $versionLock) {
+            Write-Log "Version is locked to $versionLock. Skipping update."
             continue
         }
-        Write-Log "Pre-download script ran successfully."
-    }
-    else {
-        Write-Log "Skipping Pre-download script"
-    }
-
-
-    # Check if there is an up-to-date version in the repo already
-    Write-Log "Checking if $displayName $version is a new version..."
-    $ExistingVersions = Get-SameAppAllVersions $displayName
-    
-    if (-not $ExistingVersions) {
-        Write-Log "No existing versions found for $displayName. Continuing with update."
-        $VersionCompareResult = 0
-    }
-    else {
-        $VersionCompareResult = Compare-AppVersions $version $($ExistingVersions.displayVersion[0])
-    }
-    
-    # Check various conditions to determine if we should proceed
-    if ($Force) {
-        Write-Log "Force flag is set. Forcing update of $displayName $version"
-    }
-    elseif (Get-VersionLocked -Version $version -VersionLock $versionLock) {
-        Write-Log "Version is locked to $versionLock. Skipping update."
-        continue
-    }
-    elseif ($ExistingVersions.displayVersion -contains $version) {
-        Write-Log "$id $displayName $version is already in the repo. Skipping update."
-        continue
-    }
-    elseif ($VersionCompareResult -eq 1) {
-        Write-Log "$displayName $version is a newer version. Continuing with update."
-    }
-    elseif ($VersionCompareResult -eq -1) {
-        Write-Log "$displayName $version is older than the currently newest available version $($ExistingVersions.displayVersion[0]). Skipping update."
-        continue
-    }
-
-
-    # See if this has been run before. If there are previous files, move them to a folder called "Old"
-    if (Test-Path $BUILDSPACE\$id) {
-        if (-not (Test-Path $BUILDSPACE\Old)) {
-            New-Item -Path $BUILDSPACE -ItemType Directory -Name "Old"
-        }
-        Write-Log "Removing old Buildspace..."
-        Move-Item -Path $BUILDSPACE\$id $BUILDSPACE\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
-    }
-    if (Test-Path $SCRIPTS\$id) {
-        if (-not (Test-Path $SCRIPTS\Old)) {
-            New-Item -Path $SCRIPTS -ItemType Directory -Name "Old"
-        }
-        Write-Log "Removing old script space..."
-        Move-Item -Path $SCRIPTS\$id $SCRIPTS\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
-    }
-
-    # Make the new BUILDSPACE directory
-    New-Item -Path $BUILDSPACE\$id -ItemType Directory -Name $version
-    Push-Location $BUILDSPACE\$id\$version
-
-    # Download the new installer
-    Write-Log "Starting download..."
-    Write-Log "URL: $url"
-    if (!$url) {
-        Write-Error "URL is empty - cannot continue."
-        continue
-    }
-    
-    if ($downloadScript) {
-        try {
-            Invoke-Command -ScriptBlock $downloadScript -NoNewScope
-            Write-Log "Download script ran successfully."
-        }
-        catch {
-            Write-Error "Error while running download PowerShell script: $_"
+        elseif ($ExistingVersions.displayVersion -contains $version) {
+            Write-Log "$id $displayName $version is already in the repo. Skipping update."
             continue
         }
-    }
-    else {
-        try {
-            Start-BitsTransfer -Source $url -Destination $BUILDSPACE\$id\$version\$fileName
-            Write-Log "File downloaded successfully using BITS transfer."
+        elseif ($VersionCompareResult -eq 1) {
+            Write-Log "$displayName $version is a newer version. Continuing with update."
         }
-        catch {
-            Write-Error "Error downloading file: $_"
+        elseif ($VersionCompareResult -eq -1) {
+            Write-Log "$displayName $version is older than the currently newest available version $($ExistingVersions.displayVersion[0]). Skipping update."
             continue
         }
-    }
 
 
-    # Run the post-download script
-    if ($postDownloadScript) {
-        Write-Log "Running post download script..."
-        try {
-            Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
-            Write-Log "Post download script ran successfully."
+        # See if this has been run before. If there are previous files, move them to a folder called "Old"
+        if (Test-Path $BUILDSPACE\$id) {
+            if (-not (Test-Path $BUILDSPACE\Old)) {
+                New-Item -Path $BUILDSPACE -ItemType Directory -Name "Old"
+            }
+            Write-Log "Removing old Buildspace..."
+            Move-Item -Path $BUILDSPACE\$id $BUILDSPACE\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
         }
-        catch {
-            Write-Error "Error while running post download PowerShell script: $_"
+        if (Test-Path $SCRIPTS\$id) {
+            if (-not (Test-Path $SCRIPTS\Old)) {
+                New-Item -Path $SCRIPTS -ItemType Directory -Name "Old"
+            }
+            Write-Log "Removing old script space..."
+            Move-Item -Path $SCRIPTS\$id $SCRIPTS\Old\$id-$(Get-Date -Format "MMddyyhhmmss")
+        }
+
+        # Make the new BUILDSPACE directory
+        New-Item -Path $BUILDSPACE\$id -ItemType Directory -Name $version
+        Push-Location $BUILDSPACE\$id\$version
+
+        # Download the new installer
+        Write-Log "Starting download..."
+        Write-Log "URL: $url"
+        if (!$url) {
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "URL is empty - cannot continue" -FailureStage "Download"
+            Write-Error "URL is empty - cannot continue."
             continue
         }
-    }
-    
-
-    # Handle script placeholder replacement
-    $productCode = ""
-    if ($fileName -match "\.msi$") {
-        $productCode = Get-MSIProductCode $BUILDSPACE\$id\$version\$fileName
-        Write-Log "Product Code: $productCode"
-    }
-    
-    Update-ScriptPlaceholders -FileName $fileName -ProductCode $productCode -Version $version  
-
-
-    # Generate the .intunewin file
-    Pop-Location
-    Write-Log "Generating .intunewin file..."
-    $app = New-IntuneWin32AppPackage -SourceFolder $BUILDSPACE\$id\$version -SetupFile $fileName -OutputFolder $PUBLISHED -Force
-
-    # Upload .intunewin file to Intune
-    # Detection Types
-    $Icon = New-IntuneWin32AppIcon -FilePath "$($ICONS)\$($iconFile)"
-    if (-not $fileDetectionVersion) {
-        $fileDetectionVersion = $version
-    }
-
-    $DetectionRule = New-DetectionRule -DetectionType $detectionType -ProductCode $productCode
-
-    # Generate the min OS requirement rule
-    $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture "All" -MinimumSupportedWindowsRelease $minOSVersion
-
-
-
-    # Create the Intune App
-    Write-Log "Uploading $displayName to Intune..."
-    Connect-AutoMSIntuneGraph
-    if ($allowUserUninstall) {
-        $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $displayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $installScript -UninstallCommandLine $uninstallScript -Icon $Icon -AppVersion "$version" -ScopeTagName $scopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes -AllowAvailableUninstall
-    }
-    else {
-        $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $displayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $installScript -UninstallCommandLine $uninstallScript -Icon $Icon -AppVersion "$version" -ScopeTagName $scopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes
-    }
-
-
-
-    ###################################################
-    # MIGRATE OLD DEPLOYMENTS
-    ###################################################
-
-
-    # Check if any existing applications have the same version so we can delete them
-    $ToRemove = $ExistingVersions | where-object displayVersion -eq $version
-    if ($ToRemove) {
-        # Remove conflicting versions
-        Write-Log "Removing conflicting versions"
-        $CurrentApp = Get-IntuneWin32App -Id $Win32App.id
-        foreach ($RemoveApp in $ToRemove) {
-            Write-Log "Moving assignments before removal..."
-            Move-AssignmentsAndDependencies -From $RemoveApp -To $CurrentApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
-            Write-Log "Removing App with ID $($RemoveApp.id)"
-            Remove-IntuneWin32App -Id $RemoveApp.id
+        
+        if ($downloadScript) {
+            try {
+                Invoke-Command -ScriptBlock $downloadScript -NoNewScope
+                Write-Log "Download script ran successfully."
+            }
+            catch {
+                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "Error while running download PowerShell script: $_" -FailureStage "Download Script"
+                Write-Error "Error while running download PowerShell script: $_"
+                continue
+            }
         }
-    }
+        else {
+            try {
+                Start-BitsTransfer -Source $url -Destination $BUILDSPACE\$id\$version\$fileName
+                Write-Log "File downloaded successfully using BITS transfer."
+            }
+            catch {
+                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "Error downloading file: $_" -FailureStage "Download"
+                Write-Error "Error downloading file: $_"
+                continue
+            }
+        }
+        # Run the post-download script
+        if ($postDownloadScript) {
+            Write-Log "Running post download script..."
+            try {
+                Invoke-Command -ScriptBlock $postDownloadScript -NoNewScope
+                Write-Log "Post download script ran successfully."
+            }
+            catch {
+                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "Error while running post download PowerShell script: $_" -FailureStage "Post-Download Script"
+                Write-Error "Error while running post download PowerShell script: $_"
+                continue
+            }
+        }
+        # Handle script placeholder replacement
+        $productCode = ""
+        if ($fileName -match "\.msi$") {
+            $productCode = Get-MSIProductCode $BUILDSPACE\$id\$version\$fileName
+            Write-Log "Product Code: $productCode"
+        }
+        
+        Update-ScriptPlaceholders -FileName $fileName -ProductCode $productCode -Version $version  
 
-    # Define the current version, the version that is one older but shares the same name, and all the ones older than that
-    Write-Log "Updating local application manifest..."
-    Start-Sleep -Seconds 4
-    $AllMatchingApps = Get-SameAppAllVersions $displayName 
-    $CurrentApp = Get-IntuneWin32App -ID $Win32App.id
-    $AllOldApps = $AllMatchingApps | Where-Object id -ne $Win32App.Id | Sort-Object displayName
-    $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $displayName
-    $NMinusTwoAndOlderApps = $AllOldApps | Where-Object displayName -ne $displayName
 
-    
+        # Generate the .intunewin file
+        Pop-Location
+        Write-Log "Generating .intunewin file..."
+        $app = New-IntuneWin32AppPackage -SourceFolder $BUILDSPACE\$id\$version -SetupFile $fileName -OutputFolder $PUBLISHED -Force
 
-    # Start with the N-1 app first and move all its deployments to the newest one
-    if ($NMinusOneApps) {
-        foreach ($NMinusOneApp in $NMinusOneApps) {
-            if ($CurrentApp) {
-                Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
-                Move-AssignmentsAndDependencies -From $NMinusOneApp -To $CurrentApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
+        # Upload .intunewin file to Intune
+        # Detection Types
+        $Icon = New-IntuneWin32AppIcon -FilePath "$($ICONS)\$($iconFile)"
+        if (-not $fileDetectionVersion) {
+            $fileDetectionVersion = $version
+        }
 
+        $DetectionRule = New-DetectionRule -DetectionType $detectionType -ProductCode $productCode
+
+        # Generate the min OS requirement rule
+        $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture "All" -MinimumSupportedWindowsRelease $minOSVersion
+
+
+
+        # Create the Intune App
+        Write-Log "Uploading $displayName to Intune..."
+        Connect-AutoMSIntuneGraph
+        try {
+            if ($allowUserUninstall) {
+                $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $displayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $installScript -UninstallCommandLine $uninstallScript -Icon $Icon -AppVersion "$version" -ScopeTagName $scopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes -AllowAvailableUninstall
             }
             else {
-                Write-Log "There was an error fetching information about the current application. Exiting"
-                Exit 5
+                $Win32App = Add-IntuneWin32App -FilePath $app.path -DisplayName $displayName -Description $description -Publisher $publisher -InstallExperience $installExperience -RestartBehavior $restartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $installScript -UninstallCommandLine $uninstallScript -Icon $Icon -AppVersion "$version" -ScopeTagName $scopeTags -Owner $owner -MaximumInstallationTimeInMinutes $maximumInstallationTimeInMinutes
             }
+            Write-Log "Successfully uploaded $displayName to Intune"
         }
-    }
-    if ($($NMinusOneApps.count) -gt 1) {
-        $NewestNMinusOneApp = ($NMinusOneApps | Sort-Object createdDateTime -Descending)[0]
-    }
-    for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
-        # Move all the deployments up one number
-        if ($i -eq 0) {
-            # Move the app assignments in the 0 position to the nminusoneapp
-            if ($NMinusTwoAndOlderApps[$i] -and $NewestNMinusOneApp) {
-                Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
-            }
+        catch {
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
+            Write-Error "Failed to upload application to Intune: $_"
+            continue
         }
-        else {
-            if ($NMinusTwoAndOlderApps[$i] -and $NMinusTwoAndOlderApps[$i - 1]) {
-                Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1] -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
-            }
-        }
-    }
 
-    # Add the default deployments if they're not already there from the migration
-    if ($Script:defaultDeploymentGroups) {
-        $ID = $CurrentApp.Id
-        $CurrentlyDeployedIDs = (Get-IntuneWin32AppAssignment -Id $ID).GroupID
-        foreach ($DeploymentGroupID in $Script:defaultDeploymentGroups) {
-            if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
-                Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
-                Add-DeploymentWithArchitecture -AppId $ID -GroupId $DeploymentGroupID -Architecture $Script:architecture
+        ###################################################
+        # MIGRATE OLD DEPLOYMENTS
+        ###################################################
+
+
+        # Check if any existing applications have the same version so we can delete them
+        $ToRemove = $ExistingVersions | where-object displayVersion -eq $version
+        if ($ToRemove) {
+            # Remove conflicting versions
+            Write-Log "Removing conflicting versions"
+            $CurrentApp = Get-IntuneWin32App -Id $Win32App.id
+            foreach ($RemoveApp in $ToRemove) {
+                Write-Log "Moving assignments before removal..."
+                Move-AssignmentsAndDependencies -From $RemoveApp -To $CurrentApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
+                Write-Log "Removing App with ID $($RemoveApp.id)"
+                Remove-IntuneWin32App -Id $RemoveApp.id
             }
         }
-    }
 
-    # Rename all the old applications to have the appropriate N-<versions behind> in them
-    for ($i = 1; $i -lt $AllMatchingApps.count; $i++) {
-        Set-IntuneWin32App -Id $AllMatchingApps[$i].Id -DisplayName "$($displayName) (N-$i)"
-        if ($?) {
-            Write-Log "Successfully set Application Name to $($displayName) (N-$i)"
-        }
-        else {
-            Write-Log "ERROR: Failed to update display name to $($displayName) (N-$i)"
-        }
-    }
+        # Define the current version, the version that is one older but shares the same name, and all the ones older than that
+        Write-Log "Updating local application manifest..."
+        Start-Sleep -Seconds 4
+        $AllMatchingApps = Get-SameAppAllVersions $displayName 
+        $CurrentApp = Get-IntuneWin32App -ID $Win32App.id
+        $AllOldApps = $AllMatchingApps | Where-Object id -ne $Win32App.Id | Sort-Object displayName
+        $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $displayName
+        $NMinusTwoAndOlderApps = $AllOldApps | Where-Object displayName -ne $displayName
+
     
-    # Remove all the old versions 
-    if (!$NoDelete) {
-        for ($i = $numVersionsToKeep - 1; $i -lt $AllOldApps.count; $i++) {
-            Write-Log "Removing old app with id $($AllOldApps[$i].id)"
-            Remove-IntuneWin32App -Id $AllOldApps[$i].id
+
+        # Start with the N-1 app first and move all its deployments to the newest one
+        if ($NMinusOneApps) {
+            foreach ($NMinusOneApp in $NMinusOneApps) {
+                if ($CurrentApp) {
+                    Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
+                    Move-AssignmentsAndDependencies -From $NMinusOneApp -To $CurrentApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
+
+                }
+                else {
+                    Write-Log "There was an error fetching information about the current application. Exiting"
+                    Exit 5
+                }
+            }
+        }
+        if ($($NMinusOneApps.count) -gt 1) {
+            $NewestNMinusOneApp = ($NMinusOneApps | Sort-Object createdDateTime -Descending)[0]
+        }
+        for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
+            # Move all the deployments up one number
+            if ($i -eq 0) {
+                # Move the app assignments in the 0 position to the nminusoneapp
+                if ($NMinusTwoAndOlderApps[$i] -and $NewestNMinusOneApp) {
+                    Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
+                }
+            }
+            else {
+                if ($NMinusTwoAndOlderApps[$i] -and $NMinusTwoAndOlderApps[$i - 1]) {
+                    Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1] -AvailableDateOffset $Script:availableDateOffset -DeadlineDateOffset $Script:deadlineDateOffset
+                }
+            }
+        }
+
+        # Add the default deployments if they're not already there from the migration
+        if ($Script:defaultDeploymentGroups) {
+            $ID = $CurrentApp.Id
+            $CurrentlyDeployedIDs = (Get-IntuneWin32AppAssignment -Id $ID).GroupID
+            foreach ($DeploymentGroupID in $Script:defaultDeploymentGroups) {
+                if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
+                    Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
+                    Add-DeploymentWithArchitecture -AppId $ID -GroupId $DeploymentGroupID -Architecture $Script:architecture
+                }
+            }
+        }
+
+        # Rename all the old applications to have the appropriate N-<versions behind> in them
+        for ($i = 1; $i -lt $AllMatchingApps.count; $i++) {
+            Set-IntuneWin32App -Id $AllMatchingApps[$i].Id -DisplayName "$($displayName) (N-$i)"
+            if ($?) {
+                Write-Log "Successfully set Application Name to $($displayName) (N-$i)"
+            }
+            else {
+                Write-Log "ERROR: Failed to update display name to $($displayName) (N-$i)"
+            }
+        }
+    
+        # Remove all the old versions 
+        if (!$NoDelete) {
+            for ($i = $numVersionsToKeep - 1; $i -lt $AllOldApps.count; $i++) {
+                Write-Log "Removing old app with id $($AllOldApps[$i].id)"
+                Remove-IntuneWin32App -Id $AllOldApps[$i].id
+            }
+            
+            # If we get here, the application was processed successfully
+            $actionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
+            Add-SuccessfulApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -Action $actionPerformed
+            Write-Log "Updates complete for $displayName"
         }
     }
-    Write-Log "Updates complete for $displayName"
+    catch {
+        # Catch any unexpected errors during processing
+        Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "Unexpected error during processing: $_" -FailureStage "General Processing"
+        Write-Log "ERROR: Unexpected error processing $ApplicationId : $_"
+    }
+}
+
+# Send email report if enabled
+try {
+    Send-YardstickEmailReport -Preferences $prefs -RunParameters $runParameters
+}
+catch {
+    Write-Log "WARNING: Failed to send email report: $_"
 }
 
 # Clean up

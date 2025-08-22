@@ -47,3 +47,13 @@ defaultScopeTags:
   - Scope Tags Go Here (Can be Multiple)
 defaultDeploymentGroups:
   - Group IDs go here and will receive a default available deployment for testing purposes
+
+
+#####################################
+# EMAIL NOTIFICATION SETTINGS
+#####################################
+emailNotificationEnabled: false
+emailRecipient: "admin@yourorganization.com"
+emailSubject: "Yardstick Application Update Report"
+emailSenderName: "Yardstick Automation"
+emailSendFromAddress: "noreply@yourorganization.com"

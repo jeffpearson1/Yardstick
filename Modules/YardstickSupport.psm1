@@ -674,3 +674,352 @@ function Compare-AppVersions {
     return 0
 }
 
+#################################################
+# EMAIL NOTIFICATION FUNCTIONS
+#################################################
+
+function Initialize-ApplicationTracker {
+    <#
+    .SYNOPSIS
+    Initializes the application tracking arrays for success/failure reporting.
+    
+    .DESCRIPTION
+    Creates script-scoped arrays to track successful and failed application updates
+    for later use in email notifications.
+    #>
+    $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
+    $Script:FailedApplications = [System.Collections.Generic.List[PSObject]]::new()
+}
+
+function Add-SuccessfulApplication {
+    <#
+    .SYNOPSIS
+    Adds an application to the successful applications tracking list.
+    
+    .DESCRIPTION
+    Records details of a successfully processed application for inclusion
+    in the summary email notification.
+    
+    .PARAMETER ApplicationId
+    The ID of the application that was successfully processed.
+    
+    .PARAMETER DisplayName
+    The display name of the application.
+    
+    .PARAMETER Version
+    The version of the application that was processed.
+    
+    .PARAMETER Action
+    The action that was performed (e.g., "Updated", "Added", "Repaired").
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ApplicationId,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$DisplayName,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$Version,
+        
+        [string]$Action = "Updated"
+    )
+    
+    if (-not $Script:SuccessfulApplications) {
+        Initialize-ApplicationTracker
+    }
+    
+    $appInfo = [PSCustomObject]@{
+        ApplicationId = $ApplicationId
+        DisplayName = $DisplayName
+        Version = $Version
+        Action = $Action
+        Timestamp = Get-Date
+    }
+    
+    $Script:SuccessfulApplications.Add($appInfo)
+    Write-Log "Tracked successful application: $DisplayName $Version"
+}
+
+function Add-FailedApplication {
+    <#
+    .SYNOPSIS
+    Adds an application to the failed applications tracking list.
+    
+    .DESCRIPTION
+    Records details of a failed application processing attempt for inclusion
+    in the summary email notification.
+    
+    .PARAMETER ApplicationId
+    The ID of the application that failed to process.
+    
+    .PARAMETER DisplayName
+    The display name of the application.
+    
+    .PARAMETER Version
+    The version of the application that failed to process.
+    
+    .PARAMETER ErrorMessage
+    The error message describing why the application failed.
+    
+    .PARAMETER FailureStage
+    The stage at which the failure occurred (e.g., "Download", "Upload", "Configuration").
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ApplicationId,
+        
+        [string]$DisplayName = "Unknown",
+        
+        [string]$Version = "Unknown",
+        
+        [Parameter(Mandatory=$true)]
+        [string]$ErrorMessage,
+        
+        [string]$FailureStage = "Processing"
+    )
+    
+    if (-not $Script:FailedApplications) {
+        Initialize-ApplicationTracker
+    }
+    
+    $appInfo = [PSCustomObject]@{
+        ApplicationId = $ApplicationId
+        DisplayName = $DisplayName
+        Version = $Version
+        ErrorMessage = $ErrorMessage
+        FailureStage = $FailureStage
+        Timestamp = Get-Date
+    }
+    
+    $Script:FailedApplications.Add($appInfo)
+    Write-Log "Tracked failed application: $ApplicationId - $ErrorMessage"
+}
+
+function Test-OutlookAvailability {
+    <#
+    .SYNOPSIS
+    Tests if Microsoft Outlook is available via COM object.
+    
+    .DESCRIPTION
+    Checks if Outlook is installed and accessible through COM automation
+    for sending email notifications.
+    
+    .OUTPUTS
+    Boolean indicating whether Outlook is available.
+    #>
+    try {
+        $outlook = New-Object -ComObject "Outlook.Application"
+        $outlook = $null
+        [System.GC]::Collect()
+        return $true
+    }
+    catch {
+        Write-Log "Outlook COM object not available: $_"
+        return $false
+    }
+}
+
+function Send-YardstickEmailReport {
+    <#
+    .SYNOPSIS
+    Sends an email report of application processing results using Outlook COM.
+    
+    .DESCRIPTION
+    Creates and sends an email summary of successful and failed application
+    updates using Microsoft Outlook's COM interface.
+    
+    .PARAMETER Preferences
+    Hashtable containing email configuration preferences.
+    
+    .PARAMETER RunParameters
+    String describing the parameters used for this Yardstick run.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Preferences,
+        
+        [string]$RunParameters = ""
+    )
+    
+    # Check if email notifications are enabled
+    if (-not $Preferences.emailNotificationEnabled) {
+        Write-Log "Email notifications are disabled in preferences"
+        return
+    }
+    
+    # Validate required email settings
+    $requiredSettings = @('emailRecipient', 'emailSubject', 'emailSenderName')
+    foreach ($setting in $requiredSettings) {
+        if (-not $Preferences[$setting]) {
+            Write-Log "WARNING: Email setting '$setting' not configured. Skipping email notification."
+            return
+        }
+    }
+    
+    # Check if Outlook is available
+    if (-not (Test-OutlookAvailability)) {
+        Write-Log "WARNING: Outlook is not available. Cannot send email notification."
+        return
+    }
+    
+    # Initialize tracking arrays if they don't exist
+    if (-not $Script:SuccessfulApplications) {
+        $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
+    }
+    if (-not $Script:FailedApplications) {
+        $Script:FailedApplications = [System.Collections.Generic.List[PSObject]]::new()
+    }
+    
+    try {
+        Write-Log "Creating email report for Yardstick run"
+        
+        # Create Outlook application and mail item
+        $outlook = New-Object -ComObject "Outlook.Application"
+        $mail = $outlook.CreateItem(0)  # 0 = olMailItem
+        
+        # Set email properties
+        $mail.To = $Preferences.emailRecipient
+        $mail.Subject = $Preferences.emailSubject
+        if ($Preferences.emailSendFromAddress) {
+            $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
+        }
+        
+        # Build email body
+        $emailBody = @"
+<html>
+<head>
+    <style>
+        body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; }
+        .header { background-color: #0078d4; color: white; padding: 15px; border-radius: 5px 5px 0 0; }
+        .content { background-color: #f8f9fa; padding: 20px; border: 1px solid #dee2e6; }
+        .summary { background-color: #e7f3ff; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #0078d4; }
+        .success { background-color: #d4edda; border-left: 4px solid #28a745; }
+        .failure { background-color: #f8d7da; border-left: 4px solid #dc3545; }
+        .app-list { margin: 10px 0; }
+        .app-item { margin: 8px 0; padding: 8px; background-color: white; border-radius: 3px; }
+        .timestamp { color: #6c757d; font-size: 0.9em; }
+        .error-message { color: #dc3545; font-family: monospace; margin-top: 5px; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>🚀 Yardstick Application Update Report</h2>
+        <p>Generated by: $($Preferences.emailSenderName)</p>
+        <p>Run Time: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss")</p>
+$(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
+    </div>
+    
+    <div class="content">
+        <div class="summary">
+            <h3>📊 Summary</h3>
+            <p><strong>✅ Successful Applications:</strong> $($Script:SuccessfulApplications.Count)</p>
+            <p><strong>❌ Failed Applications:</strong> $($Script:FailedApplications.Count)</p>
+            <p><strong>📈 Total Processed:</strong> $($Script:SuccessfulApplications.Count + $Script:FailedApplications.Count)</p>
+        </div>
+"@
+
+        # Add successful applications section
+        if ($Script:SuccessfulApplications.Count -gt 0) {
+            $emailBody += @"
+        
+        <div class="summary success">
+            <h3>✅ Successful Applications</h3>
+            <table>
+                <tr>
+                    <th>Application</th>
+                    <th>Version</th>
+                    <th>Action</th>
+                    <th>Time</th>
+                </tr>
+"@
+            foreach ($app in $Script:SuccessfulApplications) {
+                $emailBody += @"
+                <tr>
+                    <td><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
+                    <td>$($app.Version)</td>
+                    <td>$($app.Action)</td>
+                    <td class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
+                </tr>
+"@
+            }
+            $emailBody += @"
+            </table>
+        </div>
+"@
+        }
+
+        # Add failed applications section
+        if ($Script:FailedApplications.Count -gt 0) {
+            $emailBody += @"
+        
+        <div class="summary failure">
+            <h3>❌ Failed Applications</h3>
+            <table>
+                <tr>
+                    <th>Application</th>
+                    <th>Version</th>
+                    <th>Failure Stage</th>
+                    <th>Error</th>
+                    <th>Time</th>
+                </tr>
+"@
+            foreach ($app in $Script:FailedApplications) {
+                $emailBody += @"
+                <tr>
+                    <td><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
+                    <td>$($app.Version)</td>
+                    <td>$($app.FailureStage)</td>
+                    <td class="error-message">$($app.ErrorMessage)</td>
+                    <td class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
+                </tr>
+"@
+            }
+            $emailBody += @"
+            </table>
+        </div>
+"@
+        }
+
+        # Add footer
+        $emailBody += @"
+        
+        <hr style="margin: 20px 0;">
+        <p class="timestamp">
+            <small>
+                This report was automatically generated by Yardstick.<br>
+                Log file location: $Global:LOG_LOCATION\$Global:LOG_FILE
+            </small>
+        </p>
+    </div>
+</body>
+</html>
+"@
+
+        # Set email body and send
+        $mail.HTMLBody = $emailBody
+        $mail.Send()
+        
+        Write-Log "Email report sent successfully to $($Preferences.emailRecipient)"
+        
+        # Clean up COM objects
+        $mail = $null
+        $outlook = $null
+        [System.GC]::Collect()
+    }
+    catch {
+        Write-Log "ERROR: Failed to send email report: $_"
+        # Clean up COM objects even on error
+        try {
+            $mail = $null
+            $outlook = $null
+            [System.GC]::Collect()
+        } catch { }
+    }
+}
+
+# Export all functions for module availability
+Export-ModuleMember -Function *
