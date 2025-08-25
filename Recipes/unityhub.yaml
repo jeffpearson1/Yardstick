@@ -3,7 +3,7 @@ urlredirects: false
 preDownloadScript: |
   $vURL = "https://unity.com/unity-hub/release-notes"
   $content = Invoke-WebRequest $vURL
-  $content.content -match "(?<=id\=`")[0-9]\.[0-9]\.[0-9]" | Out-Null
+  $content.content -match "(?<=/unity-hub/release-notes#)([0-9]{1,3}\.{0,1}){3}" | Out-Null
   $version = $matches[0]
 filename: UnityHubSetup.exe
 installScript: UnityHubSetup.exe /S
