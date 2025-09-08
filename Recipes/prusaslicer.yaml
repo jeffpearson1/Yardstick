@@ -1,0 +1,38 @@
+url: https://github.com/prusa3d/PrusaSlicer
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "PrusaSlicer-.*-win64\.zip$"
+  $versionRegex = "(\.{0,1}[0-9]{1,2}){2,4}"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $Version = $downloader.LatestVersion
+  $URL = $downloader.URL
+  $filename = $downloader.filename
+  $fileDetectionPath = "C:\Program Files\PrusaSlicer\$Version"
+installScript: |
+  Expand-Archive ".\PrusaSlicer-<version>-win64.zip" -Destination "C:\Program Files\PrusaSlicer"
+  Move-Item "C:\Program Files\PrusaSlicer\PrusaSlicer-<version>" "C:\Program Files\PrusaSlicer\<version>"
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut("C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk")
+  $shortcut.TargetPath = "C:\Program Files\PrusaSlicer\<version>\prusa-slicer.exe"
+  $shortcut.Save()
+uninstallScript: |
+  if (Test-Path "C:\Program Files\PrusaSlicer\<version>") {
+    Remove-Item "C:\Program Files\PrusaSlicer\<version>" -Recurse -Force
+  }
+  if ((Get-ChildItem "C:\Program Files\PrusaSlicer" -ErrorAction SilentlyContinue).count -eq 0) {
+    Remove-Item "C:\Program Files\PrusaSlicer" -Recurse -Force
+  }
+  if (Test-Path "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk") {
+    Remove-Item "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk" -Force
+  }
+iconFile: PrusaSlicer.png
+id: prusaslicer
+displayName: PrusaSlicer
+publisher: Prusa Research
+description: A powerful and user-friendly 3D slicing software for FFF printers.
+detectionType: file
+fileDetectionName: prusa-slicer.exe
+fileDetectionMethod: exists
+installExperience: system
