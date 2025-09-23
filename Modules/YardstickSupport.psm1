@@ -54,7 +54,7 @@ function Write-Log {
         }
     }
     finally {
-        Pop-Location
+        Pop-Location -ErrorAction SilentlyContinue
     }
 }
 
@@ -524,20 +524,20 @@ function Get-SameAppAllVersions {
             break
         }
         catch {
-            Write-Log "Error retrieving applications with the name $DisplayName"
+            # Write-Log "Error retrieving applications with the name $DisplayName"
             if ($i -eq 2) {
-                Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
+                # Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
                 exit 1001
             }
             else {
-                Write-Log "Retrying to retrieve applications with the name $DisplayName. Attempt $($i + 1) of 3."
+                # Write-Log "Retrying to retrieve applications with the name $DisplayName. Attempt $($i + 1) of 3."
                 Start-Sleep -Seconds 5
             }
         }
     }
     
     if (-not $AllSimilarApps) {
-        Write-Log "No applications found with the name $DisplayName"
+        # Write-Log "No applications found with the name $DisplayName"
         return @()
     }
     
@@ -879,7 +879,13 @@ function Send-YardstickEmailReport {
         $mail = $outlook.CreateItem(0)  # 0 = olMailItem
         
         # Set email properties
-        $mail.To = $Preferences.emailRecipient
+        # handle one recipient separately from multiple
+        if ($Preferences.emailRecipient.count -gt 1) {
+            $mail.To = ($Preferences.emailRecipient -join "; ")
+        }
+        else {
+            $mail.To = $Preferences.emailRecipient
+        }
         $mail.Subject = $Preferences.emailSubject
         if ($Preferences.emailSendFromAddress) {
             $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
@@ -1003,8 +1009,9 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
         $mail.HTMLBody = $emailBody
         $mail.Send()
         
-        Write-Log "Email report sent successfully to $($Preferences.emailRecipient)"
-        
+        Write-Log "Email report sent successfully to the following email addresses:"
+        Write-Log ($Preferences.emailRecipient -join ", ")
+
         # Clean up COM objects
         $mail = $null
         $outlook = $null
