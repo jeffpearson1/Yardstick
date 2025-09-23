@@ -110,7 +110,7 @@ foreach ($Module in $CustomModules) {
 $Script:Applications = [System.Collections.Generic.List[PSObject]]::new()
 
 # So we can pop at the end
-Push-Location $PSScriptRoot
+Set-Location $PSScriptRoot
 
 # Initialize the log file
 Write-Log -Init
@@ -249,6 +249,7 @@ $Script:SECRETS = $prefs.Secrets
 $Global:TENANT_ID = $prefs.TenantID
 $Global:CLIENT_ID = $prefs.ClientID
 $Global:CLIENT_SECRET = $prefs.ClientSecret
+$Global:SCRIPT_ROOT = $PSScriptRoot
 
 # Validate ApplicationId parameter
 if ($ApplicationId -ne "None") {
@@ -665,7 +666,7 @@ foreach ($ApplicationId in $Applications) {
 
         # Make the new BUILDSPACE directory
         New-Item -Path $BUILDSPACE\$id -ItemType Directory -Name $version
-        Push-Location $BUILDSPACE\$id\$version
+        Set-Location $BUILDSPACE\$id\$version
 
         # Download the new installer
         Write-Log "Starting download..."
@@ -722,7 +723,7 @@ foreach ($ApplicationId in $Applications) {
 
 
         # Generate the .intunewin file
-        Pop-Location
+        Set-Location $PSScriptRoot
         Write-Log "Generating .intunewin file..."
         $app = New-IntuneWin32AppPackage -SourceFolder $BUILDSPACE\$id\$version -SetupFile $fileName -OutputFolder $PUBLISHED -Force
 
@@ -860,6 +861,9 @@ foreach ($ApplicationId in $Applications) {
         # Catch any unexpected errors during processing
         Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $currentDisplayName -Version $version -ErrorMessage "Unexpected error during processing: $_" -FailureStage "General Processing"
         Write-Log "ERROR: Unexpected error processing $ApplicationId : $_"
+        if (-not((Get-Location).Path -eq $PSScriptRoot)) {
+            Set-Location $PSScriptRoot
+        }
     }
 }
 
@@ -875,4 +879,4 @@ catch {
 Invoke-Cleanup
 
 # Return to the original directory
-Pop-Location
+Set-Location $PSScriptRoot
