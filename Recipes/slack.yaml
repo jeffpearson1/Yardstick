@@ -14,3 +14,6 @@ publisher: Slack
 description: Connect the right people, find anything you need and automate the rest. That's work in Slack, your productivity platform.
 softwareName: "Slack*"
 detectionType: msi
+scopeTags:
+  - scopeTag1
+  - scopeTag2

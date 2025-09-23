@@ -2,7 +2,7 @@ url: https://github.com/prusa3d/PrusaSlicer
 urlredirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
-  $downloadFileRegex = "PrusaSlicer-.*-win64\.zip$"
+  $downloadFileRegex = "PrusaSlicer-.*\.zip$"
   $versionRegex = "(\.{0,1}[0-9]{1,2}){2,4}"
   $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
   $downloader.Update()

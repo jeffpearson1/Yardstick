@@ -5,7 +5,7 @@ preDownloadScript: |
   $version = $matches[0]
   $fileDetectionVersion = $version
 installScript: msiexec /i <filename> /qn /norestart ZConfig="nogoogle=1;nofacebook=1;AddFWException=1;EnableAppleLogin=0;ForceSSOUrl=def;DisableLoginWithEmail=1"
-uninstallScript: msiexec /x <productcode> /silent
+uninstallScript: msiexec /x <productcode> /qn /norestart
 fileName: ZoomInstallerFull.msi
 iconFile: zoom.png
 id: Zoom
