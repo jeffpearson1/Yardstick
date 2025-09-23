@@ -44,7 +44,7 @@ class AdobeApplication {
     [void] Init([hashtable]$Properties) {
         # Load preferences
         try {
-            $this.Preferences = Get-Content "G:\Intune\Yardstick\Preferences.yaml" | ConvertFrom-Yaml
+            $this.Preferences = Get-Content "$GLOBAL:SCRIPT_ROOT\Preferences.yaml" | ConvertFrom-Yaml
             $this.TempPath = $this.Preferences.Temp
             $this.BuildSpacePath = $this.Preferences.Buildspace
         }
@@ -213,9 +213,9 @@ class AdobeApplication {
         # Enter username
         try {
             Write-Log "Entering username..."
-            $element = Get-SeElement -Driver $Driver -By ID "EmailPage-EmailField"
+            $element = Get-SeElement -By ID "EmailPage-EmailField"
             Invoke-SeKeys -Element $element -Keys $credentials.Username
-            $button = Get-SeElement -Driver $Driver -By XPath '//*[@class="EmailPage__buttons"]/button'
+            $button = Get-SeElement -By XPath '//*[@class="EmailPage__buttons"]/button'
             $button.click()
             Start-Sleep -Seconds 15
         }
@@ -227,7 +227,7 @@ class AdobeApplication {
         if ($this.SSO) {
             try {
                 Write-Log "Authenticating via SSO..."
-                Invoke-SSOAutoSignIn -Target "adminconsole.adobe.com" -Driver $Driver
+                Invoke-SSOAutoSignIn -Target "adminconsole.adobe.com"
             }
             catch {
                 throw "SSO authentication failed: $_"
@@ -236,10 +236,10 @@ class AdobeApplication {
         else {
             try {
                 Write-Log "Entering password..."
-                $element = Get-SeElement -Driver $Driver -By ID "PasswordPage-PasswordField"
+                $element = Get-SeElement -By ID "PasswordPage-PasswordField"
                 $password = (New-Object PSCredential 0, $credentials.Password).GetNetworkCredential().Password
                 Invoke-SeKeys -Element $element -Keys $password
-                $button = Get-SeElement -Driver $Driver -By CSSSelector ".spectrum-Button"
+                $button = Get-SeElement -By CSSSelector ".spectrum-Button"
                 $button.click()
                 Start-Sleep -Seconds 10
             }
@@ -259,7 +259,7 @@ class AdobeApplication {
             Write-Log "Waiting for Adobe Admin Console to load..."
             $timeout = 60 # seconds
             $elapsed = 0
-            while (-not (Get-SeElement -Driver $Driver -By LinkText "Overview" -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
+            while (-not (Get-SeElement -By LinkText "Overview" -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
                 Start-Sleep -Seconds 3
                 $elapsed += 3
             }
@@ -269,7 +269,7 @@ class AdobeApplication {
             }
             
             Write-Log "Navigating to Packages tab..."
-            $packagesLink = Get-SeElement -Driver $Driver -By LinkText "Packages"
+            $packagesLink = Get-SeElement -By LinkText "Packages"
             $packagesLink.click()
             Start-Sleep -Seconds 5
         }
@@ -287,7 +287,7 @@ class AdobeApplication {
             Write-Log "Waiting for 'Create Package' button..."
             $timeout = 30
             $elapsed = 0
-            while (-not (Get-SeElement -Driver $Driver -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(2)" -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
+            while (-not (Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(2)" -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
                 Start-Sleep -Seconds 3
                 $elapsed += 3
             }
@@ -297,7 +297,7 @@ class AdobeApplication {
             }
             
             Write-Log "Clicking 'Create Package'..."
-            $createButton = Get-SeElement -Driver $Driver -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(2)"
+            $createButton = Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(2)"
             $createButton.click()
             Start-Sleep -Seconds 5
 
@@ -327,7 +327,7 @@ class AdobeApplication {
             
             # Select managed package
             Write-Log "Selecting managed package option..."
-            $managedInput = Get-SeElement -Driver $Driver -By XPath "//*[text()='Managed package']/../following-sibling::*/input"
+            $managedInput = Get-SeElement -By XPath "//*[text()='Managed package']/../following-sibling::*/input"
             $managedInput.click()
             Start-Sleep -Seconds 2
             
@@ -340,7 +340,7 @@ class AdobeApplication {
             
             # Configure Adobe CC Desktop Options
             Write-Log "Configuring Adobe CC Desktop options..."
-            $selfServiceToggle = Get-SeElement -Driver $Driver -By XPATH "//*[text()='Enable self-service install']/../../input"
+            $selfServiceToggle = Get-SeElement -By XPATH "//*[text()='Enable self-service install']/../../input"
             $selfServiceToggle.click()
             Start-Sleep -Seconds 2
             
@@ -372,7 +372,7 @@ class AdobeApplication {
             
             # Create package
             Write-Log "Creating Self-Service package..."
-            $createButton = Get-SeElement -Driver $Driver -By XPATH "//*/button[@data-testid='cta-button']"
+            $createButton = Get-SeElement -By XPATH "//*/button[@data-testid='cta-button']"
             $createButton.Click()
         }
         catch {
@@ -390,7 +390,7 @@ class AdobeApplication {
             
             # Change to shared device licensing
             Write-Log "Selecting shared device licensing..."
-            $sharedDeviceInput = Get-SeElement -Driver $Driver -By Xpath "//input[@aria-label='Shared device licensing']"
+            $sharedDeviceInput = Get-SeElement -By Xpath "//input[@aria-label='Shared device licensing']"
             $sharedDeviceInput.Click()
             Start-Sleep -Seconds 2
             
@@ -398,7 +398,7 @@ class AdobeApplication {
             
             # Select entitlement
             Write-Log "Selecting entitlement..."
-            $entitlementInput = Get-SeElement -Driver $Driver -By CSSSelector ".src2-app-features-packages-components-create-package-modal-screens-choose-entitlements-page-entitlement-card-___EntitlementCard__entitlement-card___H_zoc > div:nth-child(1) > div:nth-child(2) > label:nth-child(1) > input:nth-child(1)"
+            $entitlementInput = Get-SeElement -By CSSSelector ".src2-app-features-packages-components-create-package-modal-screens-choose-entitlements-page-entitlement-card-___EntitlementCard__entitlement-card___H_zoc > div:nth-child(1) > div:nth-child(2) > label:nth-child(1) > input:nth-child(1)"
             $entitlementInput.Click()
             Start-Sleep -Seconds 2
             
@@ -411,7 +411,7 @@ class AdobeApplication {
             
             # Configure desktop options
             Write-Log "Configuring desktop options for SDL..."
-            $selfServiceToggle = Get-SeElement -Driver $Driver -By XPATH "//*[text()='Enable self-service install']/../../input"
+            $selfServiceToggle = Get-SeElement -By XPATH "//*[text()='Enable self-service install']/../../input"
             $selfServiceToggle.click()
             Start-Sleep -Seconds 2
             
@@ -428,7 +428,7 @@ class AdobeApplication {
     #>
     [void] ClickNextButton([object]$Driver, [string]$Context) {
         Write-Log "Clicking Next button - $Context"
-        $nextButton = Get-SeElement -Driver $Driver -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)"
+        $nextButton = Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)"
         $nextButton.click()
         Start-Sleep -Seconds 2
     }
@@ -439,11 +439,11 @@ class AdobeApplication {
     #>
     [void] SelectPlatform([object]$Driver, [string]$Platform) {
         Write-Log "Selecting platform: $Platform"
-        $platformDropdown = Get-SeElement -Driver $Driver -By XPath "//*[text()='Select platform']"
+        $platformDropdown = Get-SeElement -By XPath "//*[text()='Select platform']"
         $platformDropdown.click()
         Start-Sleep -Seconds 2
         
-        $platformOption = Get-SeElement -Driver $Driver -By XPath "//*[text()='$Platform']"
+        $platformOption = Get-SeElement -By XPath "//*[text()='$Platform']"
         $platformOption.click()
         Start-Sleep -Seconds 2
     }
@@ -454,7 +454,7 @@ class AdobeApplication {
     #>
     [void] AddApplicationToPackage([object]$Driver) {
         Write-Log "Adding application '$($this.Name)' to package"
-        $addButton = Get-SeElement -Driver $Driver -By XPath "//*[text()=`"$($this.Name)`"]/../../../following-sibling::*/button[@data-testid='add-product-button']"
+        $addButton = Get-SeElement -By XPath "//*[text()=`"$($this.Name)`"]/../../../following-sibling::*/button[@data-testid='add-product-button']"
         $addButton.click()
         Start-Sleep -Seconds 2
     }
@@ -465,7 +465,7 @@ class AdobeApplication {
     #>
     [void] FillPackageName([object]$Driver) {
         Write-Log "Filling package name: $($this.PackageName)"
-        $packageNameField = Get-SeElement -Driver $Driver -By XPATH "//*/input[@data-testid='package-name-input']"
+        $packageNameField = Get-SeElement -By XPATH "//*/input[@data-testid='package-name-input']"
         $packageNameField.Clear()
         Invoke-SeKeys -Element $packageNameField -Keys $this.PackageName
         Start-Sleep -Seconds 1
@@ -478,7 +478,7 @@ class AdobeApplication {
     [void] FinalizePackage([object]$Driver) {
         $this.FillPackageName($Driver)
         Write-Log "Creating package..."
-        $createButton = Get-SeElement -Driver $Driver -By XPATH "//*/button[@data-testid='cta-button']"
+        $createButton = Get-SeElement -By XPATH "//*/button[@data-testid='cta-button']"
         $createButton.click()
     }
     
