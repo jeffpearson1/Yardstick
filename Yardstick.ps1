@@ -29,6 +29,10 @@
     A switch parameter that prevents the deletion of old versions of applications after an update. This is useful for debugging or testing purposes.
     May be used with all other parameters.
 
+.PARAMETER NoEmail
+    A switch parameter that suppresses the sending of email notifications after the update process is complete.
+    May be used with all other parameters.
+
 .PARAMETER Repair
     A switch parameter that repairs the application by renaming any incorrectly named applications to their correct format.
     May be used with all other parameters.
@@ -83,7 +87,9 @@ param (
     [parameter(ParameterSetName="SingleApp")]
     [parameter(ParameterSetName="GroupApps")]
     [parameter(ParameterSetName="AllApps")]
-    [Switch] $Repair
+    [Switch] $Repair,
+
+    [Switch] $NoEmail
 )
 
 # Constants
@@ -868,12 +874,15 @@ foreach ($ApplicationId in $Applications) {
 }
 
 # Send email report if enabled
-try {
-    Send-YardstickEmailReport -Preferences $prefs -RunParameters $runParameters
+if (-not $NoEmail) {
+    try {
+        Send-YardstickEmailReport -Preferences $prefs -RunParameters $runParameters
+    }
+    catch {
+        Write-Log "WARNING: Failed to send email report: $_"
+    }
 }
-catch {
-    Write-Log "WARNING: Failed to send email report: $_"
-}
+
 
 # Clean up
 Invoke-Cleanup
