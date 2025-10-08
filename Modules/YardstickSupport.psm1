@@ -285,10 +285,10 @@ function Move-AssignmentsAndDependencies {
     availability and deadline dates.
     
     .PARAMETER From
-    The source application object to move assignments and dependencies from.
+    The source application to move assignments and dependencies from. Can be a PSObject, GUID or Display Name.
     
     .PARAMETER To
-    The target application object to move assignments and dependencies to.
+    The target application to move assignments and dependencies to. Can be a PSObject, GUID or Display Name.
     
     .PARAMETER DeadlineDateOffset
     Number of days to offset the deadline date by (default: 0).
@@ -298,14 +298,53 @@ function Move-AssignmentsAndDependencies {
     #>
     param(
         [Parameter(Mandatory, Position=0)]
-        [System.Object] $From,
+        $From,
         [Parameter(Mandatory, Position=1)]
-        [System.Object] $To,
+        $To,
         [Parameter(Position=2)]
         [Int] $DeadlineDateOffset = 0,
         [Parameter(Position=3)]
         [Int] $AvailableDateOffset = 0
     )
+    # If IDs or Display Names were provided instead of application objects, get the app objects
+    if ($From -is [String]) {
+        if ($From -match "^[0-9a-fA-F\-]{36}$") {
+            # Looks like a GUID
+            $From = Get-IntuneWin32App -Id $From
+        }
+        else {
+            # Only return exact matches
+            $Apps = Get-IntuneWin32App -DisplayName $From | Where-Object DisplayName -eq $From
+            if ($Apps.Count -eq 1) {
+                $From = $Apps[0]
+            }
+            elseif ($Apps.Count -gt 1) {
+                throw "Multiple applications found with the display name '$From'. Please specify by ID instead."
+            }
+            else {
+                throw "No application found with the display name '$From'."
+            }
+        }
+    }
+    if ($To -is [String]) {
+        if ($To -match "[0-9a-fA-F\-]{36}$") {
+            # Looks like a GUID
+            $To = Get-IntuneWin32App -Id $To
+        }
+        else {
+            # Only return exact matches
+            $Apps = Get-IntuneWin32App -DisplayName $To | Where-Object DisplayName -eq $To
+            if ($Apps.Count -eq 1) {
+                $To = $Apps[0]
+            }
+            elseif ($Apps.Count -gt 1) {
+                throw "Multiple applications found with the display name '$To'. Please specify by ID instead."
+            }
+            else {
+                throw "No application found with the display name '$To'."
+            }
+        }
+    }
     Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
@@ -316,19 +355,23 @@ function Move-AssignmentsAndDependencies {
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
+            Write-Log "Processing assignment for group $($Assignment.GroupID) with intent $($Assignment.Intent)"
             while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
                 if ($Assignment.InstallTimeSettings) {
+                    Write-Log "Assignment has install time settings."
                     $useLocalTime = [bool]$Assignment.InstallTimeSettings.useLocalTime
+                    Write-Log "UseLocalTime: $useLocalTime"
                     $startDateTime = $Assignment.InstallTimeSettings.startDateTime
                     $deadlineDateTime = $Assignment.InstallTimeSettings.deadlineDateTime
                     if ($null -ne $startDateTime) {
-                        Write-Log "StartDateTime: $startDateTime"
                         $startDateTime = Get-Date -Date "$AvailableDate $($startDateTime.ToString("HH:mm"))"
+                        Write-Log "StartDateTime: $startDateTime"
                     }
                     if ($null -ne $deadlineDateTime) {
-                        Write-Log "DeadlineDateTime: $deadlineDateTime"
                         $deadlineDateTime = Get-Date -Date "$DeadlineDate $($deadlineDateTime.ToString("HH:mm"))"
+                        Write-Log "DeadlineDateTime: $deadlineDateTime"
                     }
+                    
                 }
                 if ($Assignment.FilterType -eq "none") {
                     if ($Assignment.InstallTimeSettings) {
@@ -362,17 +405,18 @@ function Move-AssignmentsAndDependencies {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                             }
                         }
-                        else {
-                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
-                            try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications | Out-Null
-                                $successfullyAdded = $true
-                            }
-                            catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                            }
+                    }
+                    else {
+                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
+                        try {
+                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications | Out-Null
+                            $successfullyAdded = $true
+                        }
+                        catch {
+                            Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
                     }
+                    
                 }
                 else {
                     # If there is a filter
@@ -492,6 +536,7 @@ function Move-AssignmentsAndDependencies {
         }
     }
 }
+
 
 # Get-SameAppAllVersions
 # Returns all versions of an app sorted from newest to oldest
@@ -726,7 +771,7 @@ function Add-SuccessfulApplication {
     )
     
     if (-not $Script:SuccessfulApplications) {
-        Initialize-ApplicationTracker
+        $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
     }
     
     $appInfo = [PSCustomObject]@{
@@ -780,7 +825,7 @@ function Add-FailedApplication {
     )
     
     if (-not $Script:FailedApplications) {
-        Initialize-ApplicationTracker
+        $Script:FailedApplications = [System.Collections.Generic.List[PSObject]]::new()
     }
     
     $appInfo = [PSCustomObject]@{
@@ -879,13 +924,8 @@ function Send-YardstickEmailReport {
         $mail = $outlook.CreateItem(0)  # 0 = olMailItem
         
         # Set email properties
-        # handle one recipient separately from multiple
-        if ($Preferences.emailRecipient.count -gt 1) {
-            $mail.To = ($Preferences.emailRecipient -join "; ")
-        }
-        else {
-            $mail.To = $Preferences.emailRecipient
-        }
+        $mail.To = ($Preferences.emailRecipient -join "; ")
+
         $mail.Subject = $Preferences.emailSubject
         if ($Preferences.emailSendFromAddress) {
             $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
@@ -913,7 +953,7 @@ function Send-YardstickEmailReport {
 </head>
 <body>
     <div class="header">
-        <h2>🚀 Yardstick Application Update Report</h2>
+        <h2>Yardstick Application Update Report</h2>
         <p>Generated by: $($Preferences.emailSenderName)</p>
         <p>Run Time: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss")</p>
 $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
@@ -921,10 +961,10 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
     
     <div class="content">
         <div class="summary">
-            <h3>📊 Summary</h3>
-            <p><strong>✅ Successful Applications:</strong> $($Script:SuccessfulApplications.Count)</p>
-            <p><strong>❌ Failed Applications:</strong> $($Script:FailedApplications.Count)</p>
-            <p><strong>📈 Total Processed:</strong> $($Script:SuccessfulApplications.Count + $Script:FailedApplications.Count)</p>
+            <h3>Summary</h3>
+            <p><strong>Successful Applications:</strong> $($Script:SuccessfulApplications.Count)</p>
+            <p><strong>Failed Applications:</strong> $($Script:FailedApplications.Count)</p>
+            <p><strong>Total Processed:</strong> $($Script:SuccessfulApplications.Count + $Script:FailedApplications.Count)</p>
         </div>
 "@
 
@@ -933,7 +973,7 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
             $emailBody += @"
         
         <div class="summary success">
-            <h3>✅ Successful Applications</h3>
+            <h3>Successful Applications</h3>
             <table>
                 <tr>
                     <th>Application</th>
@@ -963,7 +1003,7 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
             $emailBody += @"
         
         <div class="summary failure">
-            <h3>❌ Failed Applications</h3>
+            <h3>Failed Applications</h3>
             <table>
                 <tr>
                     <th>Application</th>
