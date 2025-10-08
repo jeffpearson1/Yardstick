@@ -1,0 +1,27 @@
+url: https://bluebook.app.collegeboard.org/windows
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $url
+  $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')
+  $element = Get-SeElement -By ClassName "downloadButton"
+  $url = $element.GetAttribute("href")
+  $Driver.close()
+  $filename = $url.split("/")[-1] -replace("%20"," ")
+  $version = $filename.split(" ").split(".exe")[2]
+  $fileDetectionVersion = "$version.0"
+installScript: | 
+  "<filename>" /S
+uninstallScript: |
+  "%localappdata%\Programs\bluebook\Uninstall Bluebook.exe" /S
+installExperience: user
+iconFile: bluebook.png
+id: bluebook
+displayName: Bluebook
+publisher: College Board
+description: Bluebook makes test day easier for students and proctors.
+softwareName: "Bluebook*"
+detectionType: file
+fileDetectionPath: '%localappdata%\Programs\bluebook'
+fileDetectionName: 'Bluebook.exe'
+fileDetectionMethod: version
+fileDetectionOperator: equal

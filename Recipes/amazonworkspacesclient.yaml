@@ -1,0 +1,18 @@
+url: https://d2td7dqidlhjx7.cloudfront.net/prod/global/windows/Amazon+WorkSpaces.msi
+urlRedirects: true
+preDownloadScript: |
+  $Content = Invoke-WebRequest "https://docs.aws.amazon.com/workspaces/latest/userguide/amazon-workspaces-windows-client.html"
+  $Content.content -match "(?<=\>)([0-9]{1,2}\.{0,1}){3}(?=\<)"
+  $version = $matches[0]
+fileName: Amazon+WorkSpaces.msi
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: AmazonWorkspacesClient.png
+id: AmazonWorkspacesClient
+displayName: Amazon WorkSpaces Client
+publisher: Amazon
+description: The Amazon WorkSpaces client for Windows
+detectionType: msi
+scopeTags:
+  - scopeTag1
+  - scopeTag2
