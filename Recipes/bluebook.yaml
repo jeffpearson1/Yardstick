@@ -3,6 +3,7 @@ urlredirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $url
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')
+  Start-Sleep -Seconds 10
   $element = Get-SeElement -By ClassName "downloadButton"
   $url = $element.GetAttribute("href")
   $Driver.close()

@@ -9,10 +9,10 @@ preDownloadScript: |
   $url = "https://ftp.osuosl.org/pub/cran/bin/windows/base/$filename"
   $fileDetectionPath = "C:\Program Files\R\R-$version\bin"
   $uninstallScript = '"%ProgramFiles%\R\R-$version\unins000.exe" /VERYSILENT /NORESTART'
-installScript: <filename> /VERYSILENT /NORESTART
+installScript: for /D %f in ("C:\Program Files\R\*.*") do ( echo Uninstalling %f && start /wait "" "%f\unins000.exe" /VERYSILENT /NORESTART ) && <filename> /VERYSILENT /NORESTART
 iconFile: r.png
 id: r
-displayName: R for Windows
+displayName: R for Windows (Development)
 publisher: R Core Team
 description: R is a free software environment for statistical computing and graphics.
 detectionType: file

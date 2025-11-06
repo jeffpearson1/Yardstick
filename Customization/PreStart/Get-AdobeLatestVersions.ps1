@@ -39,7 +39,7 @@ function AuthenticateToAdobe([object]$Driver, [switch]$SSO) {
         Write-Log "Entering username..."
         $element = Get-SeElement -By ID "EmailPage-EmailField"
         Invoke-SeKeys -Element $element -Keys $credentials.Username
-        $button = Get-SeElement -By XPath '//*[@class="EmailPage__buttons"]/button'
+        $button = Get-SeElement -By XPath '//*[@data-click-event="ContinueClick"]'
         $button.click()
         Start-Sleep -Seconds 15
     }
@@ -158,7 +158,7 @@ function NavigateToPackageList() {
             Write-Log "Clicking 'Create Package'..."
             $createButton = Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(2)"
             $createButton.click()
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 10
 
             # Named user is fine for this, so just click next
             ClickNextButton("Named user licensing")
