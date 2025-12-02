@@ -1,8 +1,6 @@
 # Useful Functions
 
-# Write-Log
-# Prints both to the console and also to the log
-# Param: [String] $Content, [Switch] $Init (Erase log and print big timestamp for new script run)
+
 function Write-Log {
     <#
     .SYNOPSIS
@@ -23,7 +21,7 @@ function Write-Log {
         [Switch]$Init
     )
     
-    if (-not $LOG_LOCATION -or -not $LOG_FILE) {
+    if (-not $LogLocation -or -not $LogFile) {
         Write-Warning "LOG_LOCATION or LOG_FILE variables are not set. Cannot write to log."
         if ($Content) {
             Write-Output "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
@@ -31,36 +29,33 @@ function Write-Log {
         return
     }
     
-    Push-Location $LOG_LOCATION
+    Push-Location $LogLocation
     try {
-        if($Init) {
-            if (Test-Path $LOG_LOCATION\$LOG_FILE) {
-                Remove-Item $LOG_LOCATION\$LOG_FILE -Force
+        if ($Init) {
+            if (Test-Path $LogLocation\$LogFile) {
+                Remove-Item $LogLocation\$LogFile -Force
             }
-            Write-Output "#######################################################" | Out-File $LOG_FILE -Append
-            Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LOG_FILE -Append
-            Write-Output "#######################################################" | Out-File $LOG_FILE -Append
+            Write-Output "#######################################################" | Out-File $LogFile -Append
+            Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LogFile -Append
+            Write-Output "#######################################################" | Out-File $LogFile -Append
         }
         if ($Content) {
             $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
-            Write-Output $Content | Out-File $LOG_FILE -Append
+            Write-Output $Content | Out-File $LogFile -Append
             Write-Output $Content
         }
-    }
-    catch {
+    } catch {
         Write-Warning "Failed to write to log file: $_"
         if ($Content) {
             Write-Output "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
-    }
-    finally {
+    } finally {
         Pop-Location -ErrorAction SilentlyContinue
     }
 }
 
 
-# ArrayToString
-# Converts an array to a string representation
+
 function ArrayToString {
     <#
     .SYNOPSIS
@@ -94,8 +89,8 @@ function ArrayToString {
     return [String]$arrayString
 }
 
-# Get-RedirectedUrl
-# Follows redirects and returns the actual URL of a resource
+
+
 function Get-RedirectedUrl {
     <#
     .SYNOPSIS
@@ -127,17 +122,14 @@ function Get-RedirectedUrl {
         $Response = $httpClient.GetAsync($URL).GetAwaiter().GetResult()
         if ($Response.StatusCode -eq "OK") {
             $RedirectedURL = $Response.RequestMessage.RequestUri.AbsoluteUri
-        }
-        else {
+        } else {
             throw "HTTP request failed with status: $($Response.StatusCode)"
         }
         return $RedirectedURL
-    }
-    catch {
+    } catch {
         Write-Error "Error getting redirected URL for '$URL': $_"
         throw
-    }
-    finally {
+    } finally {
         if ($httpClient) {
             $httpClient.Dispose()
         }
@@ -145,8 +137,7 @@ function Get-RedirectedUrl {
 }
 
 
-# Get-MsiProductCode
-# Returns the product code of an MSI file
+
 function Get-MsiProductCode {
     <#
     .SYNOPSIS
@@ -186,18 +177,15 @@ function Get-MsiProductCode {
         
         if ($record) {
             $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
-        }
-        else {
+        } else {
             throw "ProductCode not found in MSI file"
         }
         
         return [String]$value
-    }
-    catch {
+    } catch {
         Write-Error "Error reading ProductCode from MSI file '$FilePath': $_"
         throw
-    }
-    finally {
+    } finally {
         # Clean up COM objects
         if ($view) { 
             $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($view) 
@@ -211,8 +199,76 @@ function Get-MsiProductCode {
     }
 }
 
-# Connect-AutoMSIntuneGraph
-# Automatically connects to the Microsoft Graph API using the Intune module
+
+
+function Get-MsiProperty {
+    <#
+    .SYNOPSIS
+    Extracts a specified property from an MSI file.
+    
+    .DESCRIPTION
+    This function uses the Windows Installer COM object to read the
+    property from an MSI database file.
+    
+    .PARAMETER Path
+    The full path to the MSI file.
+
+    .PARAMETER PropertyName
+    The name of the MSI property to retrieve.
+    
+    .OUTPUTS
+    The specified MSI property as a string.
+    #>
+    param (
+        [Parameter(Mandatory=$true)]
+        [String]$Path,
+        [Parameter(Mandatory=$true)]
+        [String]$PropertyName
+    )
+    
+    if (-not (Test-Path $Path)) {
+        throw "MSI file not found: $Path"
+    }
+    
+    $windowsInstallerObject = $null
+    $msiDatabase = $null
+    $view = $null
+    
+    try {
+        # Read property from MSI database
+        $windowsInstallerObject = New-Object -ComObject WindowsInstaller.Installer
+        $msiDatabase = $windowsInstallerObject.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $windowsInstallerObject, @($Path, 0))
+        $query = "SELECT Value FROM Property WHERE Property = '$PropertyName'"
+        $view = $msiDatabase.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $msiDatabase, ($query))
+        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+        $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+        
+        if ($record) {
+            $value = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+        } else {
+            throw "$PropertyName not found in MSI file"
+        }
+        
+        return [String]$value
+    } catch {
+        Write-Error "Error reading $PropertyName from MSI file '$Path': $_"
+        throw
+    } finally {
+        # Clean up COM objects
+        if ($view) { 
+            $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($view) 
+        }
+        if ($msiDatabase) { 
+            $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($msiDatabase) 
+        }
+        if ($windowsInstallerObject) { 
+            $null = [System.Runtime.Interopservices.Marshal]::ReleaseComObject($windowsInstallerObject) 
+        }
+    }
+}
+
+
+
 function Connect-AutoMSIntuneGraph {
     <#
     .SYNOPSIS
@@ -224,56 +280,49 @@ function Connect-AutoMSIntuneGraph {
     variables for tenant configuration.
     #>
     
-    if (-not $Global:TENANT_ID -or -not $Global:CLIENT_ID -or -not $Global:CLIENT_SECRET) {
+    if (-not $Global:TenantID -or -not $Global:ClientID -or -not $Global:ClientSecret) {
         throw "Required global variables not set: TENANT_ID, CLIENT_ID, CLIENT_SECRET"
     }
     
     # Check if the current token is invalid
-    if (-not $Global:Token) {
+    if (-not $Global:Token.ExpiresOn) {
         Write-Log "Getting an Intune Graph Client API token..."
         try {
-            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TENANT_ID -ClientID $Global:CLIENT_ID -ClientSecret $Global:CLIENT_SECRET
-        }
-        catch {
+            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
+        } catch {
             Write-Error "Failed to get initial token: $_"
             throw
         }
-    }
-    elseif ($Global:Token.ExpiresOn.ToLocalTime() -lt (Get-Date)) {
+    } elseif ($Global:Token.ExpiresOn.ToLocalTime() -lt (Get-Date)) {
         # If not, get a new token
         Write-Log "Token is expired. Refreshing token..."
         try {
-            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TENANT_ID -ClientID $Global:CLIENT_ID -ClientSecret $Global:CLIENT_SECRET
+            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
             Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
-        }
-        catch {
+        } catch {
             Write-Error "Failed to refresh expired token: $_"
             throw
         }
-    }
-    elseif ($Global:Token.ExpiresOn.AddMinutes(-30).ToLocalTime() -lt (Get-Date)) {
+    } elseif ($Global:Token.ExpiresOn.AddMinutes(-30).ToLocalTime() -lt (Get-Date)) {
         # For whatever reason, this API stops working 10 minutes before a token refresh
         # Set at 30 minutes in case we are uploading large files. 
         Write-Log "Token expires soon - Refreshing token..."
         try {
             # Required to force a refresh
             Clear-MsalTokenCache
-            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TENANT_ID -ClientID $Global:CLIENT_ID -ClientSecret $Global:CLIENT_SECRET
+            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
             Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
-        }
-        catch {
+        } catch {
             Write-Error "Failed to refresh token: $_"
             throw
         }
-    }
-    else {
+    } else {
         Write-Log "Token is still valid. Skipping token refresh."
     } 
 }
 
 
-# Move-AssignmentsAndDependencies
-# Moves all assignments and dependencies from one application to another
+
 function Move-AssignmentsAndDependencies {
     <#
     .SYNOPSIS
@@ -317,11 +366,9 @@ function Move-AssignmentsAndDependencies {
             $Apps = Get-IntuneWin32App -DisplayName $From | Where-Object DisplayName -eq $From
             if ($Apps.Count -eq 1) {
                 $From = $Apps[0]
-            }
-            elseif ($Apps.Count -gt 1) {
+            } elseif ($Apps.Count -gt 1) {
                 throw "Multiple applications found with the display name '$From'. Please specify by ID instead."
-            }
-            else {
+            } else {
                 throw "No application found with the display name '$From'."
             }
         }
@@ -336,11 +383,9 @@ function Move-AssignmentsAndDependencies {
             $Apps = Get-IntuneWin32App -DisplayName $To | Where-Object DisplayName -eq $To
             if ($Apps.Count -eq 1) {
                 $To = $Apps[0]
-            }
-            elseif ($Apps.Count -gt 1) {
+            } elseif ($Apps.Count -gt 1) {
                 throw "Multiple applications found with the display name '$To'. Please specify by ID instead."
-            }
-            else {
+            } else {
                 throw "No application found with the display name '$To'."
             }
         }
@@ -425,42 +470,39 @@ function Move-AssignmentsAndDependencies {
                         try {
                             Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
                             $successfullyAdded = $true
-                        }
-                        catch {
+                        } catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
-                    }
-                    elseif ($startDateTime) {
+                    } elseif ($startDateTime) {
                         Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with available time settings."
                         try {
                             Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
                             $successfullyAdded = $true
-                        }
-                        catch {
+                        } catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
-                    }
-                    elseif ($deadlineDateTime) {
+                    } elseif ($deadlineDateTime) {
                         Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline time settings."
                         try {
                             Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
                             $successfullyAdded = $true
-                        }
-                        catch {
+                        } catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
-                    }
-                    else {
+                    } else {
                         Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
                         try {
                                 Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
                                 $successfullyAdded = $true
-                        }
-                        catch {
+                        } catch {
                                 Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
                         }
                     }
-                } 
+                }
+                if (!$successfullyAdded) {
+                    Write-Log "Retrying to add assignment to $($To.id) for group $($Assignment.GroupID). Attempt $($try) of $($maxRetries)."
+                    Start-Sleep -Seconds 2
+                }
             }
             # Remove the old assignment
             if ($successfullyAdded) {
@@ -471,14 +513,12 @@ function Move-AssignmentsAndDependencies {
                             Write-Log "Successfully removed assignment from $($From.id) for group $($Assignment.GroupID)"
                             break
                         }
-                    }
-                    catch {
+                    } catch {
                         Write-Log "Failed to remove assignment $($Assignment.GroupID) from group $($From.id):"
                         if ($i -eq 3) {
                             Write-Log "Failed to remove assignment after 3 attempts. Skipping removal."
                             break
-                        }
-                        else {
+                        } else {
                             Write-Log "Retrying removal of assignment from $($From.id) for group $($Assignment.GroupID). Attempt $($i + 1) of 3."
                             Start-Sleep -Seconds 2
                             continue
@@ -495,41 +535,49 @@ function Move-AssignmentsAndDependencies {
             $successfullyAdded = $false
             $dependentApps = Get-IntuneWin32AppDependency -ID $dependency.sourceId
             if ($dependentApps -and $dependentApps.Count -gt 1) {
-                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                    Write-Log "Multiple dependencies found for $($dependency.sourceId)"
-                    foreach ($dependentApp in $dependentApps) {
-                        $appDependenciesToMigrate = Get-IntuneWin32AppDependency -ID $dependentApp.id
-                        # Clear all existing dependencies
-                        Remove-IntuneWin32AppDependency -ID $dependentApp.targetId
-                        # Add all dependencies back that are not the one we are moving
-                        foreach ($appDependency in $appDependenciesToMigrate) {
+
+                Write-Log "Multiple dependencies found for $($dependency.sourceId)"
+                foreach ($dependentApp in $dependentApps) {
+                    $appDependenciesToMigrate = Get-IntuneWin32AppDependency -ID $dependentApp.id
+                    # Clear all existing dependencies
+                    Remove-IntuneWin32AppDependency -ID $dependentApp.targetId
+                    # Add all dependencies back that are not the one we are moving
+                    foreach ($appDependency in $appDependenciesToMigrate) {
+                        $successfullyAdded = $false
+                        $try = 0
+                        while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
                             if ($appDependency.targetId -ne $dependency.targetId) {
                                 $toAdd = New-IntuneWin32AppDependency -ID $appDependency.id -DependencyType $appDependency.dependencyType
                                 Add-IntuneWin32AppDependency -ID $dependentApp.targetId -Dependency $toAdd | Out-Null
-                            }
-                            else {
+                            } else {
                                 # Add the new dependency instead
                                 $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
                                 Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
                             }
+                            # Check that it worked
+                            $AssignedDependencies = Get-IntuneWin32AppDependency -ID $To.id
+                            if ($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
+                                $successfullyAdded = $true
+                                Write-Log "Dependency $($dependency.dependencyId) added successfully to $($To.id)"
+                            } else {
+                                Write-Log "Retrying to add dependency $($dependency.dependencyId) to $($To.id). Attempt $($try) of $($maxRetries)."
+                                Start-Sleep -Seconds 2
+                            }
                         }
-
                     }
                 }
-            }
-            elseif ($dependentApps) {
+            } elseif ($dependentApps) {
                 while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                    $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
-                    Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
+                    $NewDependency = New-IntuneWin32AppDependency -ID $dependency.targetId -DependencyType $dependency.dependencyType
+                    Add-IntuneWin32AppDependency -ID $To.id -Dependency $NewDependency | Out-Null
                     # Check that it worked
                     $AssignedDependencies = Get-IntuneWin32AppDependency -ID $To.id
-                    if($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
+                    if ($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
                         $successfullyAdded = $true
-                        Write-Log "Dependency $($dependency.dependencyId) added successfully to $($To.id)"
+                        Write-Log "Dependency $($dependency.targetId) added successfully to $($To.id)"
                     }
                 }
-            }
-            else {
+            } else {
                 Write-Log "No dependencies found for $($dependency.sourceId). Skipping dependency move."
             }
             
@@ -537,9 +585,6 @@ function Move-AssignmentsAndDependencies {
     }
 }
 
-
-# Get-SameAppAllVersions
-# Returns all versions of an app sorted from newest to oldest
 function Get-SameAppAllVersions {
     <#
     .SYNOPSIS
@@ -573,8 +618,7 @@ function Get-SameAppAllVersions {
             if ($i -eq 2) {
                 # Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
                 exit 1001
-            }
-            else {
+            } else {
                 # Write-Log "Retrying to retrieve applications with the name $DisplayName. Attempt $($i + 1) of 3."
                 Start-Sleep -Seconds 5
             }
@@ -594,8 +638,7 @@ function Get-SameAppAllVersions {
 }
 
 
-# Format-FileDetectionVersion
-# Converts a version number to one padded with the appropriate number of zeroes for detection by Intune
+
 function Format-FileDetectionVersion {
     <#
     .SYNOPSIS
@@ -625,6 +668,8 @@ function Format-FileDetectionVersion {
     }
     return $FileVersion
 }
+
+
 
 
 # Get-VersionLocked
@@ -667,8 +712,7 @@ function Get-VersionLocked {
 }
 
 
-# Compare-AppVersions
-# Compares two version strings and returns comparison result
+
 function Compare-AppVersions {
     <#
     .SYNOPSIS
@@ -711,17 +755,19 @@ function Compare-AppVersions {
         
         if ($v1 -lt $v2) {
             return -1
-        }
-        elseif ($v1 -gt $v2) {
+        } elseif ($v1 -gt $v2) {
             return 1
         }
     }
     return 0
 }
 
+
+
 #################################################
 # EMAIL NOTIFICATION FUNCTIONS
 #################################################
+
 
 function Initialize-ApplicationTracker {
     <#
@@ -735,6 +781,8 @@ function Initialize-ApplicationTracker {
     $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
     $Script:FailedApplications = [System.Collections.Generic.List[PSObject]]::new()
 }
+
+
 
 function Add-SuccessfulApplication {
     <#
@@ -785,6 +833,8 @@ function Add-SuccessfulApplication {
     $Script:SuccessfulApplications.Add($appInfo)
     Write-Log "Tracked successful application: $DisplayName $Version"
 }
+
+
 
 function Add-FailedApplication {
     <#
@@ -841,6 +891,8 @@ function Add-FailedApplication {
     Write-Log "Tracked failed application: $ApplicationId - $ErrorMessage"
 }
 
+
+
 function Test-OutlookAvailability {
     <#
     .SYNOPSIS
@@ -858,12 +910,13 @@ function Test-OutlookAvailability {
         $outlook = $null
         [System.GC]::Collect()
         return $true
-    }
-    catch {
+    } catch {
         Write-Log "Outlook COM object not available: $_"
         return $false
     }
 }
+
+
 
 function Send-YardstickEmailReport {
     <#
@@ -1037,7 +1090,7 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
         <p class="timestamp">
             <small>
                 This report was automatically generated by Yardstick.<br>
-                Log file location: $Global:LOG_LOCATION\$Global:LOG_FILE
+                Log file location: $Global:LogLocation\$Global:LogFile
             </small>
         </p>
     </div>
@@ -1056,8 +1109,7 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
         $mail = $null
         $outlook = $null
         [System.GC]::Collect()
-    }
-    catch {
+    } catch {
         Write-Log "ERROR: Failed to send email report: $_"
         # Clean up COM objects even on error
         try {
@@ -1067,6 +1119,7 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
         } catch { }
     }
 }
+
 
 # Export all functions for module availability
 Export-ModuleMember -Function *
