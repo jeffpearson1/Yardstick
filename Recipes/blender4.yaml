@@ -2,7 +2,7 @@ url: https://mirror.clarkson.edu/blender/release/
 urlredirects: false
 preDownloadScript: | 
   $Content = Invoke-WebRequest $Script:URL
-  $Directory = (($content.links | Where-Object href -match "Blender[0-9]\.[0-9]{1,2}\/").href)[-1]
+  $Directory = (($content.links | Where-Object href -match "Blender4\.[0-9]{1,2}\/").href)[-1]
   $Script:URL = $Script:URL + $Directory
   $Content = Invoke-WebRequest $Script:URL
   $Script:FileName = (($content.links | Where-Object href -match "-windows-x64\.msi$").href)[-1]
@@ -11,8 +11,8 @@ preDownloadScript: |
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
 iconFile: blender.png
-id: blender
-displayName: Blender
+id: blender4
+displayName: Blender 4
 publisher: The Blender Foundation
 description: Blender is the free and open source 3D creation suite. It supports the entirety of the 3D pipeline - modeling, rigging, animation, simulation, rendering, compositing and motion tracking, video editing and 2D animation pipeline.
 softwareName: "Blender*"

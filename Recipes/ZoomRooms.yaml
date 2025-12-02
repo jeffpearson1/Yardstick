@@ -3,6 +3,7 @@ urlredirects: true
 preDownloadScript: |
   $version = ($url -split "/")[4]
   $fileDetectionVersion = $version
+  $filename = $url.split("/")[-1].replace("%20", " ")
 installScript: msiexec /i <filename> /quiet Silent=true ACCEPTGDPR=true /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
 fileName: ZoomRoomsInstaller.msi

@@ -6,15 +6,41 @@ preDownloadScript: |
   $url = "https://github.com" + ($Content.links | where href -match "-64-bit\.exe")[0].href
   $filename = $url.Split("/")[-1]
   $version = $filename.Split("-")[1].trim()
-postDownloadScript:
+postDownloadScript: |
   $fileDetectionVersion = ((Get-Item $filename).VersionInfo.FileVersion).trim()
-installScript: <filename> /VERYSILENT /NORESTART
+  $config = @"
+  [Setup]
+  Lang=default
+  Dir=C:\Program Files\Git
+  Group=Git
+  NoIcons=0
+  SetupType=default
+  Components=ext,ext\shellhere,ext\guihere,gitlfs,assoc,assoc_sh,windowsterminal
+  Tasks=
+  EditorOption=VisualStudioCode
+  CustomEditorPath=
+  DefaultBranchOption= 
+  PathOption=Cmd
+  SSHOption=OpenSSH
+  TortoiseOption=false
+  CURLOption=OpenSSL
+  CRLFOption=CRLFAlways
+  BashTerminalOption=MinTTY
+  GitPullBehaviorOption=Merge
+  UseCredentialManager=Enabled
+  PerformanceTweaksFSCache=Enabled
+  EnableSymlinks=Disabled
+  EnableFSMonitor=Disabled
+  "@
+  # Drop the config file in the build space
+  $config | Out-File "$($Script:BUILDSPACE)\$($Script:ID)\$($Script:VERSION)\git_config.ini"
+installScript: <filename> /VERYSILENT /NORESTART /LOADINF="git_config.ini"
 uninstallScript: 'C:\Program Files\Git\unins000.exe /VERYSILENT /NORESTART'
 version:
 fileName:
 iconFile: git.png
 id: git
-displayName: Git for Windows
+displayName: "Git for Windows"
 publisher: Git
 description: Git for Windows is a set of tools that allow you to use Git on Windows.
 detectionType: file

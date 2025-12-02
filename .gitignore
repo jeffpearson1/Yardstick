@@ -20,9 +20,12 @@
 # Exclude any files that might contain sensitive data
 /Preferences.yaml
 /Recipes/*.common.yaml
+/Recipes/crowdstrikefalcon.yaml
 
 # Exclude development files
-/Yardstick-Dev.ps1
+/Yardstick_backup.ps1
+/Recipes/verniergraphicalanalysis.yaml
+/Recipes/Disabled/*
 
 # Exclude miscellaneous editor files
 /.vscode
