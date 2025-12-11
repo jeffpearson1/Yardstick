@@ -1,0 +1,18 @@
+url: https://www.zotero.org/download/client/dl?channel=release&platform=win32
+urlredirects: true
+preDownloadScript: |
+  $filename = ($url -split "\/")[-1]
+  $version = (($filename -split "-")[1] -split "_")[0]
+  $fileDetectionVersion = "$version.0"
+installScript: <filename> -ms
+uninstallScript: '"%ProgramFiles%\Zotero\uninstall\helper.exe" -ms'
+iconFile: zotero.png
+id: zotero
+displayName: Zotero
+publisher: Roy Rosenzweig Center for History and New Media
+description: Zotero is a free, easy-to-use tool to help you collect, organize, cite, and share research.
+detectionType: file
+fileDetectionPath: '%ProgramFiles(x86)%\Zotero'
+fileDetectionName: zotero.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
