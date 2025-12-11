@@ -673,8 +673,10 @@ foreach ($ApplicationId in $Applications) {
 
         # Download the new installer
         Write-Log "Starting download..."
-        Write-Log "URL: $($Script:Url)"
-        if (!$Script:Url) {
+        if ($Script:Url) {
+            Write-Log "URL: $($Script:Url)"
+        }
+        if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript))) {
             Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "URL is empty - cannot continue" -FailureStage "Download"
             Write-Error "URL is empty - cannot continue."
             continue
