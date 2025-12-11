@@ -1138,12 +1138,14 @@ function Get-Secrets {
     #>
     param(
         [Parameter(Mandatory=$true)]
-        [string]$VaultName
+        [string]$VaultName,
+        [string]$SecretsDir = "$PSScriptRoot\..\Secrets"
     )
     
     # Placeholder for secret retrieval logic
     # Implement actual secret retrieval from your secure vault here
-    $Secrets = Get-Content -Path "$($Script:Secrets)\$VaultName.yaml" | ConvertFrom-Yaml
+    Write-Log "Retrieving secrets from vault here: $($SecretsDir)\$VaultName.yaml"
+    $Secrets = Get-Content -Path "$($SecretsDir)\$VaultName.yaml" | ConvertFrom-Yaml
     
     Write-Log "Retrieved secrets from vault: $VaultName"
     
