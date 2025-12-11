@@ -27,7 +27,7 @@ uninstallScript: |
   if (Test-Path "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk") {
     Remove-Item "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk" -Force
   }
-iconFile: PrusaSlicer.png
+iconFile: PrusaSlicer.jpg
 id: prusaslicer
 displayName: PrusaSlicer
 publisher: Prusa Research
