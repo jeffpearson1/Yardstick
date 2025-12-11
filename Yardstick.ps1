@@ -731,9 +731,15 @@ foreach ($ApplicationId in $Applications) {
         }
         # Update placeholders for the final time
         Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $ProductCode -Version $Script:Version
-        
-         
 
+        # DEBUG: Make sure that there aren't any placeholder strings left
+        if ($Script:InstallScript -match "<filename>|<productcode>|<version>" -or
+            $Script:UninstallScript -match "<filename>|<productcode>|<version>" -or
+            $Script:DetectionScript -match "<filename>|<productcode>|<version>") {
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in scripts." -FailureStage "Placeholder Replacement"
+            Write-Error "One or more placeholder strings were not replaced in scripts."
+            continue
+        }
 
         # Generate the .intunewin file
         Set-Location $PSScriptRoot
@@ -752,8 +758,6 @@ foreach ($ApplicationId in $Applications) {
         # Generate the min OS requirement rule
         $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture "All" -MinimumSupportedWindowsRelease $Script:MinOSVersion
 
-
-
         # Create the Intune App
         Write-Log "Uploading $Script:DisplayName to Intune..."
         Connect-AutoMSIntuneGraph
@@ -770,10 +774,10 @@ foreach ($ApplicationId in $Applications) {
             continue
         }
 
+
         ###################################################
         # MIGRATE OLD DEPLOYMENTS
         ###################################################
-
 
         # Check if any existing applications have the same version so we can delete them
         $ToRemove = $ExistingVersions | where-object displayVersion -eq $Script:Version
@@ -793,13 +797,13 @@ foreach ($ApplicationId in $Applications) {
         Write-Log "Updating local application manifest..."
         Start-Sleep -Seconds 4
         try {
-            $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName | Sort-Object @{Expression = "displayName"; Descending = $false}, @{Expression = "displayVersion"; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true}
+            $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
         } catch {
             Write-Log "There was an error fetching information about existing applications. Exiting"
             Exit 4
         }
         $CurrentApp = $AllMatchingApps[0]
-        $AllOldApps = $AllMatchingApps[1..-1]
+        $AllOldApps = $AllMatchingApps[1..$($AllMatchingApps.count - 1)]
         # For any apps that share the same version as the current one, move all their deployments to the current one and remove the rest from the list
         $SameVersionApps = $AllOldApps | Where-Object displayVersion -eq $CurrentApp.displayVersion
         if ($SameVersionApps) {
@@ -815,8 +819,6 @@ foreach ($ApplicationId in $Applications) {
         $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $Script:DisplayName
         # All apps that will be assigned N-2 and older - these currently have the N-<version> suffix
         $NMinusTwoAndOlderApps = $AllOldApps | Where-Object displayName -ne $Script:DisplayName
-
-    
 
         # Start with the N-1 app first and move all its deployments to the newest one
         if ($NMinusOneApps) {
@@ -870,7 +872,7 @@ foreach ($ApplicationId in $Applications) {
                 Write-Log "ERROR: Failed to update display name to $($Script:DisplayName) (N-$i)"
             }
         }
-    
+
         # Remove all the old versions 
         if (!$NoDelete) {
             for ($i = $Script:NumVersionsToKeep - 1; $i -lt $AllOldApps.count; $i++) {
@@ -883,6 +885,7 @@ foreach ($ApplicationId in $Applications) {
             Add-SuccessfulApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed
             Write-Log "Updates complete for $Script:DisplayName"
         }
+
     } catch {
         # Catch any unexpected errors during processing
         Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Unexpected error during processing: $_" -FailureStage "General Processing"
@@ -912,7 +915,6 @@ if (-not $NoEmail) {
         Write-Log "WARNING: Failed to send email report: $_"
     }
 }
-
 
 # Clean up
 Invoke-Cleanup

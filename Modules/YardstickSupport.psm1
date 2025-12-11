@@ -24,7 +24,7 @@ function Write-Log {
     if (-not $LogLocation -or -not $LogFile) {
         Write-Warning "LOG_LOCATION or LOG_FILE variables are not set. Cannot write to log."
         if ($Content) {
-            Write-Output "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
+            Write-Host "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
         return
     }
@@ -42,12 +42,12 @@ function Write-Log {
         if ($Content) {
             $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
             Write-Output $Content | Out-File $LogFile -Append
-            Write-Output $Content
+            Write-Host $Content
         }
     } catch {
         Write-Warning "Failed to write to log file: $_"
         if ($Content) {
-            Write-Output "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
+            Write-Host "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
     } finally {
         Pop-Location -ErrorAction SilentlyContinue
@@ -606,35 +606,37 @@ function Get-SameAppAllVersions {
         [Parameter(Mandatory=$true)]
         [String]$DisplayName
     )
+
+    Write-Log "Retrieving all versions of application with display name: $DisplayName"
     
     # Attempt to connect to Intune up to 3 times
     for ($i = 0; $i -lt 3; $i++) {
         try {
+            Write-Log "Attempt $($i + 1) to retrieve applications with the name $DisplayName"
             $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName" -ErrorAction SilentlyContinue
             break
         }
         catch {
-            # Write-Log "Error retrieving applications with the name $DisplayName"
+            Write-Log "Error retrieving applications with the name $DisplayName on attempt $($i + 1): $_"
             if ($i -eq 2) {
-                # Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
+                Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
                 exit 1001
             } else {
-                # Write-Log "Retrying to retrieve applications with the name $DisplayName. Attempt $($i + 1) of 3."
+                Write-Log "Retrying to retrieve applications with the name $DisplayName. Attempt $($i + 2) of 3."
                 Start-Sleep -Seconds 5
             }
         }
     }
     
     if (-not $AllSimilarApps) {
-        # Write-Log "No applications found with the name $DisplayName"
+        Write-Log "No applications found with the name $DisplayName"
         return @()
     }
     
     # Only return apps that have the same name (not ones that look the same) and apps that are pending approval
     $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (N-*")})
-    
-    # Pad out each version section to 8 digits of zeroes before sorting, remove any letters, and mash it all together so that versions sort correctly
-    return $sortable | Sort-Object {$($($($_.displayVersion -replace "[A-Za-z]", "0") -replace "[\-\+]", ".").split(".") | ForEach-Object {'{0:d8}' -f [int]$_}) -join ''} -Descending
+    # Sort by version descending, then by createdDateTime descending
+    return $sortable | Sort-Object @{Expression = {[Version](($_.displayVersion -replace "[A-Za-z]", "0") -replace "[\-\+]", ".")}; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true}
 }
 
 
@@ -1118,6 +1120,34 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
             [System.GC]::Collect()
         } catch { }
     }
+}
+
+function Get-Secrets {
+    <#
+    .SYNOPSIS
+    Retrieves secrets from the secrets directory
+    
+    .DESCRIPTION
+    Connects to the secrets directory and retrieves secrets for use in the script.
+    
+    .PARAMETER VaultName
+    The name of the vault to connect to.
+    
+    .OUTPUTS
+    Hashtable of retrieved secrets.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$VaultName
+    )
+    
+    # Placeholder for secret retrieval logic
+    # Implement actual secret retrieval from your secure vault here
+    $Secrets = Get-Content -Path "$($Script:Secrets)\$VaultName.yaml" | ConvertFrom-Yaml
+    
+    Write-Log "Retrieved secrets from vault: $VaultName"
+    
+    return $Secrets
 }
 
 
