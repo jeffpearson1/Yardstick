@@ -230,6 +230,7 @@ function Set-ScriptVariables {
     $Script:Arm64FilterName = $Preferences.arm64FilterName
     $Script:Amd64FilterName = $Preferences.amd64FilterName
     $Script:VersionLock = $Parameters.versionLock
+    $Script:ProductCode = $null
     
     # Handle version lock logic
     if ($Script:VersionLock) {
@@ -465,11 +466,12 @@ function New-DetectionRule {
         }
         "script" {
             if (!(Test-Path $Script:Scripts\$Script:Id)) {
-                New-Item -Name $Script:Id -ItemType Directory -Path $Script:Scripts
+                $item = New-Item -Name $Script:Id -ItemType Directory -Path $Script:Scripts | Out-Null
             }
             $ScriptLocation = "$($Script:Scripts)\$($Script:Id)\$($Script:Version).$($Script:DetectionScriptFileExtension)"
-            Write-Output $Script:DetectionScript | Out-File $ScriptLocation
-            return New-IntuneWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $Script:DetectionScriptEnforceSignatureCheck -RunAs32Bit $Script:DetectionScriptRunAs32Bit
+            Set-Content -Path $ScriptLocation -Value $Script:DetectionScript -Force
+            $DetRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $Script:DetectionScriptEnforceSignatureCheck -RunAs32Bit $Script:DetectionScriptRunAs32Bit
+            return $DetRule
         }
     }
 }
