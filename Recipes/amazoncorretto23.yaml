@@ -6,7 +6,6 @@ preDownloadScript: |
   }
   $url -match "([0-9]{1,}\.){4}[0-9]{1,}" | Out-Null
   $version = $matches[0]
-  $fileDetectionVersion = $version
   $fileName = $($url -split "/")[-1]
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
