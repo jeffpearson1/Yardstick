@@ -1,5 +1,4 @@
-# Useful Functions
-
+using module .\VersionPro.psm1
 
 function Write-Log {
     <#
@@ -636,7 +635,7 @@ function Get-SameAppAllVersions {
     # Only return apps that have the same name (not ones that look the same) and apps that are pending approval
     $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (N-*")})
     # Sort by version descending, then by createdDateTime descending
-    return $sortable | Sort-Object @{Expression = {[Version](($_.displayVersion -replace "[A-Za-z]", "0") -replace "[\-\+]", ".")}; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true}
+    return $sortable | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true}
 }
 
 
