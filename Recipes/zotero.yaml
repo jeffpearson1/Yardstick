@@ -1,4 +1,4 @@
-url: https://www.zotero.org/download/client/dl?channel=release&platform=win32
+url: https://www.zotero.org/download/client/dl?channel=release&platform=win-x64
 urlredirects: true
 preDownloadScript: |
   $filename = ($url -split "\/")[-1]
@@ -12,7 +12,7 @@ displayName: Zotero
 publisher: Roy Rosenzweig Center for History and New Media
 description: Zotero is a free, easy-to-use tool to help you collect, organize, cite, and share research.
 detectionType: file
-fileDetectionPath: '%ProgramFiles(x86)%\Zotero'
+fileDetectionPath: '%ProgramFiles%\Zotero'
 fileDetectionName: zotero.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
