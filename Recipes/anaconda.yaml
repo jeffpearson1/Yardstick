@@ -17,7 +17,7 @@ softwareName: "Anaconda*"
 detectionType: script
 detectionScript: |
   $Version = "<version>"
-  $FileVersion = (Get-Item "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe").VersionInfo.FileVersion
+  $FileVersion = (Get-Item "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" -ErrorAction SilentlyContinue).VersionInfo.FileVersion
   if ("$FileVersion" -eq "$Version") {
     Write-Host "Product has installed correctly"
     exit 0
@@ -25,7 +25,7 @@ detectionScript: |
   Write-Host "Product has failed to install correctly"
   exit 1
 installExperience: system
-maximumInstallationTimeInMinutes: 5
+maximumInstallationTimeInMinutes: 60
 scopeTags:
   - scopeTag1
   - scopeTag2

@@ -1,8 +1,8 @@
-url: https://www.citrix.com/downloads/workspace-app/workspace-app-for-windows-long-term-service-release/workspace-app-for-windows-LTSR-Latest.html
+url: https://www.citrix.com/downloads/workspace-app/workspace-app-for-windows-long-term-service-release/workspace-app-for-windows-LTSR-25071.html
 urlredirects: false
 preDownloadScript: |
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')
-  $VersionElement = Get-SeElement -By Xpath "//*[text()[contains(.,'Offline Installer')]]/../div/p"
+  $VersionElement = Get-SeElement -By Xpath "//*[text()[contains(.,'Offline installer')]]/../div/p"
   $Version = $VersionElement.Text.Split(" ")[1].Split("(")[0]
   $DetectionPathVersion = $VersionElement.Text.Split("(")[1].Split(".")[0]
   $fileDetectionVersion = $version
@@ -10,7 +10,7 @@ preDownloadScript: |
   $Driver.close()
 downloadScript: |
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -DefaultDownloadPath "$buildSpace\$id\$version" -Arguments @('--headless')
-  $DownloadButtonElement = Get-SeElement -By Xpath "//*[text()[contains(.,'Offline Installer')]]/../div/div/a"
+  $DownloadButtonElement = Get-SeElement -By Xpath "//*[text()[contains(.,'Offline installer')]]/../div/div/a"
   $DownloadButtonElement.Click()
   Start-Sleep -Seconds 3
   $AcceptEULAButtonElement = Get-SeElement -By ID "ctx-accept-dl"
