@@ -188,6 +188,8 @@ function Set-ScriptVariables {
     $Script:PostRunScript = if ($Parameters.postRunScript) { [ScriptBlock]::Create($Parameters.postRunScript) }
     $Script:InstallScript = $Parameters.installScript
     $Script:UninstallScript = $Parameters.uninstallScript
+    $Script:PowerShellInstallScript = $Parameters.powerShellInstallScript
+    $Script:PowerShellUninstallScript = $Parameters.powerShellUninstallScript
     
     # Use parameters or fall back to preferences with null coalescing
     $Script:ScopeTags = $Parameters.scopeTags ?? $Preferences.defaultScopeTags
@@ -240,6 +242,14 @@ function Set-ScriptVariables {
         }
     } else {
         $Script:NumVersionsToKeep = $Parameters.numVersionsToKeep ?? $Preferences.defaultNumVersionsToKeep
+    }
+
+    # Handle PowerShell Script batch handoff
+    if (($Script:PowerShellInstallScript) -and (!$Script:InstallScript)) {
+        $Script:InstallScript = "powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1"
+    }
+    if (($Script:PowerShellUninstallScript) -and (!$Script:UninstallScript)) {
+        $Script:UninstallScript = "powershell.exe -noprofile -executionpolicy bypass -file .\uninstall.ps1"
     }
 }
 
@@ -358,8 +368,14 @@ function Update-ScriptPlaceholders {
     if ($Script:InstallScript) {
         $Script:InstallScript = $Script:InstallScript.replace("<filename>", $FileName)
     }
+    if ($Script:PowerShellInstallScript) {
+        $Script:PowerShellInstallScript = $Script:PowerShellInstallScript.replace("<filename>", $FileName)
+    }
     if ($Script:UninstallScript) {
         $Script:UninstallScript = $Script:UninstallScript.replace("<filename>", $FileName)
+    }
+    if ($Script:PowerShellUninstallScript) {
+        $Script:PowerShellUninstallScript = $Script:PowerShellUninstallScript.replace("<filename>", $FileName)
     }
     if ($Script:DetectionScript) {
         $Script:DetectionScript = $Script:DetectionScript.replace("<filename>", $FileName)
@@ -373,8 +389,14 @@ function Update-ScriptPlaceholders {
         if ($Script:InstallScript) {
             $Script:InstallScript = $Script:InstallScript.replace("<productcode>", $ProductCode)
         }
+        if ($Script:PowerShellInstallScript) {
+            $Script:PowerShellInstallScript = $Script:PowerShellInstallScript.replace("<productcode>", $ProductCode)
+        }
         if ($Script:UninstallScript) {
             $Script:UninstallScript = $Script:UninstallScript.replace("<productcode>", $ProductCode)
+        }
+        if ($Script:PowerShellUninstallScript) {
+            $Script:PowerShellUninstallScript = $Script:PowerShellUninstallScript.replace("<productcode>", $ProductCode)
         }
         if ($Script:DetectionScript) {
             $Script:DetectionScript = $Script:DetectionScript.replace("<productcode>", $ProductCode)
@@ -388,8 +410,14 @@ function Update-ScriptPlaceholders {
     if ($Script:InstallScript) {
         $Script:InstallScript = $Script:InstallScript.replace("<version>", $Version)
     }
+    if ($Script:PowerShellInstallScript) {
+        $Script:PowerShellInstallScript = $Script:PowerShellInstallScript.replace("<version>", $Version)
+    }
     if ($Script:UninstallScript) {
         $Script:UninstallScript = $Script:UninstallScript.replace("<version>", $Version) 
+    }
+    if ($Script:PowerShellUninstallScript) {
+        $Script:PowerShellUninstallScript = $Script:PowerShellUninstallScript.replace("<version>", $Version) 
     }
     if ($Script:DetectionScript) {
         $Script:DetectionScript = $Script:DetectionScript.replace("<version>", $Version) 
@@ -738,11 +766,22 @@ foreach ($ApplicationId in $Applications) {
 
         # DEBUG: Make sure that there aren't any placeholder strings left
         if ($Script:InstallScript -match "<filename>|<productcode>|<version>" -or
+            $Script:PowerShellInstallScript -match "<filename>|<productcode>|<version>" -or
             $Script:UninstallScript -match "<filename>|<productcode>|<version>" -or
+            $Script:PowerShellUninstallScript -match "<filename>|<productcode>|<version>" -or
             $Script:DetectionScript -match "<filename>|<productcode>|<version>") {
             Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in scripts." -FailureStage "Placeholder Replacement"
             Write-Error "One or more placeholder strings were not replaced in scripts."
             continue
+        }
+
+        # Write the contents of the install and uninstall scripts to files if they are PowerShell scripts
+        if ($Script:PowerShellInstallScript) {
+            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\install.ps1 -Value $Script:PowerShellInstallScript -Force
+        }
+
+        if ($Script:PowerShellUninstallScript) {
+            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\uninstall.ps1 -Value $Script:PowerShellUninstallScript -Force
         }
 
         # Generate the .intunewin file
@@ -752,6 +791,11 @@ foreach ($ApplicationId in $Applications) {
 
         # Upload .intunewin file to Intune
         # Detection Types
+        if (!(Test-Path "$($Icons)\$($Script:IconFile)")) {
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Icon file $($Script:IconFile) not found in Icons folder." -FailureStage "Icon Retrieval"
+            Write-Error "Icon file $($Script:IconFile) not found in Icons folder."
+            continue
+        }
         $Icon = New-IntuneWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
         if (-not $Script:FileDetectionVersion) {
             $Script:FileDetectionVersion = $Script:Version
@@ -914,7 +958,23 @@ foreach ($ApplicationId in $Applications) {
 # Send email report if enabled
 if (-not $NoEmail) {
     try {
-        Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters
+        # Select email delivery method based on preferences
+        $emailMethod = $Prefs.emailDeliveryMethod ?? "outlook"
+        
+        switch ($emailMethod.ToLower()) {
+            "mailkit" {
+                Write-Log "Sending email report using PoshMailKit"
+                Send-YardstickEmailReportMailKit -Preferences $Prefs -RunParameters $RunParameters
+            }
+            "outlook" {
+                Write-Log "Sending email report using Outlook"
+                Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters
+            }
+            default {
+                Write-Log "WARNING: Unknown email delivery method '$emailMethod'. Defaulting to Outlook."
+                Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters
+            }
+        }
     } catch {
         Write-Log "WARNING: Failed to send email report: $_"
     }
