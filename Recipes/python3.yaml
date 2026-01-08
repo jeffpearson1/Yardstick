@@ -25,3 +25,6 @@ detectionType: file
 fileDetectionPath: 
 fileDetectionName: 'python.exe'
 fileDetectionMethod: exists
+scopeTags:
+  - scopeTag1
+  - scopeTag2

@@ -2,7 +2,7 @@ url: https://qgis.org/download/
 urlredirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $url
-  $URL = "https://qgis.org$(($Content.Links | Where-Object href -like "*msi*" | Where-Object outerHTML -like "*Latest*" | Where-Object outerHTML -notlike "*experimental*").href)"
+  $URL = $(($Content.Links | Where-Object href -like "*msi*" | Where-Object outerHTML -like "*Latest*" | Where-Object outerHTML -notlike "*experimental*").href)
   $filename = ($URL -split "\/")[-1]
   $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
   $Version = $matches[0]

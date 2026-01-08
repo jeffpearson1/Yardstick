@@ -7,12 +7,35 @@ preDownloadScript: |
   $readableURL -match "([0-9]{1,}\.){1,3}[0-9]{1,}" | Out-Null
   $version = $matches[0]
   $filename = ($readableURL -split "/")[-1]
-installScript: msiexec /i "<filename>" /qn /norestart
-uninstallScript: msiexec /x <productcode> /qn /norestart
+powershellInstallScript: |
+  # Install iClicker Cloud
+  $iClickerInstallPath = "C:\ProgramData\iClickerCloud"
+  $iClickerInstaller = "<filename>"
+  $iClickerFullInstallPath = Join-Path -Path $iClickerInstallPath -ChildPath $iClickerInstaller
+
+  if (!(Test-Path -Path $iClickerInstallPath)) {
+      New-Item -Path $iClickerInstallPath -ItemType Directory -Force
+  }
+
+  Copy-Item -Path "$PSScriptRoot\$iClickerInstaller" -Destination $iClickerInstallPath -Recurse -Force
+  Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$iClickerFullInstallPath`" /qn /norestart" -Wait
+powershellUninstallScript: |
+  # Uninstall iClicker Cloud
+  Start-Process -FilePath "msiexec.exe" -ArgumentList "/X <productcode> /qn /norestart" -Wait
+
+  # Remove iClicker Cloud Directories
+  if (Test-Path -Path "C:\Program Files\Macmillan Learning"){
+      Remove-Item -Path "C:\Program Files\Macmillan Learning" -Recurse -Force
+  }
+
+  # Remove iClicker installer
+  if (Test-Path -Path "C:\ProgramData\iClickerCloud") {
+      Remove-Item -Path "C:\ProgramData\iClickerCloud" -Recurse -Force
+  }
 version:
 iconFile: iclickercloud.png
 id: iclickercloud
-displayName: iClicker Cloud
+displayName: DEV iClicker Cloud
 publisher: iClicker
 description: Engage your students in new ways with iClicker Cloud (formerly Reef Instructor). Track attendance using GPS technology, ask target (heat map) questions, administer quizzes, and analyze student performance using a web browser. Students participate using mobile devices, laptops, and iClicker remotes.
 detectionType: msi
