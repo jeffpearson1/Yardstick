@@ -8,7 +8,11 @@ preDownloadScript: |
   $Version = $matches[0]
 powershellInstallScript: | 
   Invoke-WebRequest -Uri "https://github.com/google/fonts/raw/main/ofl/opensans/OpenSans%5Bwdth,wght%5D.ttf" -UseBasicParsing
-  Start-Process -FilePath "msiexec" -ArgumentList "/i `"$PSScriptRoot\QGIS-OSGeo4W-3.44.6-1.msi`" INSTALLDIR=`"$env:ProgramFiles\QGIS`" /qn /norestart" -Wait
+  if (Test-Path -Path "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\QGIS*") {
+    Remove-Item -Path "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\QGIS*" -Recurse -Force
+  }
+  Start-Process -FilePath "msiexec" -ArgumentList "/i `"<filename>`" INSTALLDIR=`"$env:ProgramFiles\QGIS`" /qn /norestart" -Wait
+  Get-ChildItem "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\QGIS*" -Directory | Select-Object -First 1 | Rename-Item -NewName "QGIS" -Force
 installScript: |
   %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1
 uninstallScript: msiexec /x <productcode> /qn /norestart
