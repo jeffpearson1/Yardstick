@@ -505,49 +505,6 @@ function New-DetectionRule {
 }
 
 
-
-function Add-DeploymentWithArchitecture {
-    <#
-    .SYNOPSIS
-    Adds a deployment assignment with optional architecture filtering.
-    
-    .DESCRIPTION
-    This function handles the assignment of applications to groups with
-    optional architecture-specific filtering for ARM64 or AMD64.
-    
-    .PARAMETER AppId
-    The ID of the application to deploy.
-    
-    .PARAMETER GroupId
-    The ID of the group to deploy to.
-    
-    .PARAMETER Architecture
-    The target architecture (arm64, amd64, or default for no filtering).
-    #>
-    param(
-        [string]$AppId,
-        [string]$GroupId,
-        [string]$Architecture
-    )
-    
-    switch ($Architecture) {
-        "arm64" {
-            Write-Log "Architecture filter: ARM64"
-            Add-IntuneWin32AppAssignmentGroup -Include -ID $AppId -GroupID $GroupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:Arm64FilterName)" | Out-Null
-        }
-        "amd64" {
-            Write-Log "Architecture filter: AMD64"
-            Add-IntuneWin32AppAssignmentGroup -Include -ID $AppId -GroupID $GroupId -Intent "available" -Notification "hideAll" -FilterMode Include -FilterName "$($Script:Amd64FilterName)" | Out-Null
-        }
-        default {
-            Write-Log "No architecture filter selected"
-            Add-IntuneWin32AppAssignmentGroup -Include -ID $AppId -GroupID $GroupId -Intent "available" -Notification "hideAll" | Out-Null
-        }
-    }
-}
-
-
-
 function Invoke-Cleanup {
     <#
     .SYNOPSIS
@@ -804,7 +761,7 @@ foreach ($ApplicationId in $Applications) {
         $DetectionRule = New-DetectionRule -DetectionType $Script:DetectionType -ProductCode $ProductCode
 
         # Generate the min OS requirement rule
-        $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture "All" -MinimumSupportedWindowsRelease $Script:MinOSVersion
+        $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $Script:Architecture -MinimumSupportedWindowsRelease $Script:MinOSVersion
 
         # Create the Intune App
         Write-Log "Uploading $Script:DisplayName to Intune..."
@@ -906,7 +863,7 @@ foreach ($ApplicationId in $Applications) {
             foreach ($DeploymentGroupID in $Script:DefaultDeploymentGroups) {
                 if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
                     Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
-                    Add-DeploymentWithArchitecture -AppId $ID -GroupId $DeploymentGroupID -Architecture $Script:Architecture
+                    Add-IntuneWin32AppAssignmentGroup -Include -ID $ID -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
                 }
             }
         }
