@@ -7,7 +7,7 @@ preDownloadScript: |
   $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
   $Version = $matches[0]
 powershellInstallScript: | 
-  Invoke-WebRequest -Uri "https://google.com" -UseBasicParsing
+  Invoke-WebRequest -Uri "https://github.com/google/fonts/raw/main/ofl/opensans/OpenSans%5Bwdth,wght%5D.ttf" -UseBasicParsing
   Start-Process -FilePath "msiexec" -ArgumentList "/i `"$PSScriptRoot\QGIS-OSGeo4W-3.44.6-1.msi`" INSTALLDIR=`"$env:ProgramFiles\QGIS`" /qn /norestart" -Wait
 installScript: |
   %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1
