@@ -35,7 +35,7 @@ powershellUninstallScript: |
 version:
 iconFile: iclickercloud.png
 id: iclickercloud
-displayName: DEV iClicker Cloud
+displayName: iClicker Cloud
 publisher: iClicker
 description: Engage your students in new ways with iClicker Cloud (formerly Reef Instructor). Track attendance using GPS technology, ask target (heat map) questions, administer quizzes, and analyze student performance using a web browser. Students participate using mobile devices, laptops, and iClicker remotes.
 detectionType: msi

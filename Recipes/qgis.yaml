@@ -6,7 +6,11 @@ preDownloadScript: |
   $filename = ($URL -split "\/")[-1]
   $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
   $Version = $matches[0]
-installScript: msiexec /i <filename> /qn /norestart
+powershellInstallScript: | 
+  Invoke-WebRequest -Uri "https://google.com" -UseBasicParsing
+  Start-Process -FilePath "msiexec" -ArgumentList "/i `"$PSScriptRoot\QGIS-OSGeo4W-3.44.6-1.msi`" INSTALLDIR=`"$env:ProgramFiles\QGIS`" /qn /norestart" -Wait
+installScript: |
+  %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1
 uninstallScript: msiexec /x <productcode> /qn /norestart
 iconFile: qgis.png
 id: qgis
@@ -16,7 +20,6 @@ description: QGIS is a geographic information system (GIS) software that is free
 detectionType: msi
 installExperience: system
 restartBehavior: suppress
-minOSVersion: W10_20H2
 scopeTags:
   - scopeTag1
   - scopeTag2
