@@ -104,7 +104,7 @@ Import-Module powershell-yaml -Scope Local
 Import-Module IntuneWin32App -Scope Local
 Import-Module Selenium -Scope Local
 Import-Module TUN.CredentialManager -Scope Local
-Import-Module $PSScriptRoot\Modules\YardstickSupport.psm1 -Scope Global -Force
+Import-Module ${PSScriptRoot}\Modules\YardstickSupport.psm1 -Scope Global -Force
 
 $CustomModules = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
 foreach ($Module in $CustomModules) {
@@ -206,6 +206,7 @@ function Set-ScriptVariables {
     $Script:Architecture = $Parameters.architecture ?? $Preferences.defaultArchitecture
     $Script:DeadlineDateOffset = $Parameters.deadlineDateOffset ?? $Preferences.defaultDeadlineDateOffset
     $Script:AvailableDateOffset = $Parameters.availableDateOffset ?? $Preferences.defaultAvailableDateOffset
+    $Script:AllowDependentLinkUpdates = $Parameters.allowDependentLinkUpdates ?? $Preferences.defaultAllowDependentLinkUpdates
     
     # Detection-related variables
     $Script:DetectionType = $Parameters.detectionType
@@ -224,6 +225,20 @@ function Set-ScriptVariables {
     $Script:DetectionScriptFileExtension = $Parameters.detectionScriptFileExtension ?? $Preferences.defaultDetectionScriptFileExtension
     $Script:DetectionScriptRunAs32Bit = $Parameters.detectionScriptRunAs32Bit ?? $Preferences.defaultdetectionScriptRunAs32Bit
     $Script:DetectionScriptEnforceSignatureCheck = $Parameters.detectionScriptEnforceSignatureCheck ?? $Preferences.defaultdetectionScriptEnforceSignatureCheck
+    $Script:DependentLinkUpdateEnabled = $Parameters.dependentLinkUpdateEnabled ?? ($Preferences.dependentLinkUpdateEnabled ?? $true)
+    $Script:DependentLinkUpdateRetryCount = $Parameters.dependentLinkUpdateRetryCount ?? ($Preferences.dependentLinkUpdateRetryCount ?? 3)
+    $Script:DependentLinkUpdateRetryDelaySeconds = $Parameters.dependentLinkUpdateRetryDelaySeconds ?? ($Preferences.dependentLinkUpdateRetryDelaySeconds ?? 5)
+    $Script:DependentLinkUpdateTimeoutSeconds = $Parameters.dependentLinkUpdateTimeoutSeconds ?? ($Preferences.dependentLinkUpdateTimeoutSeconds ?? 60)
+    $Script:DependentApplicationBlacklist = if ($Parameters.dependentApplicationBlacklist) {
+        $Parameters.dependentApplicationBlacklist
+    } elseif ($Preferences.dependentApplicationBlacklist) {
+        $Preferences.dependentApplicationBlacklist
+    } else {
+        @()
+    }
+    if (-not ($Script:DependentApplicationBlacklist -is [System.Collections.IEnumerable])) {
+        $Script:DependentApplicationBlacklist = @($Script:DependentApplicationBlacklist)
+    }
     
     # Additional variables
     $Script:IconFile = $Parameters.iconFile
@@ -578,6 +593,15 @@ foreach ($ApplicationId in $Applications) {
         
         # Update tracking variables with actual values
         $CurrentDisplayName = $Script:DisplayName
+        $DependentUpdateStatus = [ordered]@{}
+        $ProtectedDependencyAppIds = [System.Collections.Generic.HashSet[string]]::new()
+        $DependentLinkOptions = @{
+            Enabled = [bool]$Script:DependentLinkUpdateEnabled
+            RetryCount = [int]$Script:DependentLinkUpdateRetryCount
+            RetryDelaySeconds = [int]$Script:DependentLinkUpdateRetryDelaySeconds
+            TimeoutSeconds = [int]$Script:DependentLinkUpdateTimeoutSeconds
+            Blacklist = $Script:DependentApplicationBlacklist
+        }
 
 
         if ($Repair) {
@@ -792,9 +816,14 @@ foreach ($ApplicationId in $Applications) {
             $CurrentApp = Get-IntuneWin32App -Id $Win32App.id
             foreach ($RemoveApp in $ToRemove) {
                 Write-Log "Moving assignments before removal..."
-                Move-AssignmentsAndDependencies -From $RemoveApp -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset
-                Write-Log "Removing App with ID $($RemoveApp.id)"
-                Remove-IntuneWin32App -Id $RemoveApp.id
+                Move-AssignmentsAndDependencies -From $RemoveApp -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset -AllowDependentLinkUpdates:$Script:AllowDependentLinkUpdates -DependentLinkOptions $DependentLinkOptions -DependentUpdateStatus $DependentUpdateStatus -ProtectedSourceIds $ProtectedDependencyAppIds
+                if ($ProtectedDependencyAppIds.Contains($RemoveApp.id)) {
+                    Write-Log "Skipping removal of $($RemoveApp.DisplayName) because dependent applications are still targeting this version."
+                }
+                else {
+                    Write-Log "Removing App with ID $($RemoveApp.id)"
+                    Remove-IntuneWin32App -Id $RemoveApp.id
+                }
             }
         }
 
@@ -814,7 +843,7 @@ foreach ($ApplicationId in $Applications) {
         if ($SameVersionApps) {
             foreach ($App in $SameVersionApps) {
                 Write-Log "Moving assignments from $($App.id) to $($CurrentApp.id)"
-                Move-AssignmentsAndDependencies -From $App -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset
+                Move-AssignmentsAndDependencies -From $App -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset -AllowDependentLinkUpdates:$Script:AllowDependentLinkUpdates -DependentLinkOptions $DependentLinkOptions -DependentUpdateStatus $DependentUpdateStatus -ProtectedSourceIds $ProtectedDependencyAppIds
             }
             $AllOldApps = $AllOldApps | Where-Object displayVersion -ne $CurrentApp.displayVersion
         }
@@ -830,7 +859,7 @@ foreach ($ApplicationId in $Applications) {
             foreach ($NMinusOneApp in $NMinusOneApps) {
                 if ($CurrentApp) {
                     Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
-                    Move-AssignmentsAndDependencies -From $NMinusOneApp -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset
+                    Move-AssignmentsAndDependencies -From $NMinusOneApp -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset -AllowDependentLinkUpdates:$Script:AllowDependentLinkUpdates -DependentLinkOptions $DependentLinkOptions -DependentUpdateStatus $DependentUpdateStatus -ProtectedSourceIds $ProtectedDependencyAppIds
                 }
                 else {
                     Write-Log "There was an error fetching information about the current application. Exiting"
@@ -881,13 +910,17 @@ foreach ($ApplicationId in $Applications) {
         # Remove all the old versions 
         if (!$NoDelete) {
             for ($i = $Script:NumVersionsToKeep - 1; $i -lt $AllOldApps.count; $i++) {
+                if ($ProtectedDependencyAppIds.Contains($AllOldApps[$i].id)) {
+                    Write-Log "Skipping removal of $($AllOldApps[$i].displayName) because dependent applications are still targeting this version."
+                    continue
+                }
                 Write-Log "Removing old app with id $($AllOldApps[$i].id)"
                 Remove-IntuneWin32App -Id $AllOldApps[$i].id
             }
             
             # If we get here, the application was processed successfully
             $ActionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
-            Add-SuccessfulApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed
+            Add-SuccessfulApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus
             Write-Log "Updates complete for $Script:DisplayName"
         }
 
