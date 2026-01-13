@@ -352,7 +352,11 @@ function Move-AssignmentsAndDependencies {
         [Parameter(Position=2)]
         [Int] $DeadlineDateOffset = 0,
         [Parameter(Position=3)]
-        [Int] $AvailableDateOffset = 0
+        [Int] $AvailableDateOffset = 0,
+        [bool] $AllowDependentLinkUpdates = $true,
+        [hashtable] $DependentLinkOptions,
+        [System.Collections.IDictionary] $DependentUpdateStatus,
+        [System.Collections.Generic.HashSet[string]] $ProtectedSourceIds
     )
     # If IDs or Display Names were provided instead of application objects, get the app objects
     if ($From -is [String]) {
@@ -394,11 +398,71 @@ function Move-AssignmentsAndDependencies {
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
     $AvailableDate = (Get-Date).AddDays($AvailableDateOffset).ToString("MM/dd/yyyy")
     $DeadlineDate = (Get-Date).AddDays($DeadlineDateOffset).ToString("MM/dd/yyyy")
+    $childDependencies = @()
+    $parentDependencies = @()
+    if ($FromDependencies) {
+        foreach ($dependency in $FromDependencies) {
+            if (($dependency.PSObject.Properties.Name -contains "targetType") -and ($dependency.targetType -eq "parent")) {
+                $parentDependencies += $dependency
+            } else {
+                $childDependencies += $dependency
+            }
+        }
+    }
+
+    $resolvedDependentOptions = @{
+        Enabled = $true
+        RetryCount = 3
+        RetryDelaySeconds = 5
+        TimeoutSeconds = 60
+        Blacklist = @()
+    }
+    if ($DependentLinkOptions) {
+        foreach ($key in $DependentLinkOptions.Keys) {
+            if ($null -ne $DependentLinkOptions[$key]) {
+                $resolvedDependentOptions[$key] = $DependentLinkOptions[$key]
+            }
+        }
+    }
+    if (-not ($resolvedDependentOptions.Blacklist -is [System.Collections.IEnumerable])) {
+        $resolvedDependentOptions.Blacklist = @($resolvedDependentOptions.Blacklist)
+    }
+    $normalizedBlacklist = @()
+    if ($resolvedDependentOptions.Blacklist) {
+        $normalizedBlacklist = @($resolvedDependentOptions.Blacklist | ForEach-Object { $_.ToString().ToLowerInvariant() })
+    }
+
+    $recordDependentStatus = {
+        param($name, $status)
+        if ($DependentUpdateStatus -and $name) {
+            $DependentUpdateStatus[$name] = $status
+        }
+    }
+    $addProtectedSourceId = {
+        param($id)
+        if ($ProtectedSourceIds -and $id) {
+            [void]$ProtectedSourceIds.Add($id)
+        }
+    }
+    $normalizeDependencyType = {
+        param($type)
+        if (-not $type) { return "Detect" }
+        switch ($type.ToString().ToLower()) {
+            "autoinstall" { return "AutoInstall" }
+            default { return "Detect" }
+        }
+    }
     if ($FromAssignments) {
         foreach ($Assignment in $FromAssignments) {
+            # Skip assignments without a GroupID
+            if (!$Assignment.GroupID) { 
+                Write-Log "Skipping assignment without a GroupID."
+                continue 
+            }
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
+            Write-Verbose $Assignment
             Write-Log "Processing assignment for group $($Assignment.GroupID) with intent $($Assignment.Intent)"
             while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
                 if ($Assignment.InstallTimeSettings) {
@@ -527,8 +591,8 @@ function Move-AssignmentsAndDependencies {
             }
         }
     }
-    if($FromDependencies) {
-        foreach ($dependency in $FromDependencies) {
+    if ($childDependencies -and $childDependencies.Count -gt 0) {
+        foreach ($dependency in $childDependencies) {
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
@@ -580,6 +644,134 @@ function Move-AssignmentsAndDependencies {
                 Write-Log "No dependencies found for $($dependency.sourceId). Skipping dependency move."
             }
             
+        }
+    }
+
+    if ($parentDependencies -and $parentDependencies.Count -gt 0) {
+        $parentGroups = $parentDependencies | Group-Object -Property targetId
+        if (-not $AllowDependentLinkUpdates) {
+            Write-Log "Skipping dependent app link updates because AllowDependentLinkUpdates is disabled for this recipe."
+            foreach ($group in $parentGroups) {
+                $displayName = $group.Group[0].targetDisplayName
+                if (-not $displayName) { $displayName = $group.Name }
+                & $recordDependentStatus $displayName "Skipped (link updates disabled for recipe)"
+            }
+            & $addProtectedSourceId $From.id
+        }
+        elseif (-not [bool]$resolvedDependentOptions.Enabled) {
+            Write-Log "Skipping dependent app link updates because dependentLinkUpdateEnabled is disabled in preferences."
+            foreach ($group in $parentGroups) {
+                $displayName = $group.Group[0].targetDisplayName
+                if (-not $displayName) { $displayName = $group.Name }
+                & $recordDependentStatus $displayName "Skipped (link updates disabled in preferences)"
+            }
+            & $addProtectedSourceId $From.id
+        }
+        else {
+            $maxAttempts = [int]([Math]::Max(1, $resolvedDependentOptions.RetryCount))
+            $retryDelay = [int]([Math]::Max(1, $resolvedDependentOptions.RetryDelaySeconds))
+            $timeoutSeconds = [int]([Math]::Max(0, $resolvedDependentOptions.TimeoutSeconds))
+
+            foreach ($parentGroup in $parentGroups) {
+            $parentId = $parentGroup.Name
+            $parentDisplayName = $parentGroup.Group[0].targetDisplayName
+            if (-not $parentDisplayName) {
+                try {
+                    $parentApp = Get-IntuneWin32App -Id $parentId
+                    $parentDisplayName = $parentApp.DisplayName
+                } catch {
+                    Write-Log "Unable to retrieve metadata for dependent app $($parentId): $_"
+                }
+            }
+            if (-not $parentDisplayName) {
+                $parentDisplayName = $parentId
+            }
+
+            $normalizedParentName = $parentDisplayName.ToLowerInvariant()
+            if ($normalizedBlacklist -and $normalizedBlacklist -contains $normalizedParentName) {
+                Write-Log "Skipping dependent app $parentDisplayName because it is included in the blacklist."
+                & $recordDependentStatus $parentDisplayName "Skipped (blacklisted)"
+                & $addProtectedSourceId $From.id
+                continue
+            }
+
+            $updateSucceeded = $false
+            $statusMessage = "Updated"
+            $lastError = $null
+            $deadline = if ($timeoutSeconds -gt 0) { (Get-Date).AddSeconds($timeoutSeconds) } else { [datetime]::MaxValue }
+
+            for ($attempt = 0; ($attempt -lt $maxAttempts) -and (-not $updateSucceeded); $attempt++) {
+                if ((Get-Date) -gt $deadline) {
+                    $lastError = "Timed out after $timeoutSeconds seconds"
+                    break
+                }
+
+                $originalDependencies = @()
+                $updatedDependencies = @()
+                $dependenciesCleared = $false
+                try {
+                    $parentDependencyList = Get-IntuneWin32AppDependency -ID $parentId
+                    $childItems = $parentDependencyList | Where-Object { ($_.targetType -eq "child") -or (-not $_.targetType) }
+                    if (-not $childItems) {
+                        $statusMessage = "No dependencies to update"
+                        $updateSucceeded = $true
+                        break
+                    }
+
+                    $hasLinkToSource = $false
+                    foreach ($entry in $childItems) {
+                        $targetAppId = $entry.targetId
+                        $normalizedTypeValue = & $normalizeDependencyType $entry.dependencyType
+                        $originalDependencies += New-IntuneWin32AppDependency -ID $targetAppId -DependencyType $normalizedTypeValue
+                        if ($targetAppId -eq $From.id) {
+                            $hasLinkToSource = $true
+                            $targetAppId = $To.id
+                        }
+                        $updatedDependencies += New-IntuneWin32AppDependency -ID $targetAppId -DependencyType $normalizedTypeValue
+                    }
+
+                    if (-not $hasLinkToSource) {
+                        $statusMessage = "Already up-to-date"
+                        $updateSucceeded = $true
+                        break
+                    }
+
+                    Remove-IntuneWin32AppDependency -ID $parentId | Out-Null
+                    $dependenciesCleared = $true
+                    Add-IntuneWin32AppDependency -ID $parentId -Dependency $updatedDependencies | Out-Null
+                    $updateSucceeded = $true
+                    $newTargetName = if ($To.DisplayName) { $To.DisplayName } else { $To.id }
+                    Write-Log "Updated dependent app $parentDisplayName to reference $newTargetName."
+                }
+                catch {
+                    $lastError = $_.Exception.Message
+                    Write-Log "Failed to update dependent app $parentDisplayName on attempt $($attempt + 1): $lastError"
+                    if ($dependenciesCleared -and $originalDependencies.Count -gt 0) {
+                        try {
+                            Add-IntuneWin32AppDependency -ID $parentId -Dependency $originalDependencies | Out-Null
+                        } catch {
+                            Write-Log "Unable to restore original dependencies for $parentDisplayName after failure."
+                        }
+                    }
+
+                    if (($attempt -lt $maxAttempts - 1) -and ((Get-Date) -lt $deadline)) {
+                        Start-Sleep -Seconds $retryDelay
+                    }
+                    else {
+                        break
+                    }
+                }
+            }
+
+                if ($updateSucceeded) {
+                    & $recordDependentStatus $parentDisplayName $statusMessage
+                }
+                else {
+                    $failureStatus = if ($lastError) { "Failed ($lastError)" } else { "Failed" }
+                    & $recordDependentStatus $parentDisplayName $failureStatus
+                    & $addProtectedSourceId $From.id
+                }
+            }
         }
     }
 }
@@ -803,6 +995,9 @@ function Add-SuccessfulApplication {
     .PARAMETER Version
     The version of the application that was processed.
     
+    .PARAMETER Dependents
+    A hashtable containing dependent app names and their status (e.g., "Added", "Not Updated (Auto-update disabled)", "Failed").
+    
     .PARAMETER Action
     The action that was performed (e.g., "Updated", "Added", "Repaired").
     #>
@@ -815,7 +1010,10 @@ function Add-SuccessfulApplication {
         
         [Parameter(Mandatory=$true)]
         [string]$Version,
-        
+
+        # Store a list of dependent apps for this application and whether or not they had their references updated successfully
+        [hashtable]$Dependents = @{},
+
         [string]$Action = "Updated"
     )
     
@@ -828,6 +1026,7 @@ function Add-SuccessfulApplication {
         DisplayName = $DisplayName
         Version = $Version
         Action = $Action
+        Dependents = $Dependents
         Timestamp = Get-Date
     }
     
@@ -1022,7 +1221,6 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
         </div>
 "@
 
-        # Add successful applications section
         if ($Script:SuccessfulApplications.Count -gt 0) {
             $emailBody += @"
         
@@ -1045,6 +1243,31 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
                     <td class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
                 </tr>
 "@
+                # Add dependency information if present
+                if ($app.Dependents -and $app.Dependents.Count -gt 0) {
+                    $emailBody += @"
+                <tr>
+                    <td colspan="4" style="background-color: #f8f9fa; padding-left: 30px;">
+                        <strong>Dependent Applications:</strong>
+                        <ul style="margin: 5px 0;">
+"@
+                    foreach ($dep in $app.Dependents.GetEnumerator()) {
+                        $statusColor = switch -Regex ($dep.Value) {
+                            "^Added$|^Updated$" { "#28a745" }
+                            "^Not Updated|^Skipped" { "#ffc107" }
+                            "^Failed" { "#dc3545" }
+                            default { "#6c757d" }
+                        }
+                        $emailBody += @"
+                            <li><span style="color: $statusColor; font-weight: bold;">$($dep.Value)</span> - $($dep.Key)</li>
+"@
+                    }
+                    $emailBody += @"
+                        </ul>
+                    </td>
+                </tr>
+"@
+                }
             }
             $emailBody += @"
             </table>
