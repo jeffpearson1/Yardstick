@@ -57,3 +57,13 @@ emailRecipient: "admin@yourorganization.com"
 emailSubject: "Yardstick Application Update Report"
 emailSenderName: "Yardstick Automation"
 emailSendFromAddress: "noreply@yourorganization.com"
+
+#####################################
+# DEPENDENT LINK UPDATE SETTINGS
+#####################################
+dependentLinkUpdateEnabled: true
+dependentLinkUpdateRetryCount: 3
+dependentLinkUpdateRetryDelaySeconds: 5
+dependentLinkUpdateTimeoutSeconds: 60
+dependentApplicationBlacklist:
+  - "Example Dependent App Name to Exclude"
