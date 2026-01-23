@@ -318,8 +318,8 @@ These settings control how Intune handles installation, or they can be set as de
 - Example:
   ```yaml
   scopeTags:
-    - Arizona State University
-    - ASU Common
+    - My Scope Tag
+    - My Scope Tag 2
   ```
 
 **`owner`** (string) - Application owner.
@@ -437,8 +437,8 @@ fileType: msi
 detectionType: msi
 numVersionsToKeep: 2
 scopeTags:
-  - Arizona State University
-  - ASU Common
+  - My Scope Tag
+  - My Scope Tag 2
 ```
 
 ### EXE Installer with File Detection Example (Notepad++)
@@ -466,8 +466,8 @@ fileDetectionName: notepad++.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
 scopeTags:
-  - Arizona State University
-  - ASU Common
+  - My Scope Tag
+  - My Scope Tag 2
 ```
 
 ### Registry Detection Example (Firefox)
@@ -491,8 +491,8 @@ registryDetectionMethod: exists
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> (x64 en-US)'
 numVersionsToKeep: 2
 scopeTags:
-  - Arizona State University
-  - ASU Common
+  - My Scope Tag
+  - My Scope Tag 2
 ```
 
 ## Testing Your Recipe
