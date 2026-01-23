@@ -14,7 +14,9 @@ id: AmazonCorretto11
 displayName: Amazon Corretto JDK 11
 publisher: Amazon
 description: An OpenJDK distribution provided by Amazon
-softwareName: "*Amazon Corretto JRE 11*"
+dependentApplicationBlacklist:
+ - "Eclipse"
+ - "jGRASP"
 detectionType: msi
 scopeTags:
   - scopeTag1

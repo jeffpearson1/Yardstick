@@ -43,6 +43,8 @@ detectionScript: |
   }
   Write-Host "Product has failed to install correctly"
   exit 1
+dependentApplicationBlacklist:
+ - "NVIDIA Texture Tools for Adobe Photoshop"
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

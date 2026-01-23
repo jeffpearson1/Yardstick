@@ -20,6 +20,8 @@ displayName: Version Locked - Python 3
 publisher: Python Software Foundation
 description: Python is a programming language that lets you work quickly and integrate systems effectively.
 fileType: EXE
+dependentApplicationBlacklist:
+ - "Python Config"
 softwareName: "Python 3*"
 detectionType: file
 fileDetectionPath: 

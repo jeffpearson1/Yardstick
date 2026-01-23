@@ -36,6 +36,8 @@ id: LTSpice
 displayName: DEV LTspice
 publisher: Analog Devices
 description: LTspice® is a powerful, fast, and free SPICE simulator software, schematic capture and waveform viewer with enhancements and models for improving the simulation of analog circuits.
+dependentApplicationBlacklist:
+ - "LTSpice Config"
 fileType: msi
 detectionType: msi
 installExperience: user
