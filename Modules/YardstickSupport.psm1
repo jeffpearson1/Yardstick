@@ -343,6 +343,18 @@ function Move-AssignmentsAndDependencies {
     
     .PARAMETER AvailableDateOffset
     Number of days to offset the available date by (default: 0).
+
+    .PARAMETER AllowDependentLinkUpdates
+    Boolean to allow updating dependent application links (default: $true).
+
+    .PARAMETER DependentLinkOptions
+    Hashtable of options for dependent link updates (Enabled, RetryCount, RetryDelaySeconds, TimeoutSeconds, Blacklist).
+
+    .PARAMETER DependentUpdateStatus
+    IDictionary to record the status of dependent application updates.
+
+    .PARAMETER ProtectedSourceIds
+    HashSet to record source application IDs that should be protected from deletion.
     #>
     param(
         [Parameter(Mandatory, Position=0)]
