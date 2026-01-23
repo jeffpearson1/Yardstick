@@ -112,6 +112,26 @@ class VersionPro : System.IComparable {
         return $this.OriginalString
     }
 
+    # Overload for ToString with segment number
+    [string]ToString([int]$numSegments) {
+        if ($numSegments -lt 0) {
+            throw [System.ArgumentOutOfRangeException]::new("numSegments", "Number of segments cannot be negative")
+        }
+        else {
+            #return the segments and pad additional ones with .0
+            $segmentsToReturn = @()
+            for ($i = 0; $i -lt $numSegments; $i++) {
+                if ($i -lt $this.Segments.Count) {
+                    $segmentsToReturn += $this.Segments[$i]
+                }
+                else {
+                    $segmentsToReturn += 0
+                }
+            }
+            return ($segmentsToReturn -join ".")
+        }
+    }
+
     # Comparison operators
     static [bool]op_Equality([VersionPro]$left, [VersionPro]$right) {
         if ($null -eq $left) { return $null -eq $right }
