@@ -16,6 +16,8 @@ id: visualstudiocode
 displayName: Visual Studio Code
 publisher: Microsoft
 description: An open source IDE by Microsoft
+dependentApplicationBlacklist:
+ - "The Mechanics of Proof"
 fileType: EXE
 detectionType: file
 fileDetectionPath: '%ProgramFiles%\Microsoft VS Code'
