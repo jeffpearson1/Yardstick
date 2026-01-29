@@ -74,11 +74,11 @@ Executes before any download processing. Use this to:
 
 **Must always set:**
 - `$version` - The application version
-- `$fileDetectionVersion` - Version string for detection rules (often same as `$version`)
 
-**Commonly sets:**
+**Commonly set:**
 - `$url` - Download URL when not static
 - `$fileName` - When filename includes version or is dynamic
+- `$fileDetectionVersion` - Version string for detection rules when set to `file` (often same as `$version`). May need to be padded out/truncated to 4 sections: `$fileDetectionVersion = [VersionPro]::new($version).ToString(4)`
 
 **Example (7-Zip):**
 ```yaml
