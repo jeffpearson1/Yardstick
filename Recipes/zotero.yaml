@@ -1,6 +1,7 @@
 url: https://www.zotero.org/download/client/dl?channel=release&platform=win-x64
 urlredirects: true
 preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
   $filename = ($url -split "\/")[-1]
   $version = (($filename -split "-")[1] -split "_")[0]
   $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
