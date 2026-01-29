@@ -327,12 +327,12 @@ function Get-ApplicationsToProcess {
     
     if ($All) {
         $folderFilter = if ($NoInteractive) { 
-            { $_.Name -ne 'Disabled' -and $_.Name -ne 'Interactive' }
+            { $_.Directory -notlike '*Disabled*' -and $_.Directory -notlike '*Interactive*' }
         } else { 
-            { $_.Name -ne 'Disabled' }
+            { $_.Directory -notlike '*Disabled*' }
         }
         
-        $ApplicationFullNames = (Get-ChildItem $Recipes | Where-Object $folderFilter | Get-ChildItem -File).Name
+        $ApplicationFullNames = (Get-ChildItem $Recipes -Recurse -File | Where-Object $folderFilter | Where-Object Name -match ".*\.ya{0,1}ml").Name
         foreach ($Application in $ApplicationFullNames) {
             $applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
         }
@@ -797,6 +797,11 @@ foreach ($ApplicationId in $Applications) {
                 $Win32App = Add-IntuneWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
             }
             Write-Log "Successfully uploaded $Script:DisplayName to Intune"
+            Write-Log "Waiting for Intune to process the uploaded application..."
+            do {
+                Start-Sleep -Seconds 15
+                $LiveWin32App = Get-IntuneWin32App -Id $Win32App.id
+            } while ($LiveWin32App.publishingState -ne "published")   
         } catch {
             Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
             Write-Error "Failed to upload application to Intune: $_"
@@ -836,10 +841,14 @@ foreach ($ApplicationId in $Applications) {
             Write-Log "There was an error fetching information about existing applications. Exiting"
             Exit 4
         }
+        Write-Host "DEBUG: All Matching Apps"
+        Write-Host "$($AllMatchingApps | Select-Object DisplayName, DisplayVersion)"
         $CurrentApp = $AllMatchingApps[0]
         $AllOldApps = $AllMatchingApps[1..$($AllMatchingApps.count - 1)]
         # For any apps that share the same version as the current one, move all their deployments to the current one and remove the rest from the list
         $SameVersionApps = $AllOldApps | Where-Object displayVersion -eq $CurrentApp.displayVersion
+        Write-Host "DEBUG: Same version apps"
+        Write-Host "$($SameVersionApps | Select-Object DisplayName, DisplayVersion)"
         if ($SameVersionApps) {
             foreach ($App in $SameVersionApps) {
                 Write-Log "Moving assignments from $($App.id) to $($CurrentApp.id)"
