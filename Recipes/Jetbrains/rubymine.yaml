@@ -1,0 +1,46 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $downloadInfo = Get-JetbrainsAppDownloadLink -ProductName "RubyMine" -Channel "release" -Latest
+  $version = $downloadInfo.Version
+  $fileName = $downloadInfo.FileName
+  $url = $downloadInfo.DownloadUrl
+  $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
+  $fileDetectionPath = "C:\Program Files\JetBrains\RubyMine $version\bin"
+postDownloadScript: |
+  # Create silent.config file
+  $silentConfig = @"
+  ; Installation mode. It can be user or admin.
+  ; NOTE: for admin mode please use "Run as Administrator" for command prompt to avoid UAC dialog.
+  mode=admin
+
+  ; Desktop shortcut for launchers
+  launcher64=0
+
+  ; Add launchers path to PATH env variable
+  updatePATH=0
+
+  ; Add "Open Folder as Project" to context menu
+  updateContextMenu=0
+
+  ; There are no associations for the product.
+  .rb=0
+  .rbs=0
+  .erb=0
+  "@
+  $silentConfig | Out-File -FilePath "silent.config" -Encoding ASCII
+installScript: <filename> /S /CONFIG=%~dp0silent.config
+uninstallScript: |
+  powershell.exe -noprofile -executionpolicy bypass -command "& { Get-ChildItem 'C:\Program Files\JetBrains' -Filter 'RubyMine*' | ForEach-Object { Start-Process -FilePath (Join-Path $_.FullName 'bin\Uninstall.exe') -ArgumentList '/S' -Wait } }"
+iconFile: rubymine.png
+id: rubymine
+displayName: JetBrains RubyMine
+publisher: JetBrains
+description: RubyMine is an IDE for Ruby and Rails development with intelligent code insight, debugging, and testing tools.
+fileType: exe
+detectionType: file
+fileDetectionName: rubymine64.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress

@@ -1,0 +1,44 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $downloadInfo = Get-JetbrainsAppDownloadLink -ProductName "RustRover" -Channel "release" -Latest
+  $version = $downloadInfo.Version
+  $fileName = $downloadInfo.FileName
+  $url = $downloadInfo.DownloadUrl
+  $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
+  $fileDetectionPath = "C:\Program Files\JetBrains\RustRover $version\bin"
+postDownloadScript: |
+  # Create silent.config file
+  $silentConfig = @"
+  ; Installation mode. It can be user or admin.
+  ; NOTE: for admin mode please use "Run as Administrator" for command prompt to avoid UAC dialog.
+  mode=admin
+
+  ; Desktop shortcut for launchers
+  launcher64=0
+
+  ; Add launchers path to PATH env variable
+  updatePATH=0
+
+  ; Add "Open Folder as Project" to context menu
+  updateContextMenu=0
+
+  ; List of associations. To create an association change value to 1.
+  .rs=0
+  "@
+  $silentConfig | Out-File -FilePath "silent.config" -Encoding ASCII
+installScript: <filename> /S /CONFIG=%~dp0silent.config
+uninstallScript: |
+  powershell.exe -noprofile -executionpolicy bypass -command "& { Get-ChildItem 'C:\Program Files\JetBrains' -Filter 'RustRover*' | ForEach-Object { Start-Process -FilePath (Join-Path $_.FullName 'bin\Uninstall.exe') -ArgumentList '/S' -Wait } }"
+iconFile: rustrover.png
+id: rustrover
+displayName: JetBrains RustRover
+publisher: JetBrains
+description: RustRover is an IDE for Rust development with intelligent code completion, refactoring, and integrated Cargo support.
+fileType: exe
+detectionType: file
+fileDetectionName: rustrover64.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress

@@ -1,0 +1,51 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $downloadInfo = Get-JetbrainsAppDownloadLink -ProductName "Rider" -Channel "release" -Latest
+  $version = $downloadInfo.Version
+  $fileName = $downloadInfo.FileName
+  $url = $downloadInfo.DownloadUrl
+  $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
+  $fileDetectionPath = "C:\Program Files\JetBrains\JetBrains Rider $version\bin"
+postDownloadScript: |
+  # Create silent.config file
+  $silentConfig = @"
+  ; Installation mode. It can be user or admin.
+  ; NOTE: for admin mode please use "Run as Administrator" for command prompt to avoid UAC dialog.
+  mode=admin
+
+  ; Desktop shortcut for launchers
+  launcher32=0
+  launcher64=0
+
+  ; Add launchers path to PATH env variable
+  updatePATH=0
+
+  ; Add "Open Folder as Project" to context menu
+  updateContextMenu=0
+
+  ; Download and install jre32
+  jre32=0
+
+  ; List of associations. To create an association change value to 1.
+  .sln=0
+  .cs=0
+  .cshtml=0
+  .csproj=0
+  "@
+  $silentConfig | Out-File -FilePath "silent.config" -Encoding ASCII
+installScript: <filename> /S /CONFIG=%~dp0silent.config
+uninstallScript: |
+  powershell.exe -noprofile -executionpolicy bypass -command "& { Get-ChildItem 'C:\Program Files\JetBrains' -Filter 'JetBrains Rider*' | ForEach-Object { Start-Process -FilePath (Join-Path $_.FullName 'bin\Uninstall.exe') -ArgumentList '/S' -Wait } }"
+iconFile: rider.png
+id: rider
+displayName: JetBrains Rider
+publisher: JetBrains
+description: Rider is a cross-platform .NET IDE with intelligent C# support, Unity integration, and powerful debugging tools.
+fileType: exe
+detectionType: file
+fileDetectionName: rider64.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
