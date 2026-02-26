@@ -106,8 +106,8 @@ Import-Module Selenium -Scope Local
 Import-Module TUN.CredentialManager -Scope Local
 Import-Module ${PSScriptRoot}\Modules\YardstickSupport.psm1 -Scope Global -Force
 
-$CustomModules = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
-foreach ($Module in $CustomModules) {
+$CustomModuleImports = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
+foreach ($Module in $CustomModuleImports) {
     # Force allows us to reload them for testing
     Import-Module "$($Module.FullName)" -Scope Global -Force
 }
@@ -166,7 +166,7 @@ function Set-ScriptVariables {
     $Script:Icons = $Preferences.Icons
     $Script:Tools = $Preferences.Tools
     $Script:Secrets = $Preferences.Secrets
-    $Script:CustomModules = $Preferences.CustomModules
+    $Script:Modules = $Preferences.Modules
 
     # Import Intune Connection Settings
     $Global:TenantID = $Preferences.TenantID
@@ -566,6 +566,7 @@ $RunParameters = $RunParametersArray -join " "
 # Main processing loop
 foreach ($ApplicationId in $Applications) {
     Write-Log "Starting update for $ApplicationId..."
+    Set-Location $PSScriptRoot
     
     # Initialize variables for tracking
     $CurrentDisplayName = $ApplicationId
@@ -707,7 +708,7 @@ foreach ($ApplicationId in $Applications) {
             Pop-Location
         } else {
             try {
-                Start-BitsTransfer -Source $Script:Url -Destination $BuildSpace\$Script:Id\$Script:Version\$Script:FileName
+                Start-BitsTransfer -Source "$($Script:Url)" -Destination "$BuildSpace\$Script:Id\$Script:Version\$Script:FileName"
                 Write-Log "File downloaded successfully using BITS transfer."
             } catch {
                 Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error downloading file: $_" -FailureStage "Download"
@@ -837,18 +838,28 @@ foreach ($ApplicationId in $Applications) {
         Start-Sleep -Seconds 4
         try {
             $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
+            # test if the new app is in the list of all matching apps - if not, wait 5 seconds and try again
+            if (!($AllMatchingApps | Where-Object id -eq $Win32App.id)) {
+                Write-Log "Newly created app not found in list of all matching apps. Waiting 5 seconds and trying again..."
+                Start-Sleep -Seconds 5
+                $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
+                if (!($AllMatchingApps | Where-Object id -eq $Win32App.id)) {
+                    Write-Log "Newly created app still not found in list of all matching apps after waiting. Skipping this app to avoid potential issues with moving assignments."
+                    continue
+                }
+            }
         } catch {
             Write-Log "There was an error fetching information about existing applications. Exiting"
             Exit 4
         }
         Write-Host "DEBUG: All Matching Apps"
-        Write-Host "$($AllMatchingApps | Select-Object DisplayName, DisplayVersion)"
+        $($AllMatchingApps | Select-Object DisplayName, DisplayVersion) | Write-Output
         $CurrentApp = $AllMatchingApps[0]
         $AllOldApps = $AllMatchingApps[1..$($AllMatchingApps.count - 1)]
         # For any apps that share the same version as the current one, move all their deployments to the current one and remove the rest from the list
         $SameVersionApps = $AllOldApps | Where-Object displayVersion -eq $CurrentApp.displayVersion
         Write-Host "DEBUG: Same version apps"
-        Write-Host "$($SameVersionApps | Select-Object DisplayName, DisplayVersion)"
+        $($SameVersionApps | Select-Object DisplayName, DisplayVersion) | Write-Output
         if ($SameVersionApps) {
             foreach ($App in $SameVersionApps) {
                 Write-Log "Moving assignments from $($App.id) to $($CurrentApp.id)"

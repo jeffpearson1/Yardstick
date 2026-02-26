@@ -6,15 +6,16 @@
 #####################################
 # DEFAULT FOLDER LOCATIONS
 #####################################
-Test: 
-Buildspace: 
-Scripts: 
-Published: 
-Recipes: 
-Icons: 
-Tools: 
-Temp: 
-Secrets: 
+Test: <YARDSTICK_ROOT>\Test
+Buildspace: <YARDSTICK_ROOT>\Buildspace
+Scripts: <YARDSTICK_ROOT>\Scripts
+Published: <YARDSTICK_ROOT>\Published
+Recipes: <YARDSTICK_ROOT>\Recipes
+Icons: <YARDSTICK_ROOT>\Icons
+Tools: <YARDSTICK_ROOT>\Tools
+Temp: <YARDSTICK_ROOT>\Temp
+Secrets: <YARDSTICK_ROOT>\Secrets
+Modules: <YARDSTICK_ROOT>\Modules
 
 
 #####################################
