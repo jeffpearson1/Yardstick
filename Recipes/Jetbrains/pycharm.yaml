@@ -36,7 +36,7 @@ postDownloadScript: |
   .py=0
   "@
   $silentConfig | Out-File -FilePath "silent.config" -Encoding ASCII
-installScript: <filename> /S /CONFIG=%~dp0silent.config
+installScript: <filename> /S /CONFIG=silent.config
 uninstallScript: |
   powershell.exe -noprofile -executionpolicy bypass -command "& { Get-ChildItem 'C:\Program Files\JetBrains' -Filter 'PyCharm*' | ForEach-Object { Start-Process -FilePath (Join-Path $_.FullName 'bin\Uninstall.exe') -ArgumentList '/S' -Wait } }"
 iconFile: pycharm.png

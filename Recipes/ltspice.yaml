@@ -2,25 +2,9 @@ url: https://ltspice.analog.com/software/LTspice64.msi
 urlRedirects: false
 preDownloadScript: |
   $downloadPage = "https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html"
-  $driver = Start-SeDriver -Browser "Firefox" -StartURL $downloadPage -Arguments @('--headless')
-  $timeout = (Get-Date).AddSeconds(30)
-  $ready = $false
-  do {
-    try {
-      Get-SeElement -By PartialLinkText "64-bit" -ErrorAction Stop | Out-Null
-      $ready = $true
-    } catch {
-      if ((Get-Date) -ge $timeout) {
-        throw "Timed out waiting for LTspice 64-bit download link."
-      }
-      Start-Sleep -Milliseconds 500
-    }
-  } until ($ready)
-  $element = Get-SeElement -By PartialLinkText "64-bit"
-  $elementId = $element.GetAttribute("id")
-  Invoke-SeJavaScript -Script "document.getElementById('$elementId').scrollIntoView();"
-  Start-Sleep -Seconds 5
-  $version = ((Get-SeElement -By xpath "//a[@href='https://ltspice.analog.com/software/LTspice64.msi']/../../span" | Where-Object Text -like "Version*").Text -split "\ ")[-1]
+  $driver = Start-SeDriver -Browser "Firefox" -StartURL $downloadPage #-Arguments @('--headless')
+  Start-Sleep -Seconds 5 # Wait for page to load
+  $version = ((Get-SeElement -By xpath "//a[@href='https://ltspice.analog.com/software/LTspice64.msi']/../../span[contains(text(), 'Version')]").Text -split "\ ")[1]
   if ($driver) {
       $driver.close()
   }

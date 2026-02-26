@@ -1,0 +1,24 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $html = Invoke-WebRequest -Uri "https://get.geo.opera.com/ftp/pub/opera_air/" -UseBasicParsing
+  $versions = $html.Links | Where-Object { $_.href -match '^\d+\.\d+\.\d+\.\d+' } | ForEach-Object { ($_.href -replace '/$','') }
+  $version = $versions | Sort-Object { [version]$_ } -Descending | Select-Object -First 1
+  $fileName = "Opera_Air_${version}_Setup_x64.exe"
+  $url = "https://get.geo.opera.com/ftp/pub/opera_air/$version/win/$fileName"
+  $fileDetectionVersion = $version
+installScript: <filename> /install /silent /norestart /launchopera=0 /setdefaultbrowser=0 /allusers=1
+uninstallScript: '"C:\Program Files\Opera Air\opera.exe" /uninstall /silent'
+fileName:
+iconFile: OperaAir.png
+id: operaair
+displayName: Opera Air
+publisher: Opera Software
+description: Opera Air is a browser designed for mindful browsing, featuring wellness tools and a calming interface.
+fileType: EXE
+detectionType: file
+fileDetectionPath: C:\Program Files\Opera Air
+fileDetectionName: opera.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
+numVersionsToKeep: 2

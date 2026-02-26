@@ -1,0 +1,46 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  $html = Invoke-WebRequest "https://notepad-plus-plus.org/downloads/"
+  $s = $($html.links | Select-String "Current Version") -replace ".{0,}Current Version "
+  $version = ($s.Substring(0, $s.IndexOf(";")) -split "<")[0]
+  $url = "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v$version/npp.$version.Installer.arm64.exe"
+  $fileName = "npp.$version.Installer.arm64.exe"
+  $versionComponents = $version.split(".")
+  $numVersionComponents = $versionComponents.count
+  Switch ($numVersionComponents)
+  {
+    1 {
+      $fileDetectionVersion = "$($version).0.0.0"; break
+    }
+    2 {
+      $fileDetectionVersion = "$($version).0.0"; break
+    }
+    3 {
+      $fileDetectionVersion = "$($version).0"; break
+    }
+    4 {
+      $fileDetectionVersion = $version; break
+    }
+    default {
+      $fileDetectionVersion = "$($versionComponents[0]).$($versionComponents[1]).$($versionComponents[2]).$($versionComponents[3])"
+    }
+  }
+  
+installScript: <filename> /S
+uninstallScript: '"C:\Program Files\Notepad++\uninstall.exe" /S'
+version:
+fileName:
+iconFile: npp.png
+id: notepadplusplus
+displayName: Notepad++ (ARM64)
+publisher: Don Ho
+description: 'Notepad++ is a free (as in "free speech" and also as in "free beer") source code editor and Notepad replacement that supports several languages. Running in the MS Windows environment, its use is governed by GNU General Public License.'
+detectionType: file
+fileDetectionPath: 'C:\Program Files\Notepad++'
+fileDetectionName: notepad++.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
+scopeTags:
+  - scopeTag1
+  - scopeTag2

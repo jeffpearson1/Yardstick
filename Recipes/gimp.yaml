@@ -1,0 +1,26 @@
+url:
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $json = Invoke-RestMethod -Uri "https://www.gimp.org/gimp_versions.json" -UseBasicParsing
+  $latest = $json.STABLE[0]
+  $version = $latest.version
+  $fileName = $latest.windows[0].filename
+  $majorMinor = "$($version.Split('.')[0]).$($version.Split('.')[1])"
+  $url = "https://download.gimp.org/gimp/v$majorMinor/windows/$fileName"
+  $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
+installScript: <filename> /VERYSILENT /NORESTART /ALLUSERS
+uninstallScript: '"C:\Program Files\GIMP 3\uninst\unins000.exe" /VERYSILENT /NORESTART'
+fileName:
+iconFile: GIMP.png
+id: gimp
+displayName: GIMP
+publisher: The GIMP Team
+description: GIMP is a free and open-source raster graphics editor used for image manipulation, editing, and drawing.
+fileType: EXE
+detectionType: file
+fileDetectionPath: C:\Program Files\GIMP 3\bin
+fileDetectionName: gimp-3.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
+numVersionsToKeep: 2

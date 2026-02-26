@@ -6,12 +6,29 @@ preDownloadScript: |
   $URL = $URL + $FileName
   $Version = ($FileName | Select-String -Pattern "[0-9]{4}\.[0-9]{2}-[0-9]").Matches.Value
   $FileDetectionVersion = $Version
-installScript: 'powershell.exe -ExecutionPolicy Bypass -Command Start-Process -Wait \"<filename>\" -ArgumentList \"/S /InstallationType=AllUsers /RegisterPython=1 /D=C:\ProgramData\Anaconda3\"; $procName = \"<filename>\".trim(\".exe\"); while ((Get-Process -Name \"_conda\" -ErrorAction SilentlyContinue) -or (Get-Process -Name \"$procName\" -ErrorAction SilentlyContinue)) {Start-Sleep -Seconds 5}'
-uninstallScript: 'powershell.exe -ExecutionPolicy Bypass -Command Start-Process -Wait \"C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe\" -ArgumentList \"/S\"; while (Get-Process -Name \"_conda\" -ErrorAction SilentlyContinue) {Start-Sleep -Seconds 5}; Remove-Item -Recurse -Force \"C:\ProgramData\anaconda3\"'
+powershellInstallScript: |
+  if (Test-Path "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe") {
+      Start-Process -Wait "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" -ArgumentList "/S"
+      while (Get-Process -Name "_conda" -ErrorAction SilentlyContinue) {
+          Start-Sleep -Seconds 5
+      }
+      Remove-Item -Recurse -Force "C:\ProgramData\anaconda3" -ErrorAction SilentlyContinue
+  }
+  Start-Process -Wait "<filename>" -ArgumentList "/S /InstallationType=AllUsers /RegisterPython=1 /D=C:\ProgramData\Anaconda3"
+  $procName = "<filename>".trim(".exe")
+  while ((Get-Process -Name "_conda" -ErrorAction SilentlyContinue) -or (Get-Process -Name "$procName" -ErrorAction SilentlyContinue)) {
+      Start-Sleep -Seconds 5
+  }
+powershellUninstallScript: |
+  Start-Process -Wait "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" -ArgumentList "/S"
+  while (Get-Process -Name "_conda" -ErrorAction SilentlyContinue) {
+      Start-Sleep -Seconds 5
+  }
+  Remove-Item -Recurse -Force "C:\ProgramData\anaconda3" -ErrorAction SilentlyContinue
 iconFile: anaconda.png
 id: anaconda
 displayName: Anaconda
-publisher: Continuum analytics
+publisher: Continuum Analytics
 description: Anaconda is a distribution of the Python and R programming languages for scientific computing, that aims to simplify package management and deployment.
 softwareName: "Anaconda*"
 detectionType: script
@@ -25,7 +42,7 @@ detectionScript: |
   Write-Host "Product has failed to install correctly"
   exit 1
 installExperience: system
-maximumInstallationTimeInMinutes: 60
+maximumInstallationTimeInMinutes: 90
 scopeTags:
   - scopeTag1
   - scopeTag2

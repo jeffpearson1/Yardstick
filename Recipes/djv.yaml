@@ -1,0 +1,25 @@
+url: https://github.com/grizzlypeak3d/DJV
+urlredirects: false
+preDownloadScript: |
+  using module ".\Modules\Custom\GithubDownloader.psm1"
+  $downloadFileRegex = "djv-.*amd64\.exe$"
+  $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $Version = $downloader.LatestVersion
+  $URL = $downloader.URL
+  $filename = $downloader.filename
+  $registryDetectionKey = "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\DJV $Version"
+  $registryDetectionValue = $Version
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\DJV <version>\Uninstall.exe" /S'
+iconFile: djv.png
+id: djv
+displayName: DEV DJV
+publisher: Grizzly Peak Software
+description: DJV is an open source application for media playback and review. DJV can playback high resolution image sequences and movies in real time, with audio, A/B comparison, color management, and more.
+fileType: exe
+detectionType: registry
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual
+registryDetectionMethod: version

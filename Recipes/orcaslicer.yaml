@@ -1,0 +1,24 @@
+url: https://github.com/OrcaSlicer/OrcaSlicer
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "OrcaSlicer_Windows_Installer.*\.exe$"
+  $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
+  $Script:downloader = [GithubDownloader]::new($url, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $filename = $downloader.filename
+  $registryDetectionValue = $version
+installScript: <filename> /S
+uninstallScript: '%ProgramFiles%\OrcaSlicer\uninstall.exe /S'
+iconFile: orcaslicer.png
+id: orcaslicer
+displayName: OrcaSlicer
+publisher: OrcaSlicer
+description: "OrcaSlicer: an open source Next-Gen Slicing Software for Precision 3D Prints. Optimize your prints with ultra-fast slicing, intelligent support generation, and seamless printer compatibility—engineered for perfection."
+detectionType: registry
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\OrcaSlicer'
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual

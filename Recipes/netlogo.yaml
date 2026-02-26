@@ -1,0 +1,17 @@
+url: https://docs.netlogo.org/versions
+urlredirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $content.content -match "(?<=Version\ )(\.{0,1}[0-9]{1,2}){3}" | Out-Null
+  $version = $matches[0]
+  $url = "https://downloads.netlogo.org/$version/NetLogo-$version-64.msi"
+  $fileName = ($url -split "/")[-1]
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: netlogo.png
+id: NetLogo
+displayName: NetLogo
+publisher: NetLogo
+description: NetLogo is a powerful yet easy-to-learn environment for agent-based modeling in both research and education
+fileType: msi
+detectionType: msi

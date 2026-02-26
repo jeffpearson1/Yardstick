@@ -2,7 +2,7 @@ url: https://d2td7dqidlhjx7.cloudfront.net/prod/global/windows/Amazon+WorkSpaces
 urlRedirects: true
 preDownloadScript: |
   $Content = Invoke-WebRequest "https://docs.aws.amazon.com/workspaces/latest/userguide/amazon-workspaces-windows-client.html"
-  $Content.content -match "(?<=\>)([0-9]{1,2}\.{0,1}){3}(?=\<)"
+  $Content.content -match "(?<=\>)([0-9]{1,2}\.{0,1}){3}(?=\<)" | Out-Null
   $version = $matches[0]
 fileName: Amazon+WorkSpaces.msi
 installScript: msiexec /i <filename> /qn /norestart

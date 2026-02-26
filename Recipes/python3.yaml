@@ -6,8 +6,6 @@ preDownloadScript: |
   $version = $($($matches[0] -split "-")[1]).Trim(" Python")
   $url = "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
   $fileName = "python-$version-amd64.exe"
-  $version -match "[0-9]{1,3}\.[0-9]{1,3}" | Out-Null
-  $fileDetectionPath = "C:\Program Files\Python$($matches[0] -replace `"\.`")"
 installScript:
   '<filename> /quiet InstallAllUsers=1 PrependPath=1'
 uninstallScript:
@@ -23,10 +21,28 @@ fileType: EXE
 softwareName: "Python 3*"
 dependentApplicationBlacklist:
  - "Python Config"
-detectionType: file
-fileDetectionPath: 
-fileDetectionName: 'python.exe'
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $version = "<version>"
+  $version -match "[0-9]{1,3}\.[0-9]{1,3}" | Out-Null
+  $dirVersion = $matches[0]
+  $filePath = "C:\Program Files\Python$($dirVersion -replace "\.")"
+  $installedVersion = $null
+
+  if (Test-Path "$filePath\python.exe") {
+      $installedVersionOutput = $(& "$filePath\python.exe" --version 2>&1).Trim()
+      if ($installedVersionOutput -match 'Python\s+([\d\.]+)') {
+          $installedVersion = $matches[1]
+      }
+  }
+
+  if ($installedVersion -eq $version) {
+      Write-Output "Detected"
+      exit 0
+  }
+
+  Write-Output "Not Detected"
+  exit 1
 scopeTags:
   - scopeTag1
   - scopeTag2

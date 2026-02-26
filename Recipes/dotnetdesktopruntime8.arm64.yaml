@@ -1,0 +1,25 @@
+url: https://dotnet.microsoft.com/en-us/download/dotnet/8.0
+urlredirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL
+  ($Content.links | Where-Object OuterHTML -like "*runtime-desktop*-windows-arm64*")[0].OuterHTML -match '(?<=href\=\").*(?=\")' | Out-Null
+  ($matches[0] -split "\/")[-1] -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
+  $Version = $matches[0]
+  $url = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/$version/windowsdesktop-runtime-$version-win-arm64.exe"
+  $filename = ($url -split "/")[-1]
+  $registryDetectionValueName = $version
+installScript: |
+  <filename> /install /quiet /norestart
+uninstallScript: |
+  <filename> /uninstall /quiet /norestart
+iconFile: dotnet.png
+id: dotnetdesktopruntime8
+displayName: ".NET Desktop Runtime 8 (ARM64)"
+publisher: Microsoft
+description: ".NET is a free, cross-platform, open-source developer platform for building many different types of applications."
+detectionType: registry
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\dotnet\Setup\InstalledVersions\arm64\sharedfx\Microsoft.WindowsDesktop.App'
+registryDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_22H2
