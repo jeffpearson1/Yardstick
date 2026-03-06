@@ -11,7 +11,7 @@ preDownloadScript: |
   $URL = "https://mirror.umd.edu/eclipse/oomph/epp/$version/R/eclipse-inst-jre-win64.zip"
   # Normalize to 4-part version for detection consistency
   $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
-powershellInstallScript: |
+powerShellInstallScript: |
   # This script was taken from https://uga.teamdynamix.com/TDClient/3159/KB/KB/PrintArticle?ID=159435
   $EclipseArchive = "<filename>"
   $DestinationFolder = "C:\Program Files\Eclipse IDE"

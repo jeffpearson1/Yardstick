@@ -6,7 +6,7 @@ preDownloadScript: |
   $URL = $URL + $FileName
   $Version = ($FileName | Select-String -Pattern "[0-9]{4}\.[0-9]{2}-[0-9]").Matches.Value
   $FileDetectionVersion = $Version
-powershellInstallScript: |
+powerShellInstallScript: |
   if (Test-Path "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe") {
       Start-Process -Wait "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" -ArgumentList "/S"
       while (Get-Process -Name "_conda" -ErrorAction SilentlyContinue) {
@@ -19,7 +19,7 @@ powershellInstallScript: |
   while ((Get-Process -Name "_conda" -ErrorAction SilentlyContinue) -or (Get-Process -Name "$procName" -ErrorAction SilentlyContinue)) {
       Start-Sleep -Seconds 5
   }
-powershellUninstallScript: |
+powerShellUninstallScript: |
   Start-Process -Wait "C:\ProgramData\anaconda3\Uninstall-Anaconda3.exe" -ArgumentList "/S"
   while (Get-Process -Name "_conda" -ErrorAction SilentlyContinue) {
       Start-Sleep -Seconds 5

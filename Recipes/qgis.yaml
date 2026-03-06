@@ -6,7 +6,7 @@ preDownloadScript: |
   $filename = ($URL -split "\/")[-1]
   $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
   $Version = $matches[0]
-powershellInstallScript: | 
+powerShellInstallScript: | 
   Invoke-WebRequest -Uri "https://github.com/google/fonts/raw/main/ofl/opensans/OpenSans%5Bwdth,wght%5D.ttf" -UseBasicParsing
   if (Test-Path -Path "$($env:ProgramData)\Microsoft\Windows\Start Menu\Programs\QGIS*") {
     Remove-Item -Path "$($env:ProgramData)\Microsoft\Windows\Start Menu\Programs\QGIS*" -Recurse -Force
