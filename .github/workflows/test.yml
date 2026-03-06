@@ -1,0 +1,101 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Pester Unit Tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install modules
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
+          Install-Module -Name powershell-yaml -Force -Scope CurrentUser
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = "Tests/"
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = "testResults.xml"
+          $config.Output.Verbosity = "Detailed"
+          Invoke-Pester -Configuration $config
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: testResults.xml
+
+  lint:
+    name: PSScriptAnalyzer Lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $excludeRules = @(
+            'PSAvoidUsingWriteHost',
+            'PSUseShouldProcessForStateChangingFunctions'
+          )
+
+          $files = @(
+            'Yardstick.ps1',
+            'Modules/YardstickSupport.psm1',
+            'Modules/VersionPro.psm1',
+            'Modules/Custom/AdobeDownloader.psm1',
+            'Modules/Custom/GithubDownloader.psm1',
+            'Modules/Custom/JetbrainsDownloader.psm1',
+            'Modules/Custom/Invoke-SSOAutoSignIn.psm1'
+          )
+
+          $hasErrors = $false
+          foreach ($file in $files) {
+            $results = Invoke-ScriptAnalyzer -Path $file -Severity Error,Warning -ExcludeRule $excludeRules
+            if ($results) {
+              foreach ($r in $results) {
+                $level = if ($r.Severity -eq 'Error') { 'error' } else { 'warning' }
+                Write-Host "::${level} file=${file},line=$($r.Line)::[$($r.RuleName)] $($r.Message)"
+                if ($r.Severity -eq 'Error') { $hasErrors = $true }
+              }
+            }
+          }
+
+          if ($hasErrors) {
+            throw "PSScriptAnalyzer found errors"
+          }
+
+  validate-recipes:
+    name: Validate Recipe Schemas
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install powershell-yaml
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name powershell-yaml -Force -Scope CurrentUser
+
+      - name: Validate all recipes
+        shell: pwsh
+        run: pwsh -File Tests/Test-AllRecipes.ps1

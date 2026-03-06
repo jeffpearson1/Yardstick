@@ -1,12 +1,12 @@
 url: 'https://helpx.adobe.com/after-effects/release-note/release-notes-after-effects.html'
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:AfterEffects = [AdobeApplication]::new(@{
     Name = "After Effects"
     ID = "AfterEffects"
     URL = $URL
-    VersionMatchStringRegex = "(?<=\()(([0-9]{1,4})\.{0,1}){2,4}(?=\))"
+    VersionMatchStringRegex = "(?<=version\ )([0-9]{1,2}\.{0,1}){1,3}"
     VersionLocation = 0
     PackageName = "Auto_AfterEffects_<Version>_NU_NAU"
   })

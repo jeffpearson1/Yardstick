@@ -1,5 +1,5 @@
 url: https://www.maxon.net/en/downloads
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $URL = ($Content.links | Where-Object href -match "Maxon_App_.*_Win\.exe").href

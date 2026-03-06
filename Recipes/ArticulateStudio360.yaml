@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Products = Invoke-RestMethod -Method Get -Uri https://api.articulate.com/product-artifacts -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36" -Headers @{"accept"="application/vnd.articulate+json; version=2"}
   $url = ($Products.products | where name -eq "Studio 360")[0].package.url

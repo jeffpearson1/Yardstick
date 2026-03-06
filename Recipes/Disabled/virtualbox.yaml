@@ -1,5 +1,5 @@
 url: https://www.virtualbox.org/wiki/Downloads
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $URL = ($Content.links | Where-Object href -like "*Win*").href

@@ -1,5 +1,5 @@
 url: https://downloads.cloudflareclient.com/v1/download/windows/ga
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $version = $url -split '/' | Select-Object -Last 1
   $fileDetectionVersion = $version

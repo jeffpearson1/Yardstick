@@ -1,5 +1,5 @@
 url: https://dotnet.microsoft.com/en-us/download/dotnet/8.0
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   ($Content.links | Where-Object OuterHTML -like "*runtime-desktop*-windows-x64*")[0].OuterHTML -match '(?<=href\=\").*(?=\")' | Out-Null

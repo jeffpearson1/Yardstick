@@ -1,5 +1,5 @@
 url: https://github.com/prusa3d/PrusaSlicer
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
   $downloadFileRegex = "PrusaSlicer-.*\.zip$"

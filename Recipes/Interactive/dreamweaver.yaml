@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/dreamweaver/release-notes.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:Dreamweaver = [AdobeApplication]::new(@{

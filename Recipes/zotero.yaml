@@ -1,5 +1,5 @@
 url: https://www.zotero.org/download/client/dl?channel=release&platform=win-x64
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
   $filename = ($url -split "\/")[-1]

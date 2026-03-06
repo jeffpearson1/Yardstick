@@ -1,5 +1,5 @@
 url: https://dl.google.com/drive-file-stream/GoogleDriveSetup.exe
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $VURL = "https://support.google.com/a/answer/7577057"
   $Content = Invoke-WebRequest -Uri $VURL

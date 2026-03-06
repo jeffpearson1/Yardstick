@@ -1,5 +1,5 @@
 url: https://posit.co/download/rstudio-desktop/
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $URL = ($Content.links | Where-Object href -match 'RSTUDIO.+\.EXE').href | Get-Unique

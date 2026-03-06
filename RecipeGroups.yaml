@@ -1,28 +1,28 @@
 Adobe:
-  - AcrobatReaderDC
-  - AfterEffects
-  - Animate
-  - Audition
-  - Bridge
-  - CharacterAnimator
-  - CreativeCloudDesktop
-  - Dimension
-  - Dreamweaver
-  - Fresco
-  - Illustrator
-  - InCopy
-  - InDesign
-  - Lightroom
-  - LightroomClassic
-  - MediaEncoder
-  - Photoshop
-  - Prelude
-  - Substance3DDesigner
-  - Substance3DModeler
-  - Substance3DPainter
-  - Substance3DSampler
-  - Substance3DStager
-  - XD
+  - acrobatreaderdc
+  - aftereffects
+  - animate
+  - audition
+  - bridge
+  - characteranimator
+  - creativeclouddesktop
+  - dimension
+  - dreamweaver
+  - fresco
+  - illustrator
+  - incopy
+  - indesign
+  - lightroom
+  - lightroomclassic
+  - mediaencoder
+  - photoshop
+  - prelude
+  - substance3ddesigner
+  - substance3dmodeler
+  - substance3dpainter
+  - substance3dsampler
+  - substance3dstager
+  - xd
 TestApps:
   - vlc
   - firefox

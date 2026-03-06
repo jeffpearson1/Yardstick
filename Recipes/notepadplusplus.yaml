@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $html = Invoke-WebRequest "https://notepad-plus-plus.org/downloads/"
   $s = $($html.links | Select-String "Current Version") -replace ".{0,}Current Version "

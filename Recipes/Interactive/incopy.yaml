@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/incopy/release-note/incopy-cc-release-notes.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:InCopy = [AdobeApplication]::new(@{

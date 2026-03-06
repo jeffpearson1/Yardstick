@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/dimension/using/whats-new.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:Dimension = [AdobeApplication]::new(@{

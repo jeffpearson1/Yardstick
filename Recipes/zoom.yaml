@@ -1,5 +1,5 @@
 url: https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $url -match '([0-9]{1,}\.){1,3}[0-9]{1,}' | Out-Null
   $version = $matches[0]

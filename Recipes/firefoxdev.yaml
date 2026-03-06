@@ -1,5 +1,5 @@
 url: https://download.mozilla.org/?product=firefox-devedition-msi-latest-ssl&os=win64&lang=en-US
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $filename = $URL.split("/")[-1].replace("%20", " ")
   $version = ($filename.split(" ")[-1] -Split "\.msi")[0].split("b")[0]

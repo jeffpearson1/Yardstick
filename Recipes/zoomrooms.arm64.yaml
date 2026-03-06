@@ -1,5 +1,5 @@
 url: https://zoom.us/client/latest/ZoomRoomsInstaller.msi?archType=winarm64
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $version = ($url -split "/")[4]
   $fileDetectionVersion = $version

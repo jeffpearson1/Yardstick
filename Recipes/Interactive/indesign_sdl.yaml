@@ -1,5 +1,7 @@
-url: https://helpx.adobe.com/indesign/release-notes.html
-urlredirects: false
+base: indesign
+id: InDesign
+displayName: Adobe InDesign (Shared Device License)
+description: Adobe InDesign is a desktop publishing and page layout designing software application.
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:InDesign = [AdobeApplication]::new(@{
@@ -19,33 +21,5 @@ preDownloadScript: |
   $UninstallScript = $InDesign.UninstallScript
 downloadScript: |
   $Script:InDesign.Download()
-filename: setup.exe
-iconFile: InDesign.png
-id: InDesign
-displayName: Adobe InDesign (Shared Device License)
-publisher: Adobe
-description: Adobe InDesign is a desktop publishing and page layout designing software application.
-detectionType: script
-detectionScript: |
-  $Version = "<version>"
-  $NewestVersionPath = ((Get-ChildItem "C:\Program Files\Adobe\Adobe InDesign*" | Sort-Object Name -Descending)[0]).FullName
-  $InstalledFileName = "InDesign.exe"
-  $VersionComponents = (Get-Item "$NewestVersionPath\$InstalledFileName").VersionInfo.FileVersionRaw
-  $VersionSegments = $Version.split(".").count
-  Switch($VersionSegments) {
-    1 {$FileVersion = "$($VersionComponents.Major)"; Break}
-    2 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor)"; Break}
-    3 {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build)"; Break}
-    default {$FileVersion = "$($VersionComponents.Major).$($VersionComponents.Minor).$($VersionComponents.Build).$($VersionComponents.Revision)"}
-  }
-  if ($FileVersion -eq $Version) {
-    Write-Host "Product has installed correctly"
-    exit 0
-  }
-  Write-Host "Product has failed to install correctly"
-  exit 1
-installExperience: system
-restartBehavior: suppress
-minOSVersion: W10_20H2
 scopeTags:
   - scopeTag2

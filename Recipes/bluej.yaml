@@ -1,5 +1,5 @@
 url: https://github.com/k-pet-group/BlueJ-Greenfoot
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
   $downloadFileRegex = "BlueJ-windows.*\.msi$"

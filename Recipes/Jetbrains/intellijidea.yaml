@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
   $downloadInfo = Get-JetbrainsAppDownloadLink -ProductName "IntelliJ IDEA" -Channel "release" -Latest

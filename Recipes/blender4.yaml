@@ -1,5 +1,5 @@
 url: https://download.blender.org/release/
-urlredirects: false
+urlRedirects: false
 preDownloadScript: | 
   $Content = Invoke-WebRequest $Script:URL
   $Directory = (($content.links | Where-Object href -match "Blender4\.[0-9]{1,2}\/").href)[-1]

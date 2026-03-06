@@ -90,6 +90,79 @@ function ArrayToString {
 
 
 
+function Test-Prerequisites {
+    <#
+    .SYNOPSIS
+    Validates that all required prerequisites are available.
+
+    .DESCRIPTION
+    Checks for required PowerShell modules, external tools, and .NET types.
+    Returns a result object with errors (fatal) and warnings (non-fatal).
+
+    .PARAMETER ToolsPath
+    Path to the Tools directory (for checking curl.exe, etc.)
+
+    .OUTPUTS
+    PSCustomObject with:
+      - IsValid ([bool]) - $true if all required checks pass
+      - Errors ([string[]])  - Fatal prerequisite failures
+      - Warnings ([string[]]) - Non-fatal prerequisite warnings
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$ToolsPath
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
+
+    # Required PowerShell modules (fatal if missing)
+    $requiredModules = @('powershell-yaml', 'IntuneWin32App')
+    foreach ($mod in $requiredModules) {
+        if (-not (Get-Module -ListAvailable -Name $mod)) {
+            $errors.Add("Required PowerShell module '$mod' is not installed. Install with: Install-Module $mod")
+        }
+    }
+
+    # Optional PowerShell modules (warn only -- needed for Adobe/SSO recipes)
+    $optionalModules = @('Selenium', 'TUN.CredentialManager')
+    foreach ($mod in $optionalModules) {
+        if (-not (Get-Module -ListAvailable -Name $mod)) {
+            $warnings.Add("Optional PowerShell module '$mod' is not installed. Adobe/SSO recipes will not work without it.")
+        }
+    }
+
+    # External tools
+    $curlPath = Join-Path $ToolsPath "curl.exe"
+    if (-not (Test-Path $curlPath)) {
+        $warnings.Add("curl.exe not found at '$curlPath'. Some download scripts may fail.")
+    }
+
+    # .NET types
+    try {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+        [void][System.Net.Http.HttpClient]
+    } catch {
+        $errors.Add(".NET type System.Net.Http.HttpClient is not available. URL redirect resolution will fail.")
+    }
+
+    # COM objects
+    try {
+        $testInstaller = New-Object -ComObject WindowsInstaller.Installer
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($testInstaller)
+    } catch {
+        $warnings.Add("COM object WindowsInstaller.Installer is not available. MSI product code extraction will fail.")
+    }
+
+    return [PSCustomObject]@{
+        IsValid  = ($errors.Count -eq 0)
+        Errors   = [string[]]$errors
+        Warnings = [string[]]$warnings
+    }
+}
+
+
+
 function Get-RedirectedUrl {
     <#
     .SYNOPSIS
@@ -322,11 +395,116 @@ function Connect-AutoMSIntuneGraph {
 
 
 
+function Invoke-WithRetry {
+    <#
+    .SYNOPSIS
+    Invokes a script block with configurable retry logic.
+
+    .DESCRIPTION
+    Executes a script block with retry support, optional verification,
+    optional rollback on failure, and optional timeout deadline.
+
+    .PARAMETER ScriptBlock
+    The script block to execute.
+
+    .PARAMETER VerifyBlock
+    Optional script block to verify success after ScriptBlock completes
+    without throwing. Should return $true for success, $false for retry.
+
+    .PARAMETER OnFailure
+    Optional script block to execute when all retries are exhausted or
+    timeout is reached.
+
+    .PARAMETER MaxRetries
+    Maximum number of attempts (default: 3).
+
+    .PARAMETER DelaySeconds
+    Seconds to wait between retries (default: 2).
+
+    .PARAMETER TimeoutSeconds
+    Total timeout in seconds. 0 means no timeout (default: 0).
+
+    .PARAMETER Label
+    Descriptive label for log messages (default: "operation").
+
+    .OUTPUTS
+    Returns the output of ScriptBlock on success, or $null on failure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ScriptBlock]$ScriptBlock,
+
+        [ScriptBlock]$VerifyBlock,
+
+        [ScriptBlock]$OnFailure,
+
+        [int]$MaxRetries = 3,
+
+        [int]$DelaySeconds = 2,
+
+        [int]$TimeoutSeconds = 0,
+
+        [string]$Label = "operation"
+    )
+
+    $deadline = if ($TimeoutSeconds -gt 0) { (Get-Date).AddSeconds($TimeoutSeconds) } else { [datetime]::MaxValue }
+    $lastError = $null
+
+    for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+        if ((Get-Date) -gt $deadline) {
+            $lastError = "Timed out after $TimeoutSeconds seconds"
+            Write-Log "[$Label] $lastError"
+            break
+        }
+
+        try {
+            $result = & $ScriptBlock
+
+            if ($VerifyBlock) {
+                $verified = & $VerifyBlock
+                if (-not $verified) {
+                    $lastError = "Verification failed"
+                    Write-Log "[$Label] Verification failed on attempt $attempt of $MaxRetries."
+                    if ($attempt -lt $MaxRetries -and (Get-Date) -lt $deadline) {
+                        Start-Sleep -Seconds $DelaySeconds
+                    }
+                    continue
+                }
+            }
+
+            return $result
+        }
+        catch {
+            $lastError = $_.Exception.Message
+            Write-Log "[$Label] Failed on attempt $attempt of ${MaxRetries}: $lastError"
+
+            if ($attempt -lt $MaxRetries -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds $DelaySeconds
+            }
+        }
+    }
+
+    Write-Log "[$Label] All $MaxRetries attempts failed. Last error: $lastError"
+    if ($OnFailure) {
+        try {
+            & $OnFailure
+        }
+        catch {
+            Write-Log "[$Label] OnFailure callback also failed: $_"
+        }
+    }
+
+    return $null
+}
+
+
+
 function Move-AssignmentsAndDependencies {
     <#
     .SYNOPSIS
     Moves assignments and dependencies from one Intune application to another.
-    
+
     .DESCRIPTION
     This function transfers all group assignments and application dependencies
     from a source application to a target application, with options to offset
@@ -811,24 +989,13 @@ function Get-SameAppAllVersions {
     )
 
     Write-Log "Retrieving all versions of application with display name: $DisplayName"
-    
-    # Attempt to connect to Intune up to 3 times
-    for ($i = 0; $i -lt 3; $i++) {
-        try {
-            Write-Log "Attempt $($i + 1) to retrieve applications with the name $DisplayName"
-            $AllSimilarApps = Get-IntuneWin32App -DisplayName "$DisplayName" -ErrorAction SilentlyContinue
-            break
-        }
-        catch {
-            Write-Log "Error retrieving applications with the name $DisplayName on attempt $($i + 1): $_"
-            if ($i -eq 2) {
-                Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
-                exit 1001
-            } else {
-                Write-Log "Retrying to retrieve applications with the name $DisplayName. Attempt $($i + 2) of 3."
-                Start-Sleep -Seconds 5
-            }
-        }
+
+    # Attempt to retrieve applications with retry logic
+    $AllSimilarApps = Invoke-WithRetry -Label "Retrieve applications for $DisplayName" -MaxRetries 3 -DelaySeconds 5 -ScriptBlock {
+        Get-IntuneWin32App -DisplayName "$DisplayName" -ErrorAction Stop
+    } -OnFailure {
+        Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
+        exit 1001
     }
     
     if (-not $AllSimilarApps) {
@@ -840,6 +1007,209 @@ function Get-SameAppAllVersions {
     $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (N-*")})
     # Sort by version descending, then by createdDateTime descending
     return $sortable | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true}
+}
+
+
+
+function Merge-RecipeWithBase {
+    <#
+    .SYNOPSIS
+    Merges a recipe with its base recipe when a 'base' field is present.
+
+    .DESCRIPTION
+    Supports single-level recipe inheritance. When a recipe contains a 'base' field,
+    the referenced base recipe is loaded and the child recipe's fields are overlaid
+    on top. Chained inheritance (base recipe also having a 'base' field) is not supported.
+
+    .PARAMETER Recipe
+    The child recipe hashtable (already parsed from YAML).
+
+    .PARAMETER RecipesPath
+    The root path to search for the base recipe file.
+
+    .OUTPUTS
+    A merged hashtable with base fields plus child overrides, or the original recipe if no 'base' field.
+    #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Recipe,
+        [Parameter(Mandatory)][string]$RecipesPath
+    )
+
+    if (-not $Recipe.ContainsKey('base')) { return $Recipe }
+
+    $baseId = $Recipe['base']
+    $baseFiles = @(Get-ChildItem $RecipesPath -Force -Recurse |
+        Where-Object Name -ne 'Disabled' |
+        Get-ChildItem -File -Recurse |
+        Where-Object Name -match "^$baseId\.ya{0,1}ml")
+    $baseFile = if ($baseFiles.Count -gt 0) { $baseFiles[0].FullName } else { $null }
+
+    if (-not $baseFile) {
+        throw "Base recipe '$baseId' not found."
+    }
+
+    $baseRecipe = Get-Content $baseFile | ConvertFrom-Yaml
+
+    if ($baseRecipe.ContainsKey('base')) {
+        throw "Chained inheritance is not supported: base recipe '$baseId' also has a 'base' field."
+    }
+
+    # Shallow merge: child fields override base fields
+    $merged = $baseRecipe.Clone()
+    foreach ($key in $Recipe.Keys) {
+        if ($key -ne 'base') {
+            $merged[$key] = $Recipe[$key]
+        }
+    }
+    return $merged
+}
+
+
+
+function Test-RecipeSchema {
+    <#
+    .SYNOPSIS
+    Validates a recipe hashtable against the expected schema.
+
+    .DESCRIPTION
+    Checks for required fields, conditionally required fields based on
+    detectionType, valid enumeration values, and warns on unknown fields.
+
+    .PARAMETER Recipe
+    The hashtable loaded from a recipe YAML file.
+
+    .PARAMETER RecipeId
+    The application ID (filename) for error messaging.
+
+    .OUTPUTS
+    PSCustomObject with properties:
+      - IsValid ([bool])
+      - Errors ([string[]])
+      - Warnings ([string[]])
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Recipe,
+        [Parameter(Mandatory)]
+        [string]$RecipeId
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
+
+    # Build combined script content for variable-in-script fallback checks
+    $scriptContent = @(
+        $Recipe['preDownloadScript']
+        $Recipe['downloadScript']
+        $Recipe['postDownloadScript']
+    ) -join "`n"
+
+    # Always-required fields
+    $requiredFields = @('id', 'displayName', 'detectionType', 'iconFile', 'description', 'publisher')
+    foreach ($field in $requiredFields) {
+        if (-not $Recipe.ContainsKey($field) -or [string]::IsNullOrWhiteSpace($Recipe[$field])) {
+            # Check if the field is set as a variable in any of the script fields
+            if (-not ($scriptContent -match ('\$' + [regex]::Escape($field) + '\s*='))) {
+                $errors.Add("Missing required field '$field'")
+            }
+        }
+    }
+
+    # Install script: at least one of installScript / powerShellInstallScript (YAML or script variable)
+    if (-not $Recipe.ContainsKey('installScript') -and -not $Recipe.ContainsKey('powerShellInstallScript')) {
+        if (-not ($scriptContent -match '\$installScript\s*=') -and -not ($scriptContent -match '\$powerShellInstallScript\s*=')) {
+            $errors.Add("Missing install script: provide either 'installScript' or 'powerShellInstallScript'")
+        }
+    }
+
+    # Uninstall script: at least one of uninstallScript / powerShellUninstallScript (YAML or script variable)
+    if (-not $Recipe.ContainsKey('uninstallScript') -and -not $Recipe.ContainsKey('powerShellUninstallScript')) {
+        if (-not ($scriptContent -match '\$uninstallScript\s*=') -and -not ($scriptContent -match '\$powerShellUninstallScript\s*=')) {
+            $errors.Add("Missing uninstall script: provide either 'uninstallScript' or 'powerShellUninstallScript'")
+        }
+    }
+
+    # Enumeration validation
+    $validEnumerations = @{
+        'detectionType'           = @('msi', 'file', 'script', 'registry')
+        'installExperience'       = @('system', 'user')
+        'restartBehavior'         = @('allow', 'suppress', 'force', 'basedOnReturnCode')
+        'fileDetectionMethod'     = @('version', 'exists', 'modified', 'created', 'size')
+        'registryDetectionMethod' = @('exists', 'notExists', 'string', 'integer', 'version')
+    }
+
+    foreach ($field in $validEnumerations.Keys) {
+        if ($Recipe.ContainsKey($field) -and -not [string]::IsNullOrWhiteSpace($Recipe[$field])) {
+            $value = $Recipe[$field].ToString().ToLower()
+            $allowed = $validEnumerations[$field]
+            if ($value -notin $allowed) {
+                $errors.Add("Invalid value '$($Recipe[$field])' for '$field'. Allowed values: $($allowed -join ', ')")
+            }
+        }
+    }
+
+    # Conditionally required fields based on detectionType
+    if ($Recipe.ContainsKey('detectionType') -and -not [string]::IsNullOrWhiteSpace($Recipe['detectionType'])) {
+        $detType = $Recipe['detectionType'].ToString().ToLower()
+        $detectionTypeFields = @{
+            'file'     = @('fileDetectionPath', 'fileDetectionMethod', 'fileDetectionName')
+            'registry' = @('registryDetectionMethod', 'registryDetectionKey')
+            'script'   = @('detectionScript')
+            'msi'      = @()
+        }
+
+        if ($detectionTypeFields.ContainsKey($detType)) {
+            foreach ($field in $detectionTypeFields[$detType]) {
+                if (-not $Recipe.ContainsKey($field) -or [string]::IsNullOrWhiteSpace($Recipe[$field])) {
+                    # Check if the field is set as a variable in any of the script fields
+                    if (-not ($scriptContent -match ('\$' + [regex]::Escape($field) + '\s*='))) {
+                        $errors.Add("Missing required field '$field' for detectionType '$detType'")
+                    }
+                }
+            }
+        }
+    }
+
+    # Unknown field warnings (case-insensitive)
+    $knownFields = @(
+        'url', 'urlRedirects', 'id', 'version', 'fileDetectionVersion', 'displayName',
+        'displayVersion', 'fileName', 'fileDetectionPath', 'preDownloadScript',
+        'downloadScript', 'postDownloadScript', 'postRunScript', 'installScript',
+        'uninstallScript', 'powerShellInstallScript', 'powerShellUninstallScript',
+        'scopeTags', 'owner', 'maximumInstallationTimeInMinutes', 'minOSVersion',
+        'installExperience', 'restartBehavior', 'availableGroups', 'requiredGroups',
+        'defaultDeploymentGroups', 'allowUserUninstall', 'is32BitApp', 'architecture',
+        'deadlineDateOffset', 'availableDateOffset', 'allowDependentLinkUpdates',
+        'detectionType', 'fileDetectionMethod', 'fileDetectionName',
+        'fileDetectionOperator', 'fileDetectionDateTime', 'fileDetectionValue',
+        'registryDetectionMethod', 'registryDetectionKey', 'registryDetectionValueName',
+        'registryDetectionValue', 'registryDetectionOperator', 'detectionScript',
+        'detectionScriptFileExtension', 'detectionScriptRunAs32Bit',
+        'detectionScriptEnforceSignatureCheck', 'iconFile', 'description', 'publisher',
+        'versionLock', 'numVersionsToKeep', 'fileType', 'softwareName',
+        'dependentApplicationBlacklist', 'dependentLinkUpdateEnabled',
+        'dependentLinkUpdateRetryCount', 'dependentLinkUpdateRetryDelaySeconds',
+        'dependentLinkUpdateTimeoutSeconds',
+        'base'
+    )
+    $knownFieldsLower = $knownFields | ForEach-Object { $_.ToLower() }
+
+    foreach ($key in $Recipe.Keys) {
+        if ($key.ToLower() -notin $knownFieldsLower) {
+            $warnings.Add("Unknown field '$key' - this field is not used by Yardstick and may be a typo")
+        }
+        # Check for case mismatches (key exists in known fields but with different casing)
+        elseif ($key -cnotin $knownFields -and $key.ToLower() -in $knownFieldsLower) {
+            $expectedCasing = $knownFields | Where-Object { $_.ToLower() -eq $key.ToLower() } | Select-Object -First 1
+            $warnings.Add("Field '$key' has incorrect casing - expected '$expectedCasing'")
+        }
+    }
+
+    return [PSCustomObject]@{
+        IsValid  = ($errors.Count -eq 0)
+        Errors   = [string[]]$errors
+        Warnings = [string[]]$warnings
+    }
 }
 
 
@@ -877,34 +1247,43 @@ function Format-FileDetectionVersion {
 
 
 
-# Get-VersionLocked
-# Returns whether a version is locked based on version lock pattern
-function Get-VersionLocked {
+# Test-VersionExcluded
+# Returns whether a version falls outside the allowed version lock pattern
+function Test-VersionExcluded {
     <#
     .SYNOPSIS
-    Determines if a version is locked based on a version lock pattern.
-    
+    Tests whether a version falls outside the allowed version lock pattern.
+
     .DESCRIPTION
-    Checks if a version should be blocked from updating based on a version
-    lock pattern. The pattern can use 'x' as wildcards (e.g., "1.2.x" locks
-    to version 1.2 but allows any patch version).
-    
+    Returns $true if the version does NOT match the lock pattern, meaning the
+    version is excluded and the update should be skipped. Returns $false if
+    the version matches (is allowed) or if no lock pattern is set.
+    The pattern can use 'x' as wildcards (e.g., "1.2.x" allows any 1.2.* version).
+
     .PARAMETER Version
     The version to check against the lock pattern.
-    
+
     .PARAMETER VersionLock
     The version lock pattern. Use 'x' for wildcards.
-    
+
     .OUTPUTS
-    $true if the version is locked (should not update), $false otherwise.
+    $true if the version is excluded by the lock, $false if it is allowed.
     #>
     param (
         [Parameter(Mandatory=$true)]
+        [AllowNull()]
+        [AllowEmptyString()]
         [String]$Version,
         [Parameter(Mandatory=$false)]
         [String]$VersionLock
     )
-    
+
+    # Guard: null/empty version — treat as excluded to safely skip the update
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        Write-Log "WARNING: Version is null or empty in Test-VersionExcluded check"
+        return $true
+    }
+
     # If versionLock is null or empty, return false (not locked)
     if (-not $VersionLock) {
         return $false
@@ -941,11 +1320,23 @@ function Compare-AppVersions {
     #>
     param (
         [Parameter(Mandatory=$true)]
+        [AllowNull()]
+        [AllowEmptyString()]
         [String]$Version1,
         [Parameter(Mandatory=$true)]
+        [AllowNull()]
+        [AllowEmptyString()]
         [String]$Version2
     )
-    
+
+    # Guard against null or empty version strings
+    if ([string]::IsNullOrWhiteSpace($Version1)) {
+        throw "Version1 is null or empty - cannot compare versions"
+    }
+    if ([string]::IsNullOrWhiteSpace($Version2)) {
+        throw "Version2 is null or empty - cannot compare versions"
+    }
+
     # Clean version strings to contain only numbers and dots
     $Version1 = $Version1 -replace "[^0-9.]", ""
     $Version2 = $Version2 -replace "[^0-9.]", ""
@@ -965,6 +1356,106 @@ function Compare-AppVersions {
         }
     }
     return 0
+}
+
+
+
+function Test-ExtractedVersion {
+    <#
+    .SYNOPSIS
+    Validates a version string extracted by a recipe's preDownloadScript.
+
+    .DESCRIPTION
+    Performs multiple validation checks on a version string to catch common
+    scraping failures: null/empty values, HTML contamination, format violations,
+    and suspiciously large jumps from the current Intune version.
+
+    .PARAMETER Version
+    The version string to validate.
+
+    .PARAMETER ApplicationId
+    The application ID for error messaging.
+
+    .PARAMETER ExistingVersion
+    Optional. The current version in Intune for major-version-jump detection.
+
+    .OUTPUTS
+    PSCustomObject with properties:
+      - IsValid ([bool])
+      - Errors ([string[]])
+      - Warnings ([string[]])
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Version,
+
+        [Parameter(Mandatory)]
+        [string]$ApplicationId,
+
+        [string]$ExistingVersion
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
+
+    # Check 1: Null or empty
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        $errors.Add("Version is null or empty after preDownloadScript execution")
+        return [PSCustomObject]@{
+            IsValid  = $false
+            Errors   = [string[]]$errors
+            Warnings = [string[]]$warnings
+        }
+    }
+
+    # Check 2: HTML/XML contamination
+    if ($Version -match '[<>]') {
+        $errors.Add("Version contains HTML/XML characters: '$Version'")
+    }
+
+    # Check 3: Excessive length
+    if ($Version.Length -gt 40) {
+        $errors.Add("Version string is suspiciously long ($($Version.Length) chars): '$($Version.Substring(0, 40))...'")
+    }
+
+    # Check 4: Must contain at least one digit
+    if ($Version -notmatch '\d') {
+        $errors.Add("Version contains no digits: '$Version'")
+    }
+
+    # Check 5: Invalid characters for a version string
+    if ($Version -match '[{}\[\]()=;:''\"\\/@!#\$%\^&\*\+\|~`]') {
+        $errors.Add("Version contains invalid characters: '$Version'")
+    }
+
+    # Check 6: Whitespace contamination
+    if ($Version -ne $Version.Trim() -or $Version -match '[\r\n]') {
+        $warnings.Add("Version contains leading/trailing whitespace or newlines: '$Version'")
+    }
+
+    # Check 7: Major version jump detection
+    if ($ExistingVersion -and $errors.Count -eq 0) {
+        try {
+            $newClean = $Version -replace '[^0-9.]', ''
+            $existClean = $ExistingVersion -replace '[^0-9.]', ''
+            $newMajor = [int]($newClean.Split('.')[0])
+            $existMajor = [int]($existClean.Split('.')[0])
+
+            if ($existMajor -gt 0 -and $newMajor -gt 0 -and $newMajor -lt ($existMajor / 2)) {
+                $warnings.Add("Major version dropped significantly: existing=$ExistingVersion, extracted=$Version")
+            }
+        } catch {
+            # If we can't parse for comparison, don't block on it
+        }
+    }
+
+    return [PSCustomObject]@{
+        IsValid  = ($errors.Count -eq 0)
+        Errors   = [string[]]$errors
+        Warnings = [string[]]$warnings
+    }
 }
 
 

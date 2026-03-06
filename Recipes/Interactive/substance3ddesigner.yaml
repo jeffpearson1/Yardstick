@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/substance-3d-designer/release-notes/all-changes.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:Substance3DDesigner = [AdobeApplication]::new(@{

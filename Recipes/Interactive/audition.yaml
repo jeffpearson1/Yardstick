@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/audition/audition-releasenotes.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:Audition = [AdobeApplication]::new(@{

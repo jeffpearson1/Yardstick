@@ -1,5 +1,5 @@
 url: https://public-cdn.cloud.unity3d.com/hub/prod/UnityHubSetup-x64.exe
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $vURL = "https://unity.com/unity-hub/release-notes"
   $content = Invoke-WebRequest $vURL

@@ -1,5 +1,5 @@
 url: https://github.com/OrcaSlicer/OrcaSlicer
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
   $downloadFileRegex = "OrcaSlicer_Windows_Installer.*\.exe$"

@@ -1,5 +1,5 @@
 url: 
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $VURL = "https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0063810"
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $VURL -Arguments @("--headless")

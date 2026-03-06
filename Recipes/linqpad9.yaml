@@ -1,0 +1,31 @@
+url: https://www.linqpad.net/GetFile.aspx?LINQPad9Setup.exe
+urlRedirects: true
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $urlParts = $url -split "\?cache\="
+  $version = [VersionPro]::new($urlParts[1]).ToString(3)
+  $filename = ($urlParts[0] -split "/")[-1]
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /MERGETASKS="!desktopicon"
+uninstallScript: |
+  "%ProgramFiles%\LINQPad9\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+fileName: 
+iconFile: linqpad.png
+id: linqpad
+displayName: LINQPad 9
+publisher: LINQPAD Pty Ltd
+description: LINQPad is a .NET development environment for interactively querying databases in LINQ, writing C# code, and testing .NET code snippets.
+fileType: exe
+detectionType: script
+detectionScript: |
+  $installedVersion = (Get-Item "C:\Program Files\LINQPad9\LINQPad.exe" -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
+  $version = "<version>"
+  if ($installedVersion -eq $version) {
+    Write-Host "Installed"
+  }
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_23H2
+numVersionsToKeep: 2
+scopeTags:
+  - scopeTag1
+  - scopeTag2

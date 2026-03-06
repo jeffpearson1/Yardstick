@@ -15,70 +15,75 @@ This guide provides comprehensive documentation for creating new application rec
 
 The recipe filename (without `.yaml`) becomes the application ID. The filename must:
 - Match the `id` field in the YAML file
-- Use PascalCase convention (e.g., `GoogleChrome`, `7zip`)
+- Use all-lowercase convention (e.g., `googlechrome`, `7zip`)
 - Be unique across all recipes
 
 ## Core Required Fields
 
-### Basic Identification
+The following fields are **always required** by the recipe schema validator (`Test-RecipeSchema`):
 
-**`id`** (string) - The application identifier. Must match the YAML filename without extension.
-- Example: `id: GoogleChrome`
+- `id` - Must match the YAML filename without extension
+- `displayName` - Human-readable name shown in Intune
+- `detectionType` - One of: `msi`, `file`, `registry`, `script`
+- `iconFile` - Icon filename in the `Icons/` folder (PNG or JPG, max 512x512)
+- `description` - Brief description of the application
+- `publisher` - Software vendor or publisher name
+- One of `installScript` or `powerShellInstallScript`
+- One of `uninstallScript` or `powerShellUninstallScript`
 
-**`displayName`** (string) - Human-readable application name shown in Intune and Company Portal. Do not include version numbers.
-- Example: `displayName: Google Chrome`
+> **Note:** Required fields can be satisfied either in the YAML itself or by setting the corresponding variable (e.g., `$registryDetectionKey = ...`) in a script block. The schema validator checks both.
 
-**`publisher`** (string) - The software vendor or publisher name.
-- Example: `publisher: Google`
+### Functionally Required (Not Schema-Validated)
 
-**`description`** (string) - Brief description of the application. Supports multi-line strings and Markdown.
-- Example: `description: A web browser by Google`
+These fields are not checked by the schema validator but are required at runtime:
 
-**`iconFile`** (string) - Filename of the icon (PNG or JPG, max 512x512) stored in the `Icons/` folder.
-- Example: `iconFile: GoogleChrome.png`
-
-### Version and Download Configuration
-
-**`version`** (string) - Application version. Must be set dynamically in `preDownloadScript` or `downloadScript`.
-- Set via: `$version = "1.2.3"`
-- Not typically defined in YAML unless using a static version
-
-**`fileName`** (string) - Name of the downloaded file. Can be static in YAML or dynamic in scripts.
-- Example: `fileName: googlechromestandaloneenterprise64.msi`
-- Set dynamically via: `$fileName = "installer.msi"`
-
-**`url`** (string) - Download URL. Can be static in YAML or dynamic in scripts.
-- Static example: `url: https://example.com/download/app.msi`
-- Dynamic example: Set `$url` in `preDownloadScript` or `downloadScript`
-
-**`urlRedirects`** (boolean) - If `true`, follows redirect chain to get final URL. Useful for `/latest` style URLs.
-- Example: `urlRedirects: true`
-- Default: `false`
-
-### File Type
-
-**`fileType`** (string) - Type of installer package.
-- Accepted values: `msi`, `EXE`, `zip`
-- Example: `fileType: msi`
+- **`$version`** - Must be set in `preDownloadScript` or the YAML `version` field. Validated immediately after `preDownloadScript` runs, so it **cannot** be set in `downloadScript`.
+- **`$fileName`** - Must be set in YAML, `preDownloadScript`, or `downloadScript`. Required for `.intunewin` packaging and placeholder replacement.
+- **`$url`** - Must be set in YAML, `preDownloadScript`, or `downloadScript` unless a `downloadScript` handles the download entirely.
 
 ## Script Blocks
 
-Scripts execute in the following order and allow dynamic configuration:
+All script blocks execute with `-NoNewScope`, meaning they run directly in the caller's scope. This has two important implications:
+
+1. **All scripts share the same scope.** Variables set in `preDownloadScript` are visible to `downloadScript`, `postDownloadScript`, and `postRunScript`.
+2. **Any `$Script:` variable can be set or overridden.** Writing `$version = "1.2.3"` in a script block writes directly to `$Script:Version` (PowerShell is case-insensitive).
+
+Scripts execute in this order:
+
+1. `preDownloadScript` - Before download and version validation
+2. `downloadScript` - Replaces default BITS download (working directory set to `$BuildSpace\$id\$version`)
+3. `postDownloadScript` - After download completes (working directory set to `$BuildSpace\$id\$version`)
+4. `postRunScript` - After Intune upload (runs outside the try/catch block)
+
+### Environment Variables Available to Scripts
+
+These variables are set once at startup from `preferences.yaml` and are available in all script blocks:
+
+| Variable | Description |
+|---|---|
+| `$BuildSpace` | Staging directory for downloads (files go to `$BuildSpace\$id\$version\`) |
+| `$Temp` | Temp directory |
+| `$Scripts` | Scripts directory |
+| `$Published` | Output directory for .intunewin files |
+| `$Recipes` | Recipes directory |
+| `$Icons` | Icons directory |
+| `$Tools` | Tools directory |
+| `$Secrets` | Secrets directory |
 
 ### `preDownloadScript`
 
-Executes before any download processing. Use this to:
+Executes before any download processing and before version validation. Use this to:
 - Scrape version numbers from vendor websites
 - Construct dynamic download URLs
 - Set version-dependent variables
 
-**Must always set:**
-- `$version` - The application version
+**Must set:**
+- `$version` - The application version (validated immediately after this script runs)
 
 **Commonly set:**
-- `$url` - Download URL when not static
+- `$url` - Download URL when not static in YAML
 - `$fileName` - When filename includes version or is dynamic
-- `$fileDetectionVersion` - Version string for detection rules when set to `file` (often same as `$version`). May need to be padded out/truncated to 4 sections: `$fileDetectionVersion = [VersionPro]::new($version).ToString(4)`
+- `$fileDetectionVersion` - Version string for file or MSI detection rules (defaults to `$version` if not set). May need to be padded to 4 parts: `$fileDetectionVersion = [VersionPro]::new($version).ToString(4)`
 
 **Example (7-Zip):**
 ```yaml
@@ -94,20 +99,27 @@ preDownloadScript: |
 
 ### `downloadScript`
 
-Custom download logic. Yardstick uses BITS transfer by default, but this script allows:
+Custom download logic. Yardstick uses BITS transfer by default, but this script replaces it entirely. The working directory is set to `$BuildSpace\$id\$version` before execution.
+
+Use for:
 - Custom authentication
 - Cookie handling
 - Multi-file downloads
 - Selenium-based automation
 
-**Must set:**
-- `$version`
-- `$fileName`
-- Perform the actual download to `$BuildSpace`
+**Must set (if not already set in `preDownloadScript`):**
+- `$fileName` - Name of the downloaded file
+
+**Important:** `$version` **cannot** be set here -- version validation happens between `preDownloadScript` and `downloadScript`. Always set `$version` in `preDownloadScript`.
+
+**Must do:**
+- Perform the actual file download (the default BITS transfer is skipped when this script is present)
 
 ### `postDownloadScript`
 
-Executes after download completes. Use for:
+Executes after download completes. The working directory is set to `$BuildSpace\$id\$version` before execution.
+
+Use for:
 - Extracting archives
 - Modifying installer files
 - Adding additional files to the package
@@ -116,13 +128,15 @@ Executes after download completes. Use for:
 **Example:**
 ```yaml
 postDownloadScript: |
-  Expand-Archive -Path "$BuildSpace\$fileName" -DestinationPath "$BuildSpace\extracted"
-  Copy-Item "C:\Scripts\config.xml" -Destination "$BuildSpace"
+  Expand-Archive -Path $fileName -DestinationPath ".\extracted"
+  Copy-Item "$Scripts\config.xml" -Destination "."
 ```
 
 ### `postRunScript`
 
-Executes after the Intune upload completes. Use for:
+Executes after the Intune upload completes. Runs outside the main try/catch block, so errors here do not prevent processing the next application.
+
+Use for:
 - Cleanup operations
 - Logging
 - Notifications
@@ -155,14 +169,16 @@ Executes after the Intune upload completes. Use for:
 **`powerShellInstallScript`** (string) - PowerShell script content for complex installations.
 - Automatically creates `install.ps1` in the package
 - Auto-generates `installScript` as: `powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1`
+- Only auto-generates if `installScript` is not also set
 
 **`powerShellUninstallScript`** (string) - PowerShell script content for complex uninstallations.
 - Automatically creates `uninstall.ps1` in the package
 - Auto-generates `uninstallScript` as: `powershell.exe -noprofile -executionpolicy bypass -file .\uninstall.ps1`
+- Only auto-generates if `uninstallScript` is not also set
 
 **Example (QGIS):**
 ```yaml
-powershellInstallScript: | 
+powershellInstallScript: |
   Invoke-WebRequest -Uri "https://github.com/google/fonts/raw/main/OpenSans.ttf" -UseBasicParsing
   if (Test-Path -Path "$($env:ProgramData)\Microsoft\Windows\Start Menu\Programs\QGIS*") {
     Remove-Item -Path "$($env:ProgramData)\Microsoft\Windows\Start Menu\Programs\QGIS*" -Recurse -Force
@@ -178,13 +194,13 @@ Yardstick supports four detection types: `msi`, `file`, `registry`, and `script`
 
 **`detectionType: msi`**
 
-The simplest detection method. Automatically extracts and uses the MSI ProductCode.
+The simplest detection method. Automatically extracts and uses the MSI ProductCode via `Get-MsiProductCode` after download.
 
 **Required fields:**
 - `detectionType: msi`
 
 **Optional fields:**
-- `softwareName` (string) - Display name filter for Add/Remove Programs
+- `fileDetectionVersion` (string) - Overrides the MSI product version used in detection. Defaults to `$version` if not set.
 
 **Example:**
 ```yaml
@@ -201,10 +217,10 @@ Detects based on file existence, version, date, or size.
 - `detectionType: file`
 - `fileDetectionPath` (string) - Full folder path where the file exists
 - `fileDetectionName` (string) - Filename to detect
-- `fileDetectionMethod` (string) - Detection method: `version`, `exists`, `dateModified`, `dateCreated`, `size`
+- `fileDetectionMethod` (string) - Detection method: `version`, `exists`, `modified`, `created`, `size`
 
 **Version detection fields:**
-- `fileDetectionVersion` (string) - Expected version (set in `preDownloadScript`)
+- `fileDetectionVersion` (string) - Expected version. Defaults to `$version` if not set. Set in `preDownloadScript` when version padding is needed.
 - `fileDetectionOperator` (string) - Comparison operator: `equal`, `notEqual`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`
 
 **Date detection fields:**
@@ -212,7 +228,7 @@ Detects based on file existence, version, date, or size.
 - `fileDetectionOperator` (string) - Same operators as version
 
 **Size detection fields:**
-- `fileDetectionValue` (integer) - File size in bytes
+- `fileDetectionValue` (integer) - File size in **MB**
 - `fileDetectionOperator` (string) - Same operators as version
 
 **Example (Notepad++):**
@@ -221,7 +237,7 @@ detectionType: file
 fileDetectionPath: 'C:\Program Files\Notepad++'
 fileDetectionName: notepad++.exe
 fileDetectionMethod: version
-fileDetectionVersion:  # Set in preDownloadScript
+fileDetectionVersion:  # Set in preDownloadScript; defaults to $version if omitted
 fileDetectionOperator: equal
 ```
 
@@ -241,6 +257,8 @@ Detects based on registry key/value existence or value content.
 - `registryDetectionValue` (string/int) - Expected value
 - `registryDetectionOperator` (string) - Comparison operator (same as file detection)
 
+> **Note:** Registry detection fields can be set dynamically in scripts. For example, `$registryDetectionKey` can be set in `preDownloadScript` when the key path includes a version number. See `djv.yaml` for this pattern.
+
 **Example (Firefox):**
 ```yaml
 detectionType: registry
@@ -248,7 +266,7 @@ registryDetectionMethod: exists
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> (x64 en-US)'
 ```
 
-**Note:** The `<version>` placeholder in registry keys is automatically replaced.
+**Note:** The `<version>` placeholder in registry keys is automatically replaced by `Update-ScriptPlaceholders`.
 
 ### Script Detection
 
@@ -265,34 +283,43 @@ Custom PowerShell detection script for complex scenarios.
 - `detectionScriptRunAs32Bit` (boolean) - Run in 32-bit context (default from preferences)
 - `detectionScriptEnforceSignatureCheck` (boolean) - Require signed script (default from preferences)
 
-**Example:**
+**Example (Python 3):**
 ```yaml
 detectionType: script
 detectionScript: |
-  $version = (Get-ItemProperty 'HKLM:\SOFTWARE\MyApp').Version
-  if ($version -eq "1.2.3") { exit 0 } else { exit 1 }
+  $version = "<version>"
+  $dirVersion = (($version.Split('.')[0,1] -join '.').Replace('.',''))
+  $pythonExe = Join-Path $env:ProgramFiles ("Python" + $dirVersion + "\python.exe")
+  $installedVersion = $null
+  if (Test-Path $pythonExe) {
+      $installedVersion = (Get-Item -Path $pythonExe -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
+  }
+  if ($installedVersion -eq "$version") {
+      Write-Output "Detected"
+      exit 0
+  }
+  Write-Output "Not Detected"
+  exit 1
 ```
+
+> **Note:** The `<version>` placeholder in `detectionScript` is replaced by `Update-ScriptPlaceholders`, so you can use it to inject the current version at packaging time.
 
 ## Installation Behavior Settings
 
-These settings control how Intune handles installation, or they can be set as defaults in `preferences.yaml`.
+These settings control how Intune handles installation. All default to values in `preferences.yaml` when omitted.
 
 **`installExperience`** (string) - Installation context.
 - Values: `system`, `user`
-- Default: From `preferences.yaml`
 - Example: `installExperience: system`
 
 **`restartBehavior`** (string) - Restart handling.
 - Values: `allow`, `suppress`, `force`, `basedOnReturnCode`
-- Default: From `preferences.yaml`
 - Example: `restartBehavior: suppress`
 
 **`maximumInstallationTimeInMinutes`** (integer) - Installation timeout.
-- Default: From `preferences.yaml`
 - Example: `maximumInstallationTimeInMinutes: 60`
 
 **`allowUserUninstall`** (boolean) - Allow users to uninstall.
-- Default: From `preferences.yaml`
 - Example: `allowUserUninstall: false`
 
 ## System Requirements
@@ -364,6 +391,26 @@ These settings control how Intune handles installation, or they can be set as de
 **`displayVersion`** (string) - Override version shown in Intune (optional).
 - Useful when file version differs from marketing version
 
+## Recipe Inheritance
+
+Recipes support single-level inheritance via the `base` field. When a recipe contains a `base` field, the referenced base recipe is loaded and the child recipe's fields are overlaid on top.
+
+**`base`** (string) - The `id` of another recipe to inherit from.
+- Child fields override base fields (shallow merge)
+- Chained inheritance is not supported (a base recipe cannot have its own `base` field)
+- The `base` field itself is excluded from the merged result
+
+**Example:**
+```yaml
+base: photoshop
+id: photoshop_sdl
+displayName: Adobe Photoshop (SDL)
+scopeTags:
+  - Different Scope Tag
+```
+
+This inherits all fields from `photoshop.yaml` and overrides only `id`, `displayName`, and `scopeTags`.
+
 ## Dependency Management
 
 **`allowDependentLinkUpdates`** (boolean) - Allow updating dependency links when creating new versions.
@@ -393,12 +440,17 @@ These settings control how Intune handles installation, or they can be set as de
 
 ## Placeholders
 
-Yardstick automatically replaces placeholders in install/uninstall scripts and detection rules:
+`Update-ScriptPlaceholders` automatically replaces placeholders in these fields: `installScript`, `powerShellInstallScript`, `uninstallScript`, `powerShellUninstallScript`, `detectionScript`, and `registryDetectionKey`.
 
-- **`<filename>`** - Replaced with actual downloaded filename
-- **`<version>`** - Replaced with application version
-- **`<productcode>`** - Replaced with MSI ProductCode (MSI packages only)
-- **`<fileDetectionVersion>`** - Replaced in detection rules
+The three placeholders are:
+
+| Placeholder | Replaced With | Notes |
+|---|---|---|
+| `<filename>` | `$fileName` | The downloaded file name |
+| `<version>` | `$version` | The application version |
+| `<productcode>` | MSI ProductCode | Only populated for MSI packages (extracted by `Get-MsiProductCode` after download) |
+
+Placeholder replacement runs three times during processing: before download, after download, and after MSI product code extraction. If any placeholders remain unreplaced after all three passes, the recipe fails with an error.
 
 **Example:**
 ```yaml
@@ -433,7 +485,6 @@ id: GoogleChrome
 displayName: Google Chrome
 publisher: Google
 description: A web browser by Google
-fileType: msi
 detectionType: msi
 numVersionsToKeep: 2
 scopeTags:
@@ -495,6 +546,70 @@ scopeTags:
   - My Scope Tag 2
 ```
 
+### Registry Detection with Dynamic Keys Example (DJV)
+
+```yaml
+url: https://github.com/grizzlypeak3d/DJV
+urlredirects: false
+preDownloadScript: |
+  using module ".\Modules\Custom\GithubDownloader.psm1"
+  $downloadFileRegex = "djv-.*amd64\.exe$"
+  $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $Version = $downloader.LatestVersion
+  $URL = $downloader.URL
+  $filename = $downloader.filename
+  $registryDetectionKey = "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\DJV $Version"
+  $registryDetectionValue = $Version
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\DJV <version>\Uninstall.exe" /S'
+iconFile: djv.png
+id: djv
+displayName: DJV
+publisher: Grizzly Peak Software
+description: DJV is an open source application for media playback and review.
+detectionType: registry
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual
+registryDetectionMethod: version
+```
+
+### Script Detection Example (Python 3)
+
+```yaml
+url:
+urlredirects: false
+preDownloadScript: |
+  $html = $(Invoke-WebRequest "https://www.python.org/downloads/windows/").Content
+  $html -match "Latest Python 3 Release - Python 3\.[0-9]{1,3}\.[0-9]{1,3}" | Out-Null
+  $version = $($($matches[0] -split "-")[1]).Trim(" Python")
+  $url = "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
+  $fileName = "python-$version-amd64.exe"
+installScript: '<filename> /quiet InstallAllUsers=1 PrependPath=1'
+uninstallScript: '<filename> /quiet /uninstall'
+iconFile: python3.png
+id: python3
+displayName: Python 3
+publisher: Python Software Foundation
+description: Python is a programming language that lets you work quickly and integrate systems effectively.
+detectionType: script
+detectionScript: |
+  $version = "<version>"
+  $dirVersion = (($version.Split('.')[0,1] -join '.').Replace('.',''))
+  $pythonExe = Join-Path $env:ProgramFiles ("Python" + $dirVersion + "\python.exe")
+  $installedVersion = $null
+  if (Test-Path $pythonExe) {
+      $installedVersion = (Get-Item -Path $pythonExe -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
+  }
+  if ($installedVersion -eq "$version") {
+      Write-Output "Detected"
+      exit 0
+  }
+  Write-Output "Not Detected"
+  exit 1
+```
+
 ## Testing Your Recipe
 
 1. **Test the download and version detection:**
@@ -516,23 +631,20 @@ scopeTags:
 
 ## Common Pitfalls
 
-1. **Forgetting to set `$version`** - Always set in `preDownloadScript` or `downloadScript`
-2. **Incorrect file detection version format** - Ensure it matches the actual file properties
-3. **Missing icon files** - Icons must exist in `Icons/` folder
-4. **Hardcoded paths** - Use placeholders instead of hardcoding filenames
-5. **Case sensitivity** - YAML keys are case-sensitive; follow examples carefully
-6. **Missing `fileDetectionVersion`** - Required for file-based detection
-7. **Wrong detection type** - MSI packages should use `detectionType: msi`, not file detection
+1. **Setting `$version` in `downloadScript`** - Version validation runs *before* `downloadScript`. Always set `$version` in `preDownloadScript` or the YAML `version` field.
+2. **Incorrect file detection version format** - Ensure it matches the actual file properties. Use `[VersionPro]::new($version).ToString(4)` to pad to 4-part format when needed.
+3. **Missing icon files** - Icons must exist in `Icons/` folder with the exact name referenced in `iconFile`.
+4. **Hardcoded paths** - Use `<filename>`, `<version>`, and `<productcode>` placeholders instead of hardcoding values in install/uninstall scripts.
+5. **Case sensitivity in YAML keys** - YAML keys are case-sensitive. Use the exact casing from this guide (e.g., `urlredirects` not `urlRedirects`, `fileDetectionMethod` not `filedetectionmethod`). The schema validator warns about casing mismatches.
+6. **Assuming `$fileDetectionVersion` is required** - It defaults to `$version` when not set. Only set it explicitly when the file version format differs from the application version.
+7. **Wrong detection type** - MSI packages should use `detectionType: msi` unless you need custom detection logic. MSI detection automatically extracts the ProductCode.
+8. **Unreplaced placeholders** - If any `<filename>`, `<version>`, or `<productcode>` placeholders remain in scripts after processing, the recipe will fail. Ensure the corresponding variables are set.
 
 ## Advanced Topics
 
-### Multi-Architecture Support
+### Recipe Inheritance
 
-For applications that support multiple architectures, create separate recipes:
-- `appname.yaml` - Default (x64)
-- `appname.arm64.yaml` - ARM64 version
-
-Set the `architecture` field appropriately in each.
+See the [Recipe Inheritance](#recipe-inheritance) section above. This pattern is commonly used for Adobe products where an SDL (Software Distribution License) variant inherits from the base recipe and overrides only `id`, `displayName`, and scope-related fields.
 
 ### Version Normalization
 
@@ -542,7 +654,7 @@ Some vendors use inconsistent version formats. Normalize in `preDownloadScript`:
 preDownloadScript: |
   $version = "24.08"
   # Convert to 4-part version for file detection
-  $fileDetectionVersion = "$version.0.0"
+  $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
 ```
 
 ### Custom Download Authentication
@@ -552,7 +664,7 @@ For applications requiring authentication, use `downloadScript`:
 ```yaml
 downloadScript: |
   $headers = @{ Authorization = "Bearer $token" }
-  Invoke-WebRequest -Uri $url -Headers $headers -OutFile "$BuildSpace\$fileName"
+  Invoke-WebRequest -Uri $url -Headers $headers -OutFile "$BuildSpace\$id\$version\$fileName"
 ```
 
 ### Selenium-Based Downloads
@@ -563,5 +675,4 @@ For complex download scenarios (JavaScript-heavy pages, multi-step auth), see `M
 
 - Review existing recipes in `Recipes/` folder for examples
 - Check templates in `Templates/` folder
-- Refer to main Yardstick documentation in `README.md`
 - Review Copilot instructions in `.github/copilot-instructions.md`

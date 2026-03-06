@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/premiere-rush/release-notes/release-notes-premiere-rush.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:PremiereRush = [AdobeApplication]::new(@{

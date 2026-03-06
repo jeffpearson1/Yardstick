@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/xd/help/whats-new.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:XD = [AdobeApplication]::new(@{

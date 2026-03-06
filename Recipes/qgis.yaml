@@ -1,5 +1,5 @@
 url: https://qgis.org/download/
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $url
   $URL = $(($Content.Links | Where-Object href -like "*msi*" | Where-Object outerHTML -like "*Latest*" | Where-Object outerHTML -notlike "*experimental*").href)

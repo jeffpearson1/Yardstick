@@ -1,5 +1,5 @@
 url: https://docs.netlogo.org/versions
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $content = Invoke-WebRequest $url
   $content.content -match "(?<=Version\ )(\.{0,1}[0-9]{1,2}){3}" | Out-Null

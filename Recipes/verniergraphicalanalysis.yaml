@@ -1,0 +1,26 @@
+url: https://software-releases.graphicalanalysis.com/ga/win/release/latest/Vernier-Graphical-Analysis-Silent-Installer.zip
+urlRedirects: false
+preDownloadScript: |
+  # Start the download
+  $filename = ($url -split "/")[-1]
+  Start-BitsTransfer -Source $Script:URL -Destination "$TEMP\$filename"
+  # Extract the zip file
+  Expand-Archive -Path "$TEMP\$filename" -DestinationPath "$TEMP\VGA_Extracted" -Force
+  $filename = Get-ChildItem -Path "$TEMP\VGA_Extracted" -Filter "*.msi" | Select-Object -First 1 | Select-Object -ExpandProperty Name
+  # Get the version from the extracted file
+  $version = ([string](Get-MsiProperty -Path "$TEMP\VGA_Extracted\$filename" -Property ProductVersion)).Trim()
+downloadScript: |
+  # Just move it from the temp folder
+  Move-Item -Path "$TEMP\VGA_Extracted\*" -Destination "$BUILDSPACE\$id\$version" -Force
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: verniergraphicalanalysis.png
+id: verniergraphicalanalysis
+displayName: Vernier Graphical Analysis
+publisher: Vernier
+description: Vernier Graphical Analysis software for data collection and analysis.
+softwareName: "Vernier Graphical Analysis*"
+detectionType: msi
+scopeTags:
+  - scopeTag1
+  - scopeTag2

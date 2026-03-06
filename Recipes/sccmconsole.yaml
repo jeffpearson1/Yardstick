@@ -1,5 +1,5 @@
 url: \\yoursiteserver.yourcompany.com\sms_def\tools\ConsoleSetup
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Version = (Get-Item "$url\ConsoleSetup.exe").VersionInfo.ProductVersion
 downloadScript: |

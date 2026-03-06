@@ -1,5 +1,5 @@
 url: $URL/release.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $URL = "https://ftp.osuosl.org/pub/cran/bin/windows/base/"
   $Content = Invoke-WebRequest -Uri $URL

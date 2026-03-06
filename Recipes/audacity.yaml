@@ -1,5 +1,5 @@
 url: https://www.audacityteam.org/download/windows/
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $Script:URL = ($Content.links | where href -match "audacity-win-.*-64bit\.exe").href

@@ -92,18 +92,14 @@ param (
     [Switch] $NoEmail
 )
 
+# Ensure non-terminating errors are caught by try/catch blocks
+$ErrorActionPreference = 'Stop'
+
 # Constants
 $Global:LogLocation = "$PSScriptRoot"
 $Global:LogFile = "YLog.log"
 
-# Modules required:
-# powershell-yaml
-# IntuneWin32App
-# Selenium
-Import-Module powershell-yaml -Scope Local
-Import-Module IntuneWin32App -Scope Local
-Import-Module Selenium -Scope Local
-Import-Module TUN.CredentialManager -Scope Local
+# Import core modules first (needed for Write-Log and Test-Prerequisites)
 Import-Module ${PSScriptRoot}\Modules\YardstickSupport.psm1 -Scope Global -Force
 
 $CustomModuleImports = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
@@ -135,20 +131,36 @@ try {
     exit 1
 }
 
+# Validate prerequisites before importing external modules
+$prereqResult = Test-Prerequisites -ToolsPath $Prefs.Tools
+foreach ($w in $prereqResult.Warnings) { Write-Log "WARNING: $w" }
+if (-not $prereqResult.IsValid) {
+    foreach ($e in $prereqResult.Errors) { Write-Log "ERROR: $e" }
+    Write-Log "Prerequisite checks failed. Exiting."
+    exit 1
+}
+
+# Import external modules (after prerequisite validation)
+Import-Module powershell-yaml -Scope Local
+Import-Module IntuneWin32App -Scope Local
+Import-Module Selenium -Scope Local -ErrorAction SilentlyContinue
+Import-Module TUN.CredentialManager -Scope Local -ErrorAction SilentlyContinue
+
 
 
 function Set-ScriptVariables {
     <#
     .SYNOPSIS
-    Sets script-scoped variables from application parameters and global preferences.
-    
+    Sets script-scoped variables from application parameters and per-app preferences.
+
     .DESCRIPTION
-    This function centralizes the logic for setting script variables, using application-specific
-    parameters when available and falling back to global preferences with null coalescing.
-    
+    Sets per-application script variables from recipe parameters, falling back to
+    global preferences with null coalescing. Folder locations and connection settings
+    are set once at script startup and are not reassigned here.
+
     .PARAMETER Parameters
     Hashtable containing application-specific parameters from the YAML recipe.
-    
+
     .PARAMETER Preferences
     Hashtable containing global preferences from the preferences.yaml file.
     #>
@@ -156,22 +168,6 @@ function Set-ScriptVariables {
         [hashtable]$Parameters,
         [hashtable]$Preferences
     )
-    
-    # Import Folder Locations
-    $Script:Temp = $Preferences.Temp
-    $Script:BuildSpace = $Preferences.Buildspace
-    $Script:Scripts = $Preferences.Scripts
-    $Script:Published = $Preferences.Published
-    $Script:Recipes = $Preferences.Recipes
-    $Script:Icons = $Preferences.Icons
-    $Script:Tools = $Preferences.Tools
-    $Script:Secrets = $Preferences.Secrets
-    $Script:Modules = $Preferences.Modules
-
-    # Import Intune Connection Settings
-    $Global:TenantID = $Preferences.TenantID
-    $Global:ClientID = $Preferences.ClientID
-    $Global:ClientSecret = $Preferences.ClientSecret
 
     # Set all variables from default preferences and the application recipe
     $Script:Url = if ($Parameters.urlRedirects -eq $true) {Get-RedirectedUrl $Parameters.url} else {$Parameters.url}
@@ -589,6 +585,27 @@ foreach ($ApplicationId in $Applications) {
             continue
         }
 
+        # Resolve base recipe inheritance if present
+        if ($Parameters.ContainsKey('base')) {
+            try {
+                $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $Recipes
+            } catch {
+                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $ApplicationId -Version "Unknown" -ErrorMessage "Failed to resolve base recipe: $_" -FailureStage "Configuration"
+                Write-Error "Failed to resolve base recipe for ${ApplicationId}: $_"
+                continue
+            }
+        }
+
+        # Validate recipe schema before processing
+        $validation = Test-RecipeSchema -Recipe $Parameters -RecipeId $ApplicationId
+        foreach ($w in $validation.Warnings) { Write-Log "WARNING: [Recipe $ApplicationId] $w" }
+        if (-not $validation.IsValid) {
+            $errorMsg = "Recipe validation failed: $($validation.Errors -join '; ')"
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $ApplicationId -Version "Unknown" -ErrorMessage $errorMsg -FailureStage "Recipe Validation"
+            Write-Error "[Recipe $ApplicationId] $errorMsg"
+            continue
+        }
+
         # Set all script variables from parameters and preferences
         Set-ScriptVariables -Parameters $parameters -Preferences $Prefs
         
@@ -618,6 +635,9 @@ foreach ($ApplicationId in $Applications) {
         }
 
 
+        # Clear stale $matches from prior recipe iterations to prevent cross-contamination
+        $null = "reset" -match "reset"
+
         # Run the pre-download script
         if ($Script:PreDownloadScript) {
             Write-Log "Running pre-download script..."
@@ -632,9 +652,30 @@ foreach ($ApplicationId in $Applications) {
         } else {
             Write-Log "Skipping Pre-download script"
         }
+
+        # Validate the extracted version before proceeding
+        $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
+        $existingVersionForCheck = if ($ExistingVersions -and $ExistingVersions.Count -gt 0) { $ExistingVersions.displayVersion[0] } else { $null }
+
+        $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $ApplicationId -ExistingVersion $existingVersionForCheck
+        foreach ($w in $versionValidation.Warnings) {
+            Write-Log "WARNING: [Version Check $ApplicationId] $w"
+        }
+        if (-not $versionValidation.IsValid) {
+            $versionErrorMsg = "Version validation failed: $($versionValidation.Errors -join '; ')"
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version ($Script:Version ?? "null") -ErrorMessage $versionErrorMsg -FailureStage "Version Validation"
+            Write-Error "[Version Check $ApplicationId] $versionErrorMsg"
+            continue
+        }
+
+        # Trim whitespace from version if present (warned but not blocked above)
+        if ($Script:Version -ne $Script:Version.Trim()) {
+            $Script:Version = $Script:Version.Trim()
+            Write-Log "Trimmed whitespace from version: '$($Script:Version)'"
+        }
+
         # Check if there is an up-to-date version in the repo already
         Write-Log "Checking if $($Script:DisplayName) $($Script:Version) is a new version..."
-        $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
         
         if (-not $ExistingVersions) {
             Write-Log "No existing versions found for $($Script:DisplayName). Continuing with update."
@@ -647,7 +688,7 @@ foreach ($ApplicationId in $Applications) {
         # Check various conditions to determine if we should proceed
         if ($Force) {
             Write-Log "Force flag is set. Forcing update of $($Script:DisplayName) $($Script:Version)"
-        } elseif (Get-VersionLocked -Version $Script:Version -VersionLock $Script:VersionLock) {
+        } elseif (Test-VersionExcluded -Version $Script:Version -VersionLock $Script:VersionLock) {
             Write-Log "Version is locked to $($Script:VersionLock). Skipping update."
             continue
         } elseif ($ExistingVersions.displayVersion -contains $Script:Version) {
@@ -799,9 +840,13 @@ foreach ($ApplicationId in $Applications) {
             }
             Write-Log "Successfully uploaded $Script:DisplayName to Intune"
             Write-Log "Waiting for Intune to process the uploaded application..."
+            $PublishTimeout = (Get-Date).AddMinutes(30)
             do {
                 Start-Sleep -Seconds 15
                 $LiveWin32App = Get-IntuneWin32App -Id $Win32App.id
+                if ((Get-Date) -gt $PublishTimeout) {
+                    throw "Timed out waiting for Intune to publish $Script:DisplayName after 30 minutes (state: $($LiveWin32App.publishingState))"
+                }
             } while ($LiveWin32App.publishingState -ne "published")   
         } catch {
             Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
@@ -852,14 +897,10 @@ foreach ($ApplicationId in $Applications) {
             Write-Log "There was an error fetching information about existing applications. Exiting"
             Exit 4
         }
-        Write-Host "DEBUG: All Matching Apps"
-        $($AllMatchingApps | Select-Object DisplayName, DisplayVersion) | Write-Output
         $CurrentApp = $AllMatchingApps[0]
         $AllOldApps = $AllMatchingApps[1..$($AllMatchingApps.count - 1)]
         # For any apps that share the same version as the current one, move all their deployments to the current one and remove the rest from the list
         $SameVersionApps = $AllOldApps | Where-Object displayVersion -eq $CurrentApp.displayVersion
-        Write-Host "DEBUG: Same version apps"
-        $($SameVersionApps | Select-Object DisplayName, DisplayVersion) | Write-Output
         if ($SameVersionApps) {
             foreach ($App in $SameVersionApps) {
                 Write-Log "Moving assignments from $($App.id) to $($CurrentApp.id)"
@@ -973,8 +1014,8 @@ if (-not $NoEmail) {
         
         switch ($emailMethod.ToLower()) {
             "mailkit" {
-                Write-Log "Sending email report using PoshMailKit"
-                Send-YardstickEmailReportMailKit -Preferences $Prefs -RunParameters $RunParameters
+                Write-Log "ERROR: MailKit email delivery method is not yet implemented. Set emailDeliveryMethod to 'outlook' in preferences.yaml or remove it to use the default."
+                throw "MailKit email delivery method is not yet implemented."
             }
             "outlook" {
                 Write-Log "Sending email report using Outlook"

@@ -1,5 +1,5 @@
 url: \\yoursiteserver.yourcompany.com\sms_def\Client
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $PathToCCMSetupEXE = "$url\ccmsetup.exe"
   $Version = (Get-Item $PathToCCMSetupEXE).VersionInfo.ProductVersion

@@ -1,5 +1,5 @@
 url: 
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $content = Invoke-WebRequest "https://www.videolan.org/vlc/download-windows.html"
   $URL = ($content.links | where href -like "*get.videolan*win64*exe").href -replace "//get.videolan.org", "https://irltoolkit.mm.fcix.net/videolan-ftp"

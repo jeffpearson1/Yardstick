@@ -1,5 +1,5 @@
 url: https://www.eclipse.org/downloads/packages/
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
   $Content = Invoke-WebRequest $URL

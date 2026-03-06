@@ -1,5 +1,5 @@
 url: https://github.com/powershell/powershell
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
   $downloadFileRegex = "powershell-.*x64\.msi$"

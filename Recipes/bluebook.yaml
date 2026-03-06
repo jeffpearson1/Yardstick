@@ -1,5 +1,5 @@
 url: https://bluebook.app.collegeboard.org/windows
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $url
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')

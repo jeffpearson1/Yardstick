@@ -1,0 +1,22 @@
+url: https://www.mendeley.com/download-reference-manager/windows
+urlRedirects: false
+preDownloadScript: |
+  $content = Invoke-WebRequest $url
+  $url = ($content.links | where href -like "*.exe*").href
+  $fileName = ($url -split "/")[-1]
+  $version = ($fileName -split "-")[-1].Trim(".exe")
+  $fileDetectionVersion = "$version.0"
+installScript: <filename> /AllUsers=1 /S
+uninstallScript: '"%ProgramFiles%\Mendeley Reference Manager\Uninstall Mendeley Reference Manager.exe" /S'
+iconFile: mendeley.png
+id: mendeleyreferencemanager
+displayName: Mendeley Reference Manager
+publisher: Mendeley
+description: Mendeley Reference Manager is a free reference management software used for managing and sharing research papers, discovering research data, and collaborating online.
+fileType: EXE
+detectionType: file
+fileDetectionPath: C:\Program Files\Mendeley Reference Manager
+fileDetectionName: Mendeley Reference Manager.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+numVersionsToKeep: 2

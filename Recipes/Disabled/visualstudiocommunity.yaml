@@ -1,5 +1,5 @@
 url: https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-notes
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = (Invoke-WebRequest $URL).Content
   $Content -match "(?<=Version )[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}"

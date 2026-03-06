@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $html = Invoke-WebRequest -Uri "https://get.geo.opera.com/ftp/pub/opera_air/" -UseBasicParsing
   $versions = $html.Links | Where-Object { $_.href -match '^\d+\.\d+\.\d+\.\d+' } | ForEach-Object { ($_.href -replace '/$','') }

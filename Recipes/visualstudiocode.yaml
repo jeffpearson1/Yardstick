@@ -1,5 +1,5 @@
 url: https://code.visualstudio.com/sha/download?build=stable&os=win32-x64
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $filename = $($url -split "/")[-1]
   $filename -match "[0-9]{0,}\.[0-9]{0,}\.[0-9]{0,}" | Out-Null

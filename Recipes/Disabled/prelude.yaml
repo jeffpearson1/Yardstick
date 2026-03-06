@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/prelude/release-note/release-notes-prelude.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:Prelude = [AdobeApplication]::new(@{

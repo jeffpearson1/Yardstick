@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $URL = "https://github.com/git-for-windows/git/releases"
   $Content = Invoke-WebRequest $url

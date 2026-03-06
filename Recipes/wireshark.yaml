@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $URL = "https://www.wireshark.org/download.html"
   $Content = Invoke-WebRequest $URL

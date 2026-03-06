@@ -44,7 +44,7 @@ class AdobeApplication {
     [void] Init([hashtable]$Properties) {
         # Load preferences
         try {
-            $this.Preferences = Get-Content "$GLOBAL:SCRIPT_ROOT\Preferences.yaml" | ConvertFrom-Yaml
+            $this.Preferences = Get-Content ".\Preferences.yaml" | ConvertFrom-Yaml
             $this.TempPath = $this.Preferences.Temp
             $this.BuildSpacePath = $this.Preferences.Buildspace
         }
@@ -97,7 +97,7 @@ class AdobeApplication {
         # Extract version using regex
         try {
             Write-Log "Extracting version using regex: $($this.VersionMatchStringRegex)"
-            if ($HTML -match $this.VersionMatchStringRegex) {
+            if ([string]$HTML -match $this.VersionMatchStringRegex) {
                 $this.Version = $matches[0]
                 Write-Log "Found version: $($this.Version)"
             }
@@ -215,7 +215,7 @@ class AdobeApplication {
             Write-Log "Entering username..."
             $element = Get-SeElement -By ID "EmailPage-EmailField"
             Invoke-SeKeys -Element $element -Keys $credentials.Username
-            $button = Get-SeElement -By XPath '//*[@class="EmailPage__buttons"]/button'
+            $button = Get-SeElement -By XPath "//button" | Where-Object Text -eq "Continue"
             $button.click()
             Start-Sleep -Seconds 15
         }
@@ -227,7 +227,7 @@ class AdobeApplication {
         if ($this.SSO) {
             try {
                 Write-Log "Authenticating via SSO..."
-                Invoke-SSOAutoSignIn -Target "adminconsole.adobe.com"
+                Invoke-SSOAutoSignIn -Target "adminconsole.adobe.com" -Driver $Driver
             }
             catch {
                 throw "SSO authentication failed: $_"
@@ -267,7 +267,12 @@ class AdobeApplication {
             if ($elapsed -ge $timeout) {
                 throw "Timeout waiting for Adobe Admin Console to load"
             }
-            
+            # if there's an overlay, close it
+            if (Get-SeElement -By Class "vex-overlay" -ErrorAction SilentlyContinue) {
+                $overlay_close_button = Get-SeElement -By Class "vex-close"
+                $overlay_close_button.click()
+                Start-Sleep -Seconds 2
+            }
             Write-Log "Navigating to Packages tab..."
             $packagesLink = Get-SeElement -By LinkText "Packages"
             $packagesLink.click()
@@ -339,9 +344,9 @@ class AdobeApplication {
             $this.ClickNextButton($Driver, "Skip plugins")
             
             # Configure Adobe CC Desktop Options
-            Write-Log "Configuring Adobe CC Desktop options..."
-            $selfServiceToggle = Get-SeElement -By XPATH "//*[text()='Enable self-service install']/../../input"
-            $selfServiceToggle.click()
+            # Write-Log "Configuring Adobe CC Desktop options..."
+            # $selfServiceToggle = Get-SeElement -By XPATH "//*[text()='Enable self-service install']/../../input"
+            # $selfServiceToggle.click()
             Start-Sleep -Seconds 2
             
             $this.ClickNextButton($Driver, "Desktop options")
@@ -428,7 +433,7 @@ class AdobeApplication {
     #>
     [void] ClickNextButton([object]$Driver, [string]$Context) {
         Write-Log "Clicking Next button - $Context"
-        $nextButton = Get-SeElement -By CSSSelector "button.Dniwja_spectrum-Button:nth-child(3) > span:nth-child(1)"
+        $nextButton = (Get-SeElement -By Xpath "//button" | Where-Object Text -eq "Next")[-1]
         $nextButton.click()
         Start-Sleep -Seconds 2
     }

@@ -1,5 +1,5 @@
 url: https://stellarium.org
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $URL = ($Content.links | where href -match "qt6-win64").href

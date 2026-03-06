@@ -1,5 +1,5 @@
 url: https://dbeaver.io/files/dbeaver-ce-latest-x86_64-setup.exe
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $vurl = "https://dbeaver.io/download/"
   $content = Invoke-WebRequest $vurl

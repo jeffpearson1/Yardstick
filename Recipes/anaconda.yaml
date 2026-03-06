@@ -1,5 +1,5 @@
 url: https://repo.anaconda.com/archive/
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
   $FileName = ($Content.Links | Where-Object href -Match "Anaconda.*-Windows-x86_64\.exe")[0].href

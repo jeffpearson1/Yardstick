@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/fresco/release-notes.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:Fresco = [AdobeApplication]::new(@{

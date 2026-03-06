@@ -1,5 +1,5 @@
 url: https://helpx.adobe.com/premiere-pro/release-note/release-notes-premiere-pro.html
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\AdobeDownloader.psm1
   $Script:PremierePro = [AdobeApplication]::new(@{

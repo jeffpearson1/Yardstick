@@ -1,5 +1,5 @@
 url: https://github.com/qzind/tray
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
   $downloadFileRegex = "qz-tray-([0-9]\.{0,1}){3}-x86_64\.exe"

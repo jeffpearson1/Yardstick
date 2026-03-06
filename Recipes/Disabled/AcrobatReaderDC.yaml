@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $URL = "https://helpx.adobe.com/acrobat/release-note/release-notes-acrobat-reader.html"
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless', '--window-size=1920,1080')

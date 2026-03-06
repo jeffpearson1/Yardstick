@@ -1,5 +1,5 @@
 url: https://www.dropbox.com/download?full=1&plat=win
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $fileName = (($url -split '/')[-1]).replace("%20", " ")
   $fileName -match "(?<=\ )([0-9]{1,4}\.){2}[0-9]{1,4}(?=\ )" | Out-Null

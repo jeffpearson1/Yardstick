@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
   $json = Invoke-RestMethod -Uri "https://www.gimp.org/gimp_versions.json" -UseBasicParsing

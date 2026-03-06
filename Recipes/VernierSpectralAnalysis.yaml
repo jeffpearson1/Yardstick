@@ -1,5 +1,5 @@
 url: https://s3.us-west-2.amazonaws.com/software-releases.graphicalanalysis.com/sa/win/release/latest/Vernier-Spectral-Analysis-Silent-Installer.zip
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $VURL = "https://chromewebstore.google.com/detail/vernier-spectral-analysis/neagmanoonoaijlnipjppnjknalpodmi"
   $Content = Invoke-WebRequest $VURL

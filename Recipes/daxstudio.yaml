@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $url = "https://daxstudio.org/"
   $Content = Invoke-WebRequest $url

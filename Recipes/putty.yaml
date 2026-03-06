@@ -1,5 +1,5 @@
 url: 
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $URL = "https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html"
   $Content = Invoke-WebRequest -Uri $URL

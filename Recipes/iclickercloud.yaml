@@ -1,5 +1,5 @@
 url: https://www.iclicker.com/downloads/iclicker-cloud/
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $content = Invoke-WebRequest $url
   $URL = ($content.links | where-object href -like "*msi*").href

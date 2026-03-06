@@ -1,5 +1,5 @@
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $Content = $(Invoke-WebRequest "https://keepass.info/download.html")
   $URL = ($Content.links | where href -like "*sourceforge*KeePass-2*Setup.exe*").href

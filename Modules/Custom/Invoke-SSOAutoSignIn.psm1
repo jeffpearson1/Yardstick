@@ -6,7 +6,7 @@ function Invoke-SSOAutoSignIn {
     )
     $Username_Field = Get-SeElement -By ID "username"
     $Password_Field = Get-SeElement -By ID "password"
-    $Button = Get-SeElement -By CSSSelector ".btn"
+    $Button = Get-SeElement -By CSSSelector ".btn" | Where-Object Text -eq "Sign In"
     try {
         $Credentials = Get-StoredCredential -Target "cred1"
         Start-Sleep -Seconds 10
