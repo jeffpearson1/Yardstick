@@ -1426,9 +1426,9 @@ function Test-ExtractedVersion {
     }
 
     # Check 5: Invalid characters for a version string
-    # if ($Version -match '[{}\[\]()=;:''\"\\/@!#\$%\^&\*\+\|~`]') {
-    #     $errors.Add("Version contains invalid characters: '$Version'")
-    # }
+    if ($Version -match '[{}\[\]()=;:\"\\/@!#\$%\^&\*\|~`]') {
+        $errors.Add("Version contains invalid characters: '$Version'")
+    }
 
     # Check 6: Whitespace contamination
     if ($Version -ne $Version.Trim() -or $Version -match '[\r\n]') {
