@@ -8,13 +8,30 @@ preDownloadScript: |
   $version = $filename.split("-")[1]
   $url = "https://ftp.osuosl.org/pub/cran/bin/windows/base/$filename"
   $fileDetectionPath = "C:\Program Files\R\R-$version\bin"
-  $uninstallScript = '"%ProgramFiles%\R\R-$version\unins000.exe" /VERYSILENT /NORESTART'
-installScript: for /D %f in ("C:\Program Files\R\*.*") do ( echo Uninstalling %f && start /wait "" "%f\unins000.exe" /VERYSILENT /NORESTART ) && <filename> /VERYSILENT /NORESTART
+  $uninstallScript = "`"%ProgramFiles%\R\R-$version\unins000.exe`" /VERYSILENT /NORESTART"
+powerShellInstallScript: |
+  $rDirectories = Get-ChildItem "C:\Program Files\R" -Directory
+  foreach ($directory in $rDirectories) {
+      if (Test-Path "$($directory.FullName)\unins000.exe") {
+          Write-Output "Uninstalling R version: $($directory.Name)"
+          Start-Process -FilePath "$($directory.FullName)\unins000.exe" -ArgumentList "/VERYSILENT /NORESTART" -Wait
+      }
+  }
+  Write-Output "All R versions have been uninstalled."
+  Write-Output "Installing new version..."
+  Start-Process -FilePath "$PSScriptRoot\<filename>" -ArgumentList "/VERYSILENT /NORESTART" -Wait
+  if ($?) {
+      Write-Output "New version of R has been installed successfully."
+  } else {
+      Write-Output "Failed to install the new version of R."
+  }
 iconFile: r.png
 id: r
-displayName: R for Windows (Development)
+displayName: R for Windows
 publisher: R Core Team
 description: R is a free software environment for statistical computing and graphics.
+dependentApplicationBlacklist:
+ - "RStudio"
 detectionType: file
 fileDetectionName: R.exe
 fileDetectionMethod: exists

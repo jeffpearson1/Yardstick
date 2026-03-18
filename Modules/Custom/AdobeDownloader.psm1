@@ -513,7 +513,8 @@ class AdobeApplication {
         $stableCount = 0
         while ($stableCount -lt 3) {  # File size must be stable for 3 checks
             Start-Sleep -Seconds 30
-            $currentSize = (Get-Item $fullPath -ErrorAction SilentlyContinue)?.Length ?? 0
+            $item = Get-Item $fullPath -ErrorAction SilentlyContinue
+            $currentSize = if ($null -ne $item) { $item.Length } else { 0 }
             
             if ($currentSize -eq $previousSize -and $currentSize -gt 0) {
                 $stableCount++

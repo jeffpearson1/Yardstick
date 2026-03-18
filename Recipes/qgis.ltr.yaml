@@ -1,0 +1,9 @@
+base: qgis
+preDownloadScript: |
+  $Content = Invoke-WebRequest $url
+  $URL = (($Content.Links | Where-Object href -like "*msi*" | Where-Object outerHTML -like "*LTR*" | Where-Object outerHTML -notlike "*experimental*").href)[0]
+  $filename = ($URL -split "\/")[-1]
+  $filename -match "[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}" | Out-Null
+  $Version = $matches[0]
+id: qgis.ltr
+displayName: QGIS LTR

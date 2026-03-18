@@ -140,10 +140,78 @@ if (-not $prereqResult.IsValid) {
     exit 1
 }
 
-# Import external modules (after prerequisite validation)
+# Selenium 4's ScriptsToProcess defines PowerShell classes/enums in the caller's scope,
+# but the module's own session state cannot see them during parameter binding. Defining
+# the types via Add-Type (C#) BEFORE importing the module places them in the .NET
+# AppDomain where they are visible to every session state, including the module's.
+if (-not ('ValidateURIAttribute' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Management.Automation;
+
+public class ValidateURIAttribute : ValidateArgumentsAttribute {
+    protected override void Validate(object arguments, EngineIntrinsics engineIntrinsics) {
+        Uri outUri;
+        if (Uri.TryCreate(arguments != null ? arguments.ToString() : "", UriKind.Absolute, out outUri)) { return; }
+        throw new ValidationMetadataException("Incorrect StartURL please make sure the URL starts with http:// or https://");
+    }
+}
+"@
+}
+
+if (-not ('SeBrowsers' -as [type])) {
+    Add-Type -TypeDefinition @"
+public enum SeBrowsers {
+    Chrome,
+    Edge,
+    Firefox,
+    InternetExplorer,
+    MSEdge
+}
+"@
+}
+
+if (-not ('SeWindowState' -as [type])) {
+    Add-Type -TypeDefinition @"
+public enum SeWindowState {
+    Headless,
+    Default,
+    Minimized,
+    Maximized,
+    Fullscreen
+}
+"@
+}
+
+if (-not ('SeBySelector' -as [type])) {
+    Add-Type -TypeDefinition @"
+public enum SeBySelector {
+    ClassName,
+    CssSelector,
+    Id,
+    LinkText,
+    PartialLinkText,
+    Name,
+    TagName,
+    XPath
+}
+"@
+}
+
+if (-not ('SeBySelect' -as [type])) {
+    Add-Type -TypeDefinition @"
+public enum SeBySelect {
+    Index,
+    Text,
+    Value
+}
+"@
+}
+
+# Import external modules (after Selenium compat types are in the AppDomain)
 Import-Module powershell-yaml -Scope Local
 Import-Module IntuneWin32App -Scope Local
-Import-Module Selenium -Scope Local -ErrorAction SilentlyContinue
+Import-Module Selenium -Scope Global -ErrorAction SilentlyContinue
 Import-Module TUN.CredentialManager -Scope Local -ErrorAction SilentlyContinue
 
 
@@ -187,22 +255,22 @@ function Set-ScriptVariables {
     $Script:PowerShellInstallScript = $Parameters.powerShellInstallScript
     $Script:PowerShellUninstallScript = $Parameters.powerShellUninstallScript
     
-    # Use parameters or fall back to preferences with null coalescing
-    $Script:ScopeTags = $Parameters.scopeTags ?? $Preferences.defaultScopeTags
-    $Script:Owner = $Parameters.owner ?? $Preferences.defaultOwner
-    $Script:MaximumInstallationTimeInMinutes = $Parameters.maximumInstallationTimeInMinutes ?? $Preferences.defaultMaximumInstallationTimeInMinutes
-    $Script:MinOSVersion = $Parameters.minOSVersion ?? $Preferences.defaultMinOSVersion
-    $Script:InstallExperience = $Parameters.installExperience ?? $Preferences.defaultInstallExperience
-    $Script:RestartBehavior = $Parameters.restartBehavior ?? $Preferences.defaultRestartBehavior
-    $Script:AvailableGroups = $Parameters.availableGroups ?? $Preferences.defaultAvailableGroups
-    $Script:RequiredGroups = $Parameters.requiredGroups ?? $Preferences.defaultRequiredGroups
-    $Script:DefaultDeploymentGroups = $Parameters.defaultDeploymentGroups ?? $Preferences.defaultDeploymentGroups
-    $Script:AllowUserUninstall = $Parameters.allowUserUninstall ?? $Preferences.defaultAllowUserUninstall
-    $Script:Is32BitApp = $Parameters.is32BitApp ?? $Preferences.defaultIs32BitApp
-    $Script:Architecture = $Parameters.architecture ?? $Preferences.defaultArchitecture
-    $Script:DeadlineDateOffset = $Parameters.deadlineDateOffset ?? $Preferences.defaultDeadlineDateOffset
-    $Script:AvailableDateOffset = $Parameters.availableDateOffset ?? $Preferences.defaultAvailableDateOffset
-    $Script:AllowDependentLinkUpdates = $Parameters.allowDependentLinkUpdates ?? $Preferences.defaultAllowDependentLinkUpdates
+    # Use parameters or fall back to preferences
+    $Script:ScopeTags = if ($null -ne $Parameters.scopeTags) { $Parameters.scopeTags } else { $Preferences.defaultScopeTags }
+    $Script:Owner = if ($null -ne $Parameters.owner) { $Parameters.owner } else { $Preferences.defaultOwner }
+    $Script:MaximumInstallationTimeInMinutes = if ($null -ne $Parameters.maximumInstallationTimeInMinutes) { $Parameters.maximumInstallationTimeInMinutes } else { $Preferences.defaultMaximumInstallationTimeInMinutes }
+    $Script:MinOSVersion = if ($null -ne $Parameters.minOSVersion) { $Parameters.minOSVersion } else { $Preferences.defaultMinOSVersion }
+    $Script:InstallExperience = if ($null -ne $Parameters.installExperience) { $Parameters.installExperience } else { $Preferences.defaultInstallExperience }
+    $Script:RestartBehavior = if ($null -ne $Parameters.restartBehavior) { $Parameters.restartBehavior } else { $Preferences.defaultRestartBehavior }
+    $Script:AvailableGroups = if ($null -ne $Parameters.availableGroups) { $Parameters.availableGroups } else { $Preferences.defaultAvailableGroups }
+    $Script:RequiredGroups = if ($null -ne $Parameters.requiredGroups) { $Parameters.requiredGroups } else { $Preferences.defaultRequiredGroups }
+    $Script:DefaultDeploymentGroups = if ($null -ne $Parameters.defaultDeploymentGroups) { $Parameters.defaultDeploymentGroups } else { $Preferences.defaultDeploymentGroups }
+    $Script:AllowUserUninstall = if ($null -ne $Parameters.allowUserUninstall) { $Parameters.allowUserUninstall } else { $Preferences.defaultAllowUserUninstall }
+    $Script:Is32BitApp = if ($null -ne $Parameters.is32BitApp) { $Parameters.is32BitApp } else { $Preferences.defaultIs32BitApp }
+    $Script:Architecture = if ($null -ne $Parameters.architecture) { $Parameters.architecture } else { $Preferences.defaultArchitecture }
+    $Script:DeadlineDateOffset = if ($null -ne $Parameters.deadlineDateOffset) { $Parameters.deadlineDateOffset } else { $Preferences.defaultDeadlineDateOffset }
+    $Script:AvailableDateOffset = if ($null -ne $Parameters.availableDateOffset) { $Parameters.availableDateOffset } else { $Preferences.defaultAvailableDateOffset }
+    $Script:AllowDependentLinkUpdates = if ($null -ne $Parameters.allowDependentLinkUpdates) { $Parameters.allowDependentLinkUpdates } else { $Preferences.defaultAllowDependentLinkUpdates }
     
     # Detection-related variables
     $Script:DetectionType = $Parameters.detectionType
@@ -218,13 +286,13 @@ function Set-ScriptVariables {
     $Script:RegistryDetectionValue = $Parameters.registryDetectionValue
     $Script:RegistryDetectionOperator = $Parameters.registryDetectionOperator
     $Script:DetectionScript = $Parameters.detectionScript
-    $Script:DetectionScriptFileExtension = $Parameters.detectionScriptFileExtension ?? $Preferences.defaultDetectionScriptFileExtension
-    $Script:DetectionScriptRunAs32Bit = $Parameters.detectionScriptRunAs32Bit ?? $Preferences.defaultdetectionScriptRunAs32Bit
-    $Script:DetectionScriptEnforceSignatureCheck = $Parameters.detectionScriptEnforceSignatureCheck ?? $Preferences.defaultdetectionScriptEnforceSignatureCheck
-    $Script:DependentLinkUpdateEnabled = $Parameters.dependentLinkUpdateEnabled ?? ($Preferences.dependentLinkUpdateEnabled ?? $true)
-    $Script:DependentLinkUpdateRetryCount = $Parameters.dependentLinkUpdateRetryCount ?? ($Preferences.dependentLinkUpdateRetryCount ?? 3)
-    $Script:DependentLinkUpdateRetryDelaySeconds = $Parameters.dependentLinkUpdateRetryDelaySeconds ?? ($Preferences.dependentLinkUpdateRetryDelaySeconds ?? 5)
-    $Script:DependentLinkUpdateTimeoutSeconds = $Parameters.dependentLinkUpdateTimeoutSeconds ?? ($Preferences.dependentLinkUpdateTimeoutSeconds ?? 60)
+    $Script:DetectionScriptFileExtension = if ($null -ne $Parameters.detectionScriptFileExtension) { $Parameters.detectionScriptFileExtension } else { $Preferences.defaultDetectionScriptFileExtension }
+    $Script:DetectionScriptRunAs32Bit = if ($null -ne $Parameters.detectionScriptRunAs32Bit) { $Parameters.detectionScriptRunAs32Bit } else { $Preferences.defaultdetectionScriptRunAs32Bit }
+    $Script:DetectionScriptEnforceSignatureCheck = if ($null -ne $Parameters.detectionScriptEnforceSignatureCheck) { $Parameters.detectionScriptEnforceSignatureCheck } else { $Preferences.defaultdetectionScriptEnforceSignatureCheck }
+    $Script:DependentLinkUpdateEnabled = if ($null -ne $Parameters.dependentLinkUpdateEnabled) { $Parameters.dependentLinkUpdateEnabled } elseif ($null -ne $Preferences.dependentLinkUpdateEnabled) { $Preferences.dependentLinkUpdateEnabled } else { $true }
+    $Script:DependentLinkUpdateRetryCount = if ($null -ne $Parameters.dependentLinkUpdateRetryCount) { $Parameters.dependentLinkUpdateRetryCount } elseif ($null -ne $Preferences.dependentLinkUpdateRetryCount) { $Preferences.dependentLinkUpdateRetryCount } else { 3 }
+    $Script:DependentLinkUpdateRetryDelaySeconds = if ($null -ne $Parameters.dependentLinkUpdateRetryDelaySeconds) { $Parameters.dependentLinkUpdateRetryDelaySeconds } elseif ($null -ne $Preferences.dependentLinkUpdateRetryDelaySeconds) { $Preferences.dependentLinkUpdateRetryDelaySeconds } else { 5 }
+    $Script:DependentLinkUpdateTimeoutSeconds = if ($null -ne $Parameters.dependentLinkUpdateTimeoutSeconds) { $Parameters.dependentLinkUpdateTimeoutSeconds } elseif ($null -ne $Preferences.dependentLinkUpdateTimeoutSeconds) { $Preferences.dependentLinkUpdateTimeoutSeconds } else { 60 }
     $Script:DependentApplicationBlacklist = if ($Parameters.dependentApplicationBlacklist) {
         $Parameters.dependentApplicationBlacklist
     } elseif ($Preferences.dependentApplicationBlacklist) {
@@ -252,7 +320,7 @@ function Set-ScriptVariables {
             Write-Log "Warning: Version lock is set, but numVersionsToKeep is set to $($Parameters.numVersionsToKeep). This will be ignored."
         }
     } else {
-        $Script:NumVersionsToKeep = $Parameters.numVersionsToKeep ?? $Preferences.defaultNumVersionsToKeep
+        $Script:NumVersionsToKeep = if ($null -ne $Parameters.numVersionsToKeep) { $Parameters.numVersionsToKeep } else { $Preferences.defaultNumVersionsToKeep }
     }
 
     # Handle PowerShell Script batch handoff
@@ -663,7 +731,7 @@ foreach ($ApplicationId in $Applications) {
         }
         if (-not $versionValidation.IsValid) {
             $versionErrorMsg = "Version validation failed: $($versionValidation.Errors -join '; ')"
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version ($Script:Version ?? "null") -ErrorMessage $versionErrorMsg -FailureStage "Version Validation"
+            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage $versionErrorMsg -FailureStage "Version Validation"
             Write-Error "[Version Check $ApplicationId] $versionErrorMsg"
             continue
         }
@@ -1010,7 +1078,7 @@ foreach ($ApplicationId in $Applications) {
 if (-not $NoEmail) {
     try {
         # Select email delivery method based on preferences
-        $emailMethod = $Prefs.emailDeliveryMethod ?? "outlook"
+        $emailMethod = if ($null -ne $Prefs.emailDeliveryMethod) { $Prefs.emailDeliveryMethod } else { "outlook" }
         
         switch ($emailMethod.ToLower()) {
             "mailkit" {

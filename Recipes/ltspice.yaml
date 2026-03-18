@@ -3,7 +3,7 @@ urlRedirects: false
 preDownloadScript: |
   $downloadPage = "https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html"
   $driver = Start-SeDriver -Browser "Firefox" -StartURL $downloadPage -Arguments @('--headless')
-  Start-Sleep -Seconds 5 # Wait for page to load
+  Start-Sleep -Seconds 10 # Wait for page to load
   $version = ((Get-SeElement -By xpath "//a[@href='https://ltspice.analog.com/software/LTspice64.msi']/../../span[contains(text(), 'Version')]").Text -split "\ ")[1]
   if ($driver) {
       $driver.close()

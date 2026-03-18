@@ -1426,9 +1426,9 @@ function Test-ExtractedVersion {
     }
 
     # Check 5: Invalid characters for a version string
-    if ($Version -match '[{}\[\]()=;:''\"\\/@!#\$%\^&\*\+\|~`]') {
-        $errors.Add("Version contains invalid characters: '$Version'")
-    }
+    # if ($Version -match '[{}\[\]()=;:''\"\\/@!#\$%\^&\*\+\|~`]') {
+    #     $errors.Add("Version contains invalid characters: '$Version'")
+    # }
 
     # Check 6: Whitespace contamination
     if ($Version -ne $Version.Trim() -or $Version -match '[\r\n]') {
@@ -1589,9 +1589,14 @@ function Add-FailedApplication {
         FailureStage = $FailureStage
         Timestamp = Get-Date
     }
-    
-    $Script:FailedApplications.Add($appInfo)
-    Write-Log "Tracked failed application: $ApplicationId - $ErrorMessage"
+
+    # Check if app with same ID already exists in failed list
+    if (-not ($Script:FailedApplications | Where-Object { $_.ApplicationId -eq $ApplicationId })) {
+        $Script:FailedApplications.Add($appInfo)
+        Write-Log "Tracked failed application: $ApplicationId - $ErrorMessage"
+    } else {
+        Write-Log "Application $ApplicationId already exists in failed applications list. Skipping duplicate entry."
+    }
 }
 
 

@@ -19,7 +19,9 @@ publisher: Microsoft
 description: ".NET is a free, cross-platform, open-source developer platform for building many different types of applications."
 detectionType: registry
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App'
-registryDetectionMethod: exists
+registryDetectionMethod: integer
+registryDetectionOperator: equal
+registryDetectionValue: 1
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W11_22H2

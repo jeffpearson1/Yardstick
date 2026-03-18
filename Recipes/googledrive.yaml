@@ -3,9 +3,7 @@ urlRedirects: false
 preDownloadScript: |
   $VURL = "https://support.google.com/a/answer/7577057"
   $Content = Invoke-WebRequest -Uri $VURL
-  $Content.content -match "<p><em><strong>Windows and macOS:</strong> Version [0-9]{2,3}\.[0-9]{1,4}</em></p>" | Out-Null
-  $VString = $matches[0]
-  $VString -match "[0-9]{2,3}\.[0-9]{1,4}" | Out-Null
+  $Content.content -match "(?<=<em>Version\ )[0-9]{2,3}\.[0-9]{1,4}(?=</em>)" | Out-Null
   $Version = $matches[0]
 postDownloadScript:
   $fileDetectionVersion = (Get-Item $filename).VersionInfo.FileVersion;
