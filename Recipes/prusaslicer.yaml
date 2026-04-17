@@ -10,14 +10,20 @@ preDownloadScript: |
   $URL = $downloader.URL
   $filename = $downloader.filename
   $fileDetectionPath = "C:\Program Files\PrusaSlicer\$Version"
-installScript: |
-  Expand-Archive ".\PrusaSlicer-<version>-win64.zip" -Destination "C:\Program Files\PrusaSlicer"
+powerShellInstallScript: |
+  if (Test-Path "C:\Program Files\PrusaSlicer\<version>") {
+    Remove-Item "C:\Program Files\PrusaSlicer\<version>" -Recurse -Force
+  }
+  Expand-Archive ".\PrusaSlicer-<version>.zip" -Destination "C:\Program Files\PrusaSlicer"
   Move-Item "C:\Program Files\PrusaSlicer\PrusaSlicer-<version>" "C:\Program Files\PrusaSlicer\<version>"
+  if (Test-Path "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk") {
+    Remove-Item "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk" -Force
+  }
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut("C:\ProgramData\Microsoft\Windows\Start Menu\Programs\PrusaSlicer.lnk")
   $shortcut.TargetPath = "C:\Program Files\PrusaSlicer\<version>\prusa-slicer.exe"
   $shortcut.Save()
-uninstallScript: |
+powerShellUninstallScript: |
   if (Test-Path "C:\Program Files\PrusaSlicer\<version>") {
     Remove-Item "C:\Program Files\PrusaSlicer\<version>" -Recurse -Force
   }

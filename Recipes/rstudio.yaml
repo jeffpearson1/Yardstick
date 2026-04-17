@@ -1,11 +1,10 @@
-url: https://posit.co/download/rstudio-desktop/
+url: https://www.rstudio.com/wp-content/downloads.json
 urlRedirects: false
 preDownloadScript: |
-  $Content = Invoke-WebRequest $URL
-  $URL = ($Content.links | Where-Object href -match 'RSTUDIO.+\.EXE').href | Get-Unique
-  $filename = $URL.split("/")[-1]
-  $filename -match("[0-9]{4}\.[0-9]{1,4}\.[0-9]{1,2}-[0-9]{2,4}") | Out-Null
-  $version = $matches[0].replace("-", "+")
+  $json = Invoke-WebRequest $url | ConvertFrom-Json
+  $version = $json.rstudio.open_source.stable.version
+  $url = $json.rstudio.open_source.stable.desktop.installer.windows.url
+  $sha256 = $json.rstudio.open_source.stable.desktop.installer.windows.sha256
   $parts = $($version.split("+")[0]).split(".")
   $fileDetectionVersion = "$($parts[0]).$($parts[1].trimstart('0')).$($parts[2]).0"
 installScript: <filename> /S
