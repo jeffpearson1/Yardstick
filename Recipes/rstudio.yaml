@@ -6,6 +6,7 @@ preDownloadScript: |
   $url = $json.rstudio.open_source.stable.desktop.installer.windows.url
   $sha256 = $json.rstudio.open_source.stable.desktop.installer.windows.sha256
   $parts = $($version.split("+")[0]).split(".")
+  $filename = ($url -split "/")[-1]
   $fileDetectionVersion = "$($parts[0]).$($parts[1].trimstart('0')).$($parts[2]).0"
 installScript: <filename> /S
 uninstallScript: '"%ProgramFiles%\RStudio\Uninstall.exe" /S'

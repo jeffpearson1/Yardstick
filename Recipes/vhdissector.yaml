@@ -1,0 +1,29 @@
+url: https://www.toltech.net/downloads/vh-dissector-pro-6
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $Content = Invoke-WebRequest $URL
+  $URL = ($Content.links | where-object href -like "*.exe")[0].href
+  $filename = $url.split("/")[-1]
+  $version = $url.split("/")[-2]
+  $registryDetectionValue = $version
+installScript: <filename> /install /quiet /norestart
+uninstallScript: <filename> /uninstall /quiet /norestart
+iconFile: vhdissector.png
+id: vhdissector
+displayName: VH Dissector Pro
+publisher: TolTech
+description: Built on real anatomy from the National Library of Medicine's Visible Human Project®, the Touch of Life Technologies VH Dissector platform for medical education provides students with an integrated environment for anatomical education and reference.
+detectionType: script
+detectionScript: |
+  $TargetVersion = '<version>'
+  $ProductVersion = (Get-Item 'C:\Program Files\ToLTech\VH Dissector Pro\VH Dissector Pro.exe' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
+  if ($TargetVersion -eq $ProductVersion) {
+    Write-Output "Detected"
+    exit 0
+  }
+  Write-Output "Not Detected"
+  exit 1
+scopeTags:
+  - scopeTag1
+  - scopeTag2
