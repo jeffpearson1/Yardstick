@@ -91,6 +91,8 @@ param (
 
     [Switch] $NoEmail
 )
+# So we can get redirected URLs
+Add-Type -AssemblyName Microsoft.PowerShell.Commands.Utility
 
 # Ensure non-terminating errors are caught by try/catch blocks
 $ErrorActionPreference = 'Stop'

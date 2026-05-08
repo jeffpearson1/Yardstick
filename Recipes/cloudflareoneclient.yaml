@@ -7,9 +7,9 @@ installScript: msiexec /i <filename> /qn /norestart ORGANIZATION="DEF" ONBOARDIN
 uninstallScript: msiexec /x <productcode> /silent
 fileName: CloudflareWarp.msi
 iconFile: cloudflare.png
-id: warp
-displayName: Cloudflare Warp
+id: cloudflareoneclient
+displayName: Cloudflare One Client
 publisher: Cloudflare, Inc.
-description: Cloudflare Warp is a VPN service that provides secure access to certain internal resources.
+description: Cloudflare One Client is a Zero-trust VPN alternative that provides secure access to internal resources and applications without exposing them to the public internet.
 fileType: msi
 detectionType: msi
