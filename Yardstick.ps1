@@ -6,7 +6,7 @@
     Adds and Updates Win32 applications in Microsoft Intune.
 
 .PARAMETER ApplicationId
-    The ID of the application to update. This parameter is used when updating a single application.
+    The ID (or list of IDs) of the application(s) to update. Accepts a single string or a comma-separated array of strings.
     May only be used with -Force, -NoDelete, and -Repair parameters.
 
 .PARAMETER Group
@@ -50,6 +50,10 @@
     This command updates the application with the ID "ExampleApp", forcing the update and preventing the deletion of old versions.
 
 .EXAMPLE
+    .\Yardstick.ps1 -ApplicationId "App1","App2","App3"
+    This command updates three applications by their IDs.
+
+.EXAMPLE
     .\Yardstick.ps1 -Group "ExampleGroup" -NoInteractive -Force
     This command updates all applications in the group "ExampleGroup", and forces the update.
 
@@ -61,9 +65,9 @@
 using module .\Modules\Custom\AdobeDownloader.psm1
 
 param (
-    [Alias("AppId")]
+    [Alias("AppId", "AppIds")]
     [parameter(ParameterSetName="SingleApp")]
-    [String] $ApplicationId = "None",
+    [String[]] $ApplicationId,
 
     [parameter(ParameterSetName="GroupApps")]
     [String] $Group,
@@ -120,7 +124,7 @@ Set-Location $PSScriptRoot
 Write-Log -Init
 
 # Validate parameters
-if ("None" -eq $ApplicationId -and (($All -eq $false) -and (!$Group))) {
+if ((-not $ApplicationId) -and (($All -eq $false) -and (!$Group))) {
     Write-Log "Please provide parameter -ApplicationId"
     exit 1
 }
@@ -353,11 +357,13 @@ $Global:ClientSecret = $Prefs.ClientSecret
 $Global:ScriptRoot = $PSScriptRoot
 
 # Validate ApplicationId parameter
-if ($ApplicationId -ne "None") {
-    $MatchingApps = Get-ChildItem $Recipes | Where-Object Name -ne 'Disabled' | Get-ChildItem -File | Where-Object Name -match "$ApplicationId\.ya{0,1}ml"
-    if ($null -eq $MatchingApps) {
-        Write-Log "ERROR: Application $ApplicationId not found. (Excluding Disabled Folder)"
-        exit 1
+if ($ApplicationId) {
+    foreach ($AppIdToValidate in $ApplicationId) {
+        $MatchingApps = Get-ChildItem $Recipes | Where-Object Name -ne 'Disabled' | Get-ChildItem -File | Where-Object Name -match "$AppIdToValidate\.ya{0,1}ml"
+        if ($null -eq $MatchingApps) {
+            Write-Log "ERROR: Application $AppIdToValidate not found. (Excluding Disabled Folder)"
+            exit 1
+        }
     }
 }
 
@@ -383,7 +389,7 @@ function Get-ApplicationsToProcess {
     Switch to exclude interactive applications when processing all.
     #>
     param(
-        [string]$ApplicationId,
+        [string[]]$ApplicationId,
         [string]$Group,
         [switch]$All,
         [switch]$NoInteractive
@@ -413,7 +419,9 @@ function Get-ApplicationsToProcess {
             exit 3
         }
     } else {
-        $applications.Add($ApplicationId) | Out-Null
+        foreach ($Id in $ApplicationId) {
+            $applications.Add($Id) | Out-Null
+        }
     }
     
     return $applications
@@ -620,7 +628,7 @@ Initialize-ApplicationTracker
 
 # Build run parameters string for email report
 $RunParametersArray = @()
-if ($ApplicationId -ne "None") { $RunParametersArray += "-ApplicationId $ApplicationId" }
+if ($ApplicationId) { $RunParametersArray += "-ApplicationId $($ApplicationId -join ',')" }
 if ($Group) { $RunParametersArray += "-Group $Group" }
 if ($All) { $RunParametersArray += "-All" }
 if ($NoInteractive) { $RunParametersArray += "-NoInteractive" }
