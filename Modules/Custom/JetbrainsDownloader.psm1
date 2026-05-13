@@ -35,9 +35,9 @@ function Get-JetbrainsAppProductId {
             "CLion" { "CL-RELEASE-licensing-RELEASE" }
             "DataGrip" { "DB-RELEASE-licensing-RELEASE" }
             "GoLand" { "GO-RELEASE-licensing-RELEASE" }
-            "IntelliJ IDEA" { "IC-IU-RELEASE-licensing-RELEASE" }
+            "IntelliJ IDEA" { "IU-RELEASE-licensing-RELEASE" }
             "PhpStorm" { "PS-RELEASE-licensing-RELEASE" }
-            "PyCharm" { "PC-PY-RELEASE-licensing-RELEASE" }
+            "PyCharm" { "PY-RELEASE-licensing-RELEASE" }
             "Rider" { "RD-RELEASE-licensing-RELEASE" }
             "RubyMine" { "RM-RELEASE-licensing-RELEASE" }
             "RustRover" { "RR-RELEASE-licensing-RELEASE" }
@@ -50,9 +50,9 @@ function Get-JetbrainsAppProductId {
             "CLion" { "CL-EAP-licensing-EAP" }
             "DataGrip" { "DB-EAP-licensing-EAP" }
             "GoLand" { "GO-EAP-licensing-EAP" }
-            "IntelliJ IDEA" { "IC-IU-EAP-licensing-EAP" }
+            "IntelliJ IDEA" { "IU-EAP-licensing-EAP" }
             "PhpStorm" { "PS-EAP-licensing-EAP" }
-            "PyCharm" { "PC-EAP-licensing-EAP" }
+            "PyCharm" { "PY-EAP-licensing-EAP" }
             "Rider" { "RD-EAP-licensing-EAP" }
             "RubyMine" { "RM-EAP-licensing-EAP" }
             "RustRover" { "RR-EAP-licensing-EAP" }
