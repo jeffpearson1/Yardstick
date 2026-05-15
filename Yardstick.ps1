@@ -406,13 +406,13 @@ function Get-ApplicationsToProcess {
         
         $ApplicationFullNames = (Get-ChildItem $Recipes -Recurse -File | Where-Object $folderFilter | Where-Object Name -match ".*\.ya{0,1}ml").Name
         foreach ($Application in $ApplicationFullNames) {
-            $applications.Add($($Application -split "\.ya{0,1}ml")[0]) | Out-Null
+            $applications.Add([String]($Application -split "\.ya{0,1}ml")[0]) | Out-Null
         }
     } elseif ($Group) {
         try {
             $groupFile = Get-Content $PSScriptRoot\RecipeGroups.yaml | ConvertFrom-Yaml
             $groupFile[$Group] | ForEach-Object {
-                $applications.Add($_) | Out-Null
+                $applications.Add([String]$_) | Out-Null
             }
         } catch {
             Write-Log "ERROR: There was an issue importing the application group! Exiting."
@@ -420,10 +420,9 @@ function Get-ApplicationsToProcess {
         }
     } else {
         foreach ($Id in $ApplicationId) {
-            $applications.Add($Id) | Out-Null
+            $applications.Add([String]$Id) | Out-Null
         }
     }
-    
     return $applications
 }
 
@@ -638,12 +637,12 @@ if ($Repair) { $RunParametersArray += "-Repair" }
 $RunParameters = $RunParametersArray -join " "
 
 # Main processing loop
-foreach ($ApplicationId in $Applications) {
-    Write-Log "Starting update for $ApplicationId..."
+foreach ($AppId_Processing in $Applications) {
+    Write-Log "Starting update for $AppId_Processing..."
     Set-Location $PSScriptRoot
     
     # Initialize variables for tracking
-    $CurrentDisplayName = $ApplicationId
+    $CurrentDisplayName = $AppId_Processing
     
     try {
         # Refresh token if necessary
@@ -655,11 +654,11 @@ foreach ($ApplicationId in $Applications) {
 
         # Open the YAML file and collect all necessary attributes
         try {
-            $AppName = (Get-ChildItem $Recipes -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "^$ApplicationId\.ya{0,1}ml")[0].FullName
+            $AppName = (Get-ChildItem $Recipes -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "^$AppId_Processing\.ya{0,1}ml")[0].FullName
             $Parameters = Get-Content "$AppName" | ConvertFrom-Yaml
         } catch {
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $ApplicationId -Version "Unknown" -ErrorMessage "Unable to open parameters file for $ApplicationId" -FailureStage "Configuration"
-            Write-Error "Unable to open parameters file for $ApplicationId"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Unable to open parameters file for $AppId_Processing" -FailureStage "Configuration"
+            Write-Error "Unable to open parameters file for $AppId_Processing"
             continue
         }
 
@@ -668,19 +667,19 @@ foreach ($ApplicationId in $Applications) {
             try {
                 $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $Recipes
             } catch {
-                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $ApplicationId -Version "Unknown" -ErrorMessage "Failed to resolve base recipe: $_" -FailureStage "Configuration"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Failed to resolve base recipe: $_" -FailureStage "Configuration"
                 Write-Error "Failed to resolve base recipe for ${ApplicationId}: $_"
                 continue
             }
         }
 
         # Validate recipe schema before processing
-        $validation = Test-RecipeSchema -Recipe $Parameters -RecipeId $ApplicationId
-        foreach ($w in $validation.Warnings) { Write-Log "WARNING: [Recipe $ApplicationId] $w" }
+        $validation = Test-RecipeSchema -Recipe $Parameters -RecipeId $AppId_Processing
+        foreach ($w in $validation.Warnings) { Write-Log "WARNING: [Recipe $AppId_Processing] $w" }
         if (-not $validation.IsValid) {
             $errorMsg = "Recipe validation failed: $($validation.Errors -join '; ')"
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $ApplicationId -Version "Unknown" -ErrorMessage $errorMsg -FailureStage "Recipe Validation"
-            Write-Error "[Recipe $ApplicationId] $errorMsg"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage $errorMsg -FailureStage "Recipe Validation"
+            Write-Error "[Recipe $AppId_Processing] $errorMsg"
             continue
         }
 
@@ -723,7 +722,7 @@ foreach ($ApplicationId in $Applications) {
                 Invoke-Command -ScriptBlock $Script:PreDownloadScript -NoNewScope
                 Write-Log "Pre-download script ran successfully."
             } catch {
-                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running pre-download PowerShell script: $_" -FailureStage "Pre-Download Script"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running pre-download PowerShell script: $_" -FailureStage "Pre-Download Script"
                 Write-Error "Error while running pre-download PowerShell script"
                 continue
             }
@@ -735,14 +734,14 @@ foreach ($ApplicationId in $Applications) {
         $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
         $existingVersionForCheck = if ($ExistingVersions -and $ExistingVersions.Count -gt 0) { $ExistingVersions.displayVersion[0] } else { $null }
 
-        $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $ApplicationId -ExistingVersion $existingVersionForCheck
+        $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $AppId_Processing -ExistingVersion $existingVersionForCheck
         foreach ($w in $versionValidation.Warnings) {
-            Write-Log "WARNING: [Version Check $ApplicationId] $w"
+            Write-Log "WARNING: [Version Check $AppId_Processing] $w"
         }
         if (-not $versionValidation.IsValid) {
             $versionErrorMsg = "Version validation failed: $($versionValidation.Errors -join '; ')"
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage $versionErrorMsg -FailureStage "Version Validation"
-            Write-Error "[Version Check $ApplicationId] $versionErrorMsg"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage $versionErrorMsg -FailureStage "Version Validation"
+            Write-Error "[Version Check $AppId_Processing] $versionErrorMsg"
             continue
         }
 
@@ -808,7 +807,7 @@ foreach ($ApplicationId in $Applications) {
             Write-Log "URL: $($Script:Url)"
         }
         if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript))) {
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "URL is empty - cannot continue" -FailureStage "Download"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "URL is empty - cannot continue" -FailureStage "Download"
             Write-Error "URL is empty - cannot continue."
             continue
         }
@@ -819,7 +818,7 @@ foreach ($ApplicationId in $Applications) {
                 Invoke-Command -ScriptBlock $Script:DownloadScript -NoNewScope
                 Write-Log "Download script ran successfully."
             } catch {
-                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running download PowerShell script: $_" -FailureStage "Download Script"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running download PowerShell script: $_" -FailureStage "Download Script"
                 Write-Error "Error while running download PowerShell script: $_"
                 Write-Error "Script Contents: $Script:DownloadScript"
                 continue
@@ -830,7 +829,7 @@ foreach ($ApplicationId in $Applications) {
                 Start-BitsTransfer -Source "$($Script:Url)" -Destination "$BuildSpace\$Script:Id\$Script:Version\$Script:FileName"
                 Write-Log "File downloaded successfully using BITS transfer."
             } catch {
-                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error downloading file: $_" -FailureStage "Download"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error downloading file: $_" -FailureStage "Download"
                 Write-Error "Error downloading file: $_"
                 continue
             }
@@ -845,7 +844,7 @@ foreach ($ApplicationId in $Applications) {
                 Invoke-Command -ScriptBlock $Script:PostDownloadScript -NoNewScope
                 Write-Log "Post download script ran successfully."
             } catch {
-                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post download PowerShell script: $_" -FailureStage "Post-Download Script"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post download PowerShell script: $_" -FailureStage "Post-Download Script"
                 Write-Error "Error while running post download PowerShell script: $_"
                 continue
             }
@@ -857,7 +856,7 @@ foreach ($ApplicationId in $Applications) {
             $ProductCode = Get-MSIProductCode $BuildSpace\$Script:Id\$Script:Version\$Script:FileName | Where-Object { $_ -match "^\{[0-9A-Fa-f\-]{36}\}$" }
             Write-Log "Product Code: $ProductCode"
             if (-not $ProductCode) {
-                Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not determine MSI Product Code from $Script:FileName" -FailureStage "MSI Product Code Retrieval"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not determine MSI Product Code from $Script:FileName" -FailureStage "MSI Product Code Retrieval"
                 Write-Error "Could not determine MSI Product Code from $Script:FileName"
                 continue
             }
@@ -871,7 +870,7 @@ foreach ($ApplicationId in $Applications) {
             $Script:UninstallScript -match "<filename>|<productcode>|<version>" -or
             $Script:PowerShellUninstallScript -match "<filename>|<productcode>|<version>" -or
             $Script:DetectionScript -match "<filename>|<productcode>|<version>") {
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in scripts." -FailureStage "Placeholder Replacement"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in scripts." -FailureStage "Placeholder Replacement"
             Write-Error "One or more placeholder strings were not replaced in scripts."
             continue
         }
@@ -893,7 +892,7 @@ foreach ($ApplicationId in $Applications) {
         # Upload .intunewin file to Intune
         # Detection Types
         if (!(Test-Path "$($Icons)\$($Script:IconFile)")) {
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Icon file $($Script:IconFile) not found in Icons folder." -FailureStage "Icon Retrieval"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Icon file $($Script:IconFile) not found in Icons folder." -FailureStage "Icon Retrieval"
             Write-Error "Icon file $($Script:IconFile) not found in Icons folder."
             continue
         }
@@ -927,7 +926,7 @@ foreach ($ApplicationId in $Applications) {
                 }
             } while ($LiveWin32App.publishingState -ne "published")   
         } catch {
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
             Write-Error "Failed to upload application to Intune: $_"
             continue
         }
@@ -1059,14 +1058,14 @@ foreach ($ApplicationId in $Applications) {
             
             # If we get here, the application was processed successfully
             $ActionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
-            Add-SuccessfulApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus
+            Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus
             Write-Log "Updates complete for $Script:DisplayName"
         }
 
     } catch {
         # Catch any unexpected errors during processing
-        Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Unexpected error during processing: $_" -FailureStage "General Processing"
-        Write-Log "ERROR: Unexpected error processing $ApplicationId : $_"
+        Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Unexpected error during processing: $_" -FailureStage "General Processing"
+        Write-Log "ERROR: Unexpected error processing $AppId_Processing : $_"
         if (-not((Get-Location).Path -eq $PSScriptRoot)) {
             Set-Location $PSScriptRoot
         }
@@ -1078,7 +1077,7 @@ foreach ($ApplicationId in $Applications) {
             Invoke-Command -ScriptBlock $Script:PostRunScript -NoNewScope
             Write-Log "Post run script ran successfully."
         } catch {
-            Add-FailedApplication -ApplicationId $ApplicationId -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post run PowerShell script: $_" -FailureStage "Post-Run Script"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post run PowerShell script: $_" -FailureStage "Post-Run Script"
             Write-Error "Error while running post run PowerShell script: $_"
         }
     }
