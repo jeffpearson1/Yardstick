@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Branding/yardstick_logo_transparent.png" alt="Yardstick logo" width="300">
+</p>
+
 # Yardstick
 
 A simple, robust, easy-to-use and configure application autopackager for Microsoft Intune. 

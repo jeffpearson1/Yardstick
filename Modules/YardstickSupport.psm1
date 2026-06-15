@@ -350,12 +350,33 @@ function Connect-AutoMSIntuneGraph {
     This function manages the connection to Microsoft Intune Graph API, automatically
     refreshing tokens when they expire or are close to expiring. It uses global
     variables for tenant configuration.
+
+    .PARAMETER Force
+    Switch to force token refresh regardless of current token state.
     #>
+    [CmdletBinding()]
+    param(
+        [switch]$Force
+    )
     
     if (-not $Global:TenantID -or -not $Global:ClientID -or -not $Global:ClientSecret) {
         throw "Required global variables not set: TENANT_ID, CLIENT_ID, CLIENT_SECRET"
     }
     
+    # If Force is specified, bypass all checks and refresh immediately
+    if ($Force) {
+        Write-Log "Force flag specified - Refreshing token..."
+        try {
+            Clear-MsalTokenCache
+            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
+            Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
+        } catch {
+            Write-Error "Failed to refresh token: $_"
+            throw
+        }
+        return
+    }
+
     # Check if the current token is invalid
     if (-not $Global:Token.ExpiresOn) {
         Write-Log "Getting an Intune Graph Client API token..."
@@ -1465,6 +1486,43 @@ function Test-ExtractedVersion {
 #################################################
 
 
+function Format-CodeBlockHtml {
+    <#
+    .SYNOPSIS
+    Renders a string as a scrollable, theme-aware HTML code block for the email report.
+
+    .DESCRIPTION
+    Produces a table-wrapped code block that:
+      - HTML-encodes the supplied text safely.
+      - Defaults to a light theme using inline styles + a bgcolor attribute, so the
+        block stays legible in Outlook desktop (which ignores most CSS backgrounds).
+      - Pairs with a prefers-color-scheme media query in the email's <style> block
+        to switch to a dark theme on clients that report dark mode.
+      - Uses a <pre> for whitespace preservation while allowing long tokens to wrap,
+        so URLs and JSON payloads do not stretch the report table.
+
+    .PARAMETER Text
+    The raw error/diagnostic text to render. May contain newlines and HTML-special characters.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+
+    $encoded = [System.Net.WebUtility]::HtmlEncode($Text)
+    # Note: we intentionally do NOT set bgcolor attributes here. The bgcolor
+    # attribute is protected from Outlook's dark-mode auto-inversion, but the
+    # color on text is not — that combination produces dark-on-dark in Outlook
+    # dark mode. Using inline CSS for the background lets Outlook either invert
+    # both or leave both, keeping the contrast intact in either mode.
+    return @"
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" class="code-box" style="background-color:#f5f5f5; border:1px solid #cccccc; border-radius:3px; margin:4px 0; width:100%; max-width:100%; border-collapse:separate; table-layout:fixed;"><tr><td class="code-box-cell" style="background-color:#f5f5f5; padding:8px 10px;"><div class="code-box-scroll" style="max-height:200px; max-width:100%; overflow-x:auto; overflow-y:auto;"><pre class="code-box-pre" style="display:block; margin:0; padding:0; white-space:pre; font-family:Consolas,'Courier New',monospace; font-size:12px; color:#1a1a1a; background:transparent;">$encoded</pre></div></td></tr></table>
+"@
+}
+
+
+
 function Initialize-ApplicationTracker {
     <#
     .SYNOPSIS
@@ -1625,7 +1683,6 @@ function Test-OutlookAvailability {
 }
 
 
-
 function Send-YardstickEmailReport {
     <#
     .SYNOPSIS
@@ -1644,8 +1701,15 @@ function Send-YardstickEmailReport {
     param(
         [Parameter(Mandatory=$true)]
         [hashtable]$Preferences,
-        
-        [string]$RunParameters = ""
+
+        [string]$RunParameters = "",
+
+        # When set, the email is opened in Outlook for visual inspection instead of being sent.
+        [switch]$Preview,
+
+        # Optional path. If provided, the rendered HTML body is also written to this file
+        # so it can be opened in a browser (useful when validating formatting changes).
+        [string]$HtmlOutputPath
     )
     
     # Check if email notifications are enabled
@@ -1692,13 +1756,41 @@ function Send-YardstickEmailReport {
             $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
         }
         
+        # Load branding logo. Use a cid: reference for the email itself (Outlook
+        # desktop does not render base64 data URIs reliably) and a base64 data URI
+        # for the HtmlOutputPath so the standalone file stays self-contained.
+        $logoHtml = ""
+        $logoHtmlForBrowser = ""
+        $logoCid = "yardstick-logo"
+        $logoPath = $null
+        try {
+            $candidatePath = Join-Path $PSScriptRoot "..\Branding\yardstick_logo_transparent.png"
+            if (Test-Path $candidatePath) {
+                $logoPath = (Resolve-Path $candidatePath).Path
+                $logoBytes = [System.IO.File]::ReadAllBytes($logoPath)
+                $logoBase64 = [System.Convert]::ToBase64String($logoBytes)
+                $logoHtml = "<img src=`"cid:$logoCid`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
+                $logoHtmlForBrowser = "<img src=`"data:image/png;base64,$logoBase64`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
+            } else {
+                Write-Log "WARNING: Branding logo not found at $candidatePath"
+            }
+        } catch {
+            Write-Log "WARNING: Failed to embed branding logo: $($_.Exception.Message)"
+        }
+
         # Build email body
         $emailBody = @"
 <html>
 <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; }
-        .header { background-color: #0078d4; color: white; padding: 15px; border-radius: 5px 5px 0 0; }
+        body { font-family: Segoe UI, Arial, sans-serif; margin: 0; padding: 0; background-color: #e9ecef; }
+        html { background-color: #e9ecef; }
+        .header { background-color: #46C4DD; color: white; padding: 15px; border-radius: 5px 5px 0 0; }
+        .header .logo { width: 180px; height: auto; float: left; margin-right: 15px; display: block; }
+        .header-clear { clear: both; }
+        .header h2 { margin: 0 0 5px 0; }
+        .header p { margin: 2px 0; }
         .content { background-color: #f8f9fa; padding: 20px; border: 1px solid #dee2e6; }
         .summary { background-color: #e7f3ff; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #0078d4; }
         .success { background-color: #d4edda; border-left: 4px solid #28a745; }
@@ -1706,69 +1798,254 @@ function Send-YardstickEmailReport {
         .app-list { margin: 10px 0; }
         .app-item { margin: 8px 0; padding: 8px; background-color: white; border-radius: 3px; }
         .timestamp { color: #6c757d; font-size: 0.9em; }
+        .table-wrapper { width: 100%; max-width: 100%; overflow-x: auto; margin: 10px 0; }
         .error-message { color: #dc3545; font-family: monospace; margin-top: 5px; }
-        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; table-layout: fixed; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; vertical-align: top; overflow-wrap: anywhere; word-wrap: break-word; word-break: break-word; }
         th { background-color: #f2f2f2; }
+
+        /* Reset the global td styling for code-box inner cell so it doesn't get
+           an extra border or padding from the report table rules above. */
+        .code-box { border-collapse: separate !important; }
+        .code-box .code-box-cell { border-bottom: none !important; }
+
+        /* Theme-aware code box: light by default (legible everywhere, including
+           Outlook desktop which will auto-invert both bg and text together in
+           its dark mode). Modern clients honoring prefers-color-scheme, and
+           Outlook.com / Outlook iOS via [data-ogsc] / [data-ogsb], get an
+           explicit dark theme. */
+        @media (prefers-color-scheme: dark) {
+            .code-box, .code-box .code-box-cell {
+                background-color: #1e1e1e !important;
+                border-color: #444 !important;
+            }
+            .code-box-pre { color: #f8f8f2 !important; }
+        }
+        [data-ogsc] .code-box,
+        [data-ogsc] .code-box .code-box-cell,
+        [data-ogsb] .code-box,
+        [data-ogsb] .code-box .code-box-cell {
+            background-color: #1e1e1e !important;
+            border-color: #444 !important;
+        }
+        [data-ogsc] .code-box-pre,
+        [data-ogsb] .code-box-pre { color: #f8f8f2 !important; }
+
+        @media only screen and (max-width: 768px) {
+            .header { table-layout: fixed !important; max-width: 100% !important; }
+            .code-box-scroll {
+                overflow-x: hidden !important;
+            }
+            .code-box-pre {
+                white-space: pre-wrap !important;
+                overflow-wrap: anywhere !important;
+                word-wrap: break-word !important;
+                word-break: break-word !important;
+            }
+            .header-logo {
+                width: 100px !important;
+                height: 100px !important;
+                margin: 0 auto !important;
+            }
+            .header-logo-cell,
+            .header-text-cell {
+                display: block !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                box-sizing: border-box !important;
+                text-align: center !important;
+                padding: 10px 15px !important;
+            }
+            .report-table { display: block !important; }
+            .report-table thead,
+            .report-table .report-header-row { display: none !important; }
+            .report-table tbody,
+            .report-table tr,
+            .report-table td {
+                display: block !important;
+                width: 100% !important;
+                box-sizing: border-box !important;
+            }
+            .report-table tr {
+                margin: 0 0 12px 0 !important;
+                border: 1px solid rgba(0,0,0,0.12) !important;
+                border-radius: 4px !important;
+                background-color: #ffffff !important;
+                color: #1a1a1a !important;
+                padding: 4px 0 !important;
+            }
+            .report-table td {
+                border: none !important;
+                padding: 6px 12px !important;
+                text-align: left !important;
+                color: #1a1a1a !important;
+            }
+            .report-table td[data-label]:before {
+                content: attr(data-label) ": ";
+                font-weight: bold;
+                color: #555 !important;
+                display: inline-block;
+                margin-right: 4px;
+            }
+            .report-table tr.dependents-row {
+                margin-top: -10px !important;
+                background-color: #f8f9fa !important;
+                color: #1a1a1a !important;
+                border-top: none !important;
+                border-radius: 0 0 4px 4px !important;
+            }
+        }
+
+        @media only screen and (max-width: 1280px) and (prefers-color-scheme: dark) {
+            .report-table tr,
+            .report-table tr.dependents-row {
+                background-color: #2a2a2a !important;
+                color: #f0f0f0 !important;
+                border-color: #444 !important;
+            }
+            .report-table td { color: #f0f0f0 !important; }
+            .report-table td[data-label]:before { color: #b0b0b0 !important; }
+        }
+        [data-ogsc] .report-table tr,
+        [data-ogsb] .report-table tr,
+        [data-ogsc] .report-table tr.dependents-row,
+        [data-ogsb] .report-table tr.dependents-row {
+            background-color: #2a2a2a !important;
+            color: #f0f0f0 !important;
+            border-color: #444 !important;
+        }
+        [data-ogsc] .report-table td,
+        [data-ogsb] .report-table td { color: #f0f0f0 !important; }
+        [data-ogsc] .report-table td[data-label]:before,
+        [data-ogsb] .report-table td[data-label]:before { color: #b0b0b0 !important; }
+
+        /* Section containers: keep dark text on the light pastel backgrounds in
+           light mode, and explicitly flip both background + text for dark mode
+           so neither half-applies. */
+        @media (prefers-color-scheme: dark) {
+            .section-summary { background-color: #1e2a33 !important; color: #f0f0f0 !important; }
+            .section-success { background-color: #1e2e1f !important; color: #f0f0f0 !important; }
+            .section-failure { background-color: #2e1e20 !important; color: #f0f0f0 !important; }
+            .section-summary h3, .section-summary p, .section-summary strong,
+            .section-success h3, .section-success p, .section-success strong,
+            .section-failure h3, .section-failure p, .section-failure strong {
+                color: #f0f0f0 !important;
+            }
+        }
+        [data-ogsc] .section-summary,
+        [data-ogsb] .section-summary { background-color: #1e2a33 !important; color: #f0f0f0 !important; }
+        [data-ogsc] .section-success,
+        [data-ogsb] .section-success { background-color: #1e2e1f !important; color: #f0f0f0 !important; }
+        [data-ogsc] .section-failure,
+        [data-ogsb] .section-failure { background-color: #2e1e20 !important; color: #f0f0f0 !important; }
+        [data-ogsc] .section-summary h3, [data-ogsb] .section-summary h3,
+        [data-ogsc] .section-summary p,  [data-ogsb] .section-summary p,
+        [data-ogsc] .section-summary strong, [data-ogsb] .section-summary strong,
+        [data-ogsc] .section-success h3, [data-ogsb] .section-success h3,
+        [data-ogsc] .section-failure h3, [data-ogsb] .section-failure h3 {
+            color: #f0f0f0 !important;
+        }
     </style>
 </head>
-<body>
-    <div class="header">
-        <h2>Yardstick Application Update Report</h2>
-        <p>Generated by: $($Preferences.emailSenderName)</p>
-        <p>Run Time: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss")</p>
-$(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
-    </div>
-    
+<body bgcolor="#e9ecef" style="background-color:#e9ecef;">
+    <table class="header" cellpadding="0" cellspacing="0" border="0" style="width:100%; background-color:#0078d4; color:white; border-radius:5px; border-collapse:collapse;">
+        <tr>
+            <td class="header-logo-cell" style="width:195px; padding:15px 15px 15px 15px; vertical-align:middle; border:0;">$logoHtml</td>
+            <td class="header-text-cell" style="padding:15px 15px 15px 0; vertical-align:middle; border:0;">
+                <p style="margin:0 0 6px 0; padding:0; font-size:18pt; font-weight:bold; line-height:1.1; color:white;">Application Update Report</p>
+                <p style="margin:0; padding:0; line-height:1.2; color:white;">Run Time: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss tt")</p>
+$(if ($RunParameters) { @"
+                <p style="margin:6px 0 4px 0; padding:0; line-height:1.4; color:white;">Parameters:</p>
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; margin:0;">
+                    <tr>
+                        <td style="width:100%; padding:0;">
+                            <div style="max-width:100%; overflow-x:auto; overflow-y:hidden; background-color:#f5f5f5; border:1px solid #cccccc; border-radius:3px;">
+                                <code style="display:inline-block; white-space:nowrap; padding:4px 8px; background:transparent; color:#1a1a1a; font-family:Consolas,'Courier New',monospace; font-size:11pt;">$([System.Net.WebUtility]::HtmlEncode($RunParameters))</code>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+"@ })
+            </td>
+        </tr>
+    </table>
+
     <div class="content">
-        <div class="summary">
-            <h3>Summary</h3>
-            <p><strong>Successful Applications:</strong> $($Script:SuccessfulApplications.Count)</p>
-            <p><strong>Failed Applications:</strong> $($Script:FailedApplications.Count)</p>
-            <p><strong>Total Processed:</strong> $($Script:SuccessfulApplications.Count + $Script:FailedApplications.Count)</p>
-        </div>
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#e7f3ff" style="width:100%; background-color:#e7f3ff; border-collapse:separate; border-radius:5px; margin:10px 0;">
+            <tr>
+                <td class="section-summary" bgcolor="#e7f3ff" style="background-color:#e7f3ff; color:#1a1a1a; padding:15px; border-left:4px solid #0078d4; border-radius:5px;">
+                    <h3 style="margin:0 0 8px 0; padding:0; line-height:1.2; color:#1a1a1a;">Summary</h3>
+                    <p style="margin:0; padding:0; line-height:1.3; color:#1a1a1a;"><strong>Successful Applications:</strong> $($Script:SuccessfulApplications.Count)</p>
+                    <p style="margin:0; padding:0; line-height:1.3; color:#1a1a1a;"><strong>Failed Applications:</strong> $($Script:FailedApplications.Count)</p>
+                    <p style="margin:0; padding:0; line-height:1.3; color:#1a1a1a;"><strong>Total Processed:</strong> $($Script:SuccessfulApplications.Count + $Script:FailedApplications.Count)</p>
+                </td>
+            </tr>
+        </table>
 "@
 
         if ($Script:SuccessfulApplications.Count -gt 0) {
             $emailBody += @"
-        
-        <div class="summary success">
-            <h3>Successful Applications</h3>
-            <table>
-                <tr>
-                    <th>Application</th>
-                    <th>Version</th>
-                    <th>Action</th>
-                    <th>Time</th>
-                </tr>
+
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#d4edda" style="width:100%; background-color:#d4edda; border-collapse:separate; border-radius:5px; margin:10px 0;">
+            <tr>
+                <td class="section-success" bgcolor="#d4edda" style="background-color:#d4edda; color:#1a1a1a; padding:15px; border-left:4px solid #28a745; border-radius:5px;">
+                    <h3 style="margin:0 0 8px 0; padding:0; line-height:1.2; color:#1a1a1a;">Successful Applications</h3>
+                    <table class="report-table">
+                        <tr class="report-header-row">
+                            <th>Application</th>
+                            <th>Version</th>
+                            <th>Action</th>
+                            <th>Time</th>
+                        </tr>
 "@
             foreach ($app in $Script:SuccessfulApplications) {
                 $emailBody += @"
                 <tr>
-                    <td><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
-                    <td>$($app.Version)</td>
-                    <td>$($app.Action)</td>
-                    <td class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
+                    <td data-label="Application"><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
+                    <td data-label="Version">$($app.Version)</td>
+                    <td data-label="Action">$($app.Action)</td>
+                    <td data-label="Time" class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
                 </tr>
 "@
                 # Add dependency information if present
                 if ($app.Dependents -and $app.Dependents.Count -gt 0) {
                     $emailBody += @"
-                <tr>
-                    <td colspan="4" style="background-color: #f8f9fa; padding-left: 30px;">
-                        <strong>Dependent Applications:</strong>
+                <tr class="dependents-row">
+                    <td colspan="4" style="background-color: #f8f9fa; color:#1a1a1a; padding-left: 30px;">
+                        <strong style="color:#1a1a1a;">Dependent Applications:</strong>
                         <ul style="margin: 5px 0;">
 "@
                     foreach ($dep in $app.Dependents.GetEnumerator()) {
-                        $statusColor = switch -Regex ($dep.Value) {
+                        $depValue = [string]$dep.Value
+                        $depName  = [string]$dep.Key
+
+                        $statusText  = $depValue
+                        $errorDetail = $null
+                        if ($depValue -match '^Failed\s*\((.+)\)\s*$') {
+                            $statusText  = 'Failed'
+                            $errorDetail = $matches[1]
+                        }
+
+                        $statusColor = switch -Regex ($statusText) {
                             "^Added$|^Updated$" { "#28a745" }
                             "^Not Updated|^Skipped" { "#ffc107" }
                             "^Failed" { "#dc3545" }
                             default { "#6c757d" }
                         }
-                        $emailBody += @"
-                            <li><span style="color: $statusColor; font-weight: bold;">$($dep.Value)</span> - $($dep.Key)</li>
+
+                        $encodedName   = [System.Net.WebUtility]::HtmlEncode($depName)
+                        $encodedStatus = [System.Net.WebUtility]::HtmlEncode($statusText)
+
+                        if ($errorDetail) {
+                            $errorBox = Format-CodeBlockHtml -Text $errorDetail
+                            $emailBody += @"
+                            <li style="margin-bottom: 10px;"><span style="color: $statusColor; font-weight: bold;">$encodedStatus</span> - $encodedName$errorBox</li>
 "@
+                        } else {
+                            $emailBody += @"
+                            <li><span style="color: $statusColor; font-weight: bold;">$encodedStatus</span> - $encodedName</li>
+"@
+                        }
                     }
                     $emailBody += @"
                         </ul>
@@ -1778,40 +2055,47 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
                 }
             }
             $emailBody += @"
-            </table>
-        </div>
+                    </table>
+                </td>
+            </tr>
+        </table>
 "@
         }
-
-        # Add failed applications section
         if ($Script:FailedApplications.Count -gt 0) {
             $emailBody += @"
-        
-        <div class="summary failure">
-            <h3>Failed Applications</h3>
-            <table>
-                <tr>
-                    <th>Application</th>
-                    <th>Version</th>
-                    <th>Failure Stage</th>
-                    <th>Error</th>
-                    <th>Time</th>
-                </tr>
+
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#f8d7da" style="width:100%; background-color:#f8d7da; border-collapse:separate; border-radius:5px; margin:10px 0;">
+            <tr>
+                <td class="section-failure" bgcolor="#f8d7da" style="background-color:#f8d7da; color:#1a1a1a; padding:15px; border-left:4px solid #dc3545; border-radius:5px;">
+                    <h3 style="margin:0 0 8px 0; padding:0; line-height:1.2; color:#1a1a1a;">Failed Applications</h3>
+                    <div class="table-wrapper">
+                    <table class="report-table">
+                        <tr class="report-header-row">
+                            <th>Application</th>
+                            <th>Version</th>
+                            <th>Failure Stage</th>
+                            <th>Error</th>
+                            <th>Time</th>
+                        </tr>
 "@
             foreach ($app in $Script:FailedApplications) {
+                $errorCodeBox = Format-CodeBlockHtml -Text ([string]$app.ErrorMessage)
                 $emailBody += @"
                 <tr>
-                    <td><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
-                    <td>$($app.Version)</td>
-                    <td>$($app.FailureStage)</td>
-                    <td class="error-message">$($app.ErrorMessage)</td>
-                    <td class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
+                    <td data-label="Application"><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
+                    <td data-label="Version">$($app.Version)</td>
+                    <td data-label="Failure Stage">$($app.FailureStage)</td>
+                    <td data-label="Error">$errorCodeBox</td>
+                    <td data-label="Time" class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
                 </tr>
 "@
             }
             $emailBody += @"
-            </table>
-        </div>
+                    </table>
+                    </div>
+                </td>
+            </tr>
+        </table>
 "@
         }
 
@@ -1830,9 +2114,44 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
 </html>
 "@
 
-        # Set email body and send
+        # Set email body and send (or open for preview)
         $mail.HTMLBody = $emailBody
-        $mail.Send()
+
+        # Attach the logo as an inline image with a Content-ID matching the cid:
+        # reference in the HTML body. PR_ATTACH_FLAGS = 4 (ATT_MHTML_REF) hides
+        # it from the visible attachment list so it only renders inline.
+        if ($logoPath) {
+            try {
+                $attachment = $mail.Attachments.Add($logoPath)
+                $pa = $attachment.PropertyAccessor
+                $pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", $logoCid)
+                $pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x37140003", 4)
+            } catch {
+                Write-Log "WARNING: Failed to attach logo with CID: $($_.Exception.Message)"
+            }
+        }
+
+        if ($HtmlOutputPath) {
+            try {
+                $htmlForFile = $emailBody
+                if ($logoHtmlForBrowser -and $logoHtml) {
+                    $htmlForFile = $htmlForFile.Replace($logoHtml, $logoHtmlForBrowser)
+                }
+                Set-Content -Path $HtmlOutputPath -Value $htmlForFile -Encoding UTF8
+                Write-Log "Rendered email HTML written to $HtmlOutputPath"
+            } catch {
+                Write-Log "WARNING: Failed to write rendered HTML to $HtmlOutputPath`: $_"
+            }
+        }
+
+        if ($Preview) {
+            $mail.Display()
+            Write-Log "Email opened in Outlook for preview (not sent)."
+        } else {
+            $mail.Send()
+            Write-Log "Email report sent successfully to the following email addresses:"
+            Write-Log ($Preferences.emailRecipient -join ", ")
+        }
         
         Write-Log "Email report sent successfully to the following email addresses:"
         Write-Log ($Preferences.emailRecipient -join ", ")
@@ -1851,6 +2170,7 @@ $(if ($RunParameters) { "        <p>Parameters: $RunParameters</p>" })
         } catch { }
     }
 }
+
 
 function Get-Secrets {
     <#
