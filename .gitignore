@@ -6,6 +6,7 @@
 /Scripts/*
 /Temp/*
 /Tools/*
+/Support/*
 
 # Keep any empty directories
 !/Apps/.gitkeep
@@ -25,6 +26,7 @@
 # Exclude development files
 /Yardstick_backup.ps1
 /Recipes/Disabled/*
+/Modules/YardstickSupportDev.psm1
 
 # Exclude miscellaneous editor files
 /.vscode
