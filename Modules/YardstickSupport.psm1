@@ -200,7 +200,7 @@ function Get-RedirectedUrl {
         return $RedirectedURL
     } catch {
         Write-Error "Error getting redirected URL for '$URL': $_"
-        throw
+        throw 
     } finally {
         if ($httpClient) {
             $httpClient.Dispose()
@@ -1764,7 +1764,7 @@ function Send-YardstickEmailReport {
         $logoCid = "yardstick-logo"
         $logoPath = $null
         try {
-            $candidatePath = Join-Path $PSScriptRoot "..\Branding\yardstick_logo_transparent.png"
+            $candidatePath = Join-Path $PSScriptRoot "..\Branding\yardstick_logo_white_text_transparent_bg.png"
             if (Test-Path $candidatePath) {
                 $logoPath = (Resolve-Path $candidatePath).Path
                 $logoBytes = [System.IO.File]::ReadAllBytes($logoPath)
@@ -2118,14 +2118,16 @@ $(if ($RunParameters) { @"
         $mail.HTMLBody = $emailBody
 
         # Attach the logo as an inline image with a Content-ID matching the cid:
-        # reference in the HTML body. PR_ATTACH_FLAGS = 4 (ATT_MHTML_REF) hides
-        # it from the visible attachment list so it only renders inline.
+        # reference in the HTML body.
         if ($logoPath) {
             try {
                 $attachment = $mail.Attachments.Add($logoPath)
                 $pa = $attachment.PropertyAccessor
+                # Set the Content-ID so it can be referenced via cid: in the HTML
                 $pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", $logoCid)
-                $pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x37140003", 4)
+                # Note: PR_ATTACH_FLAGS (0x37140003) is often read-only in Outlook COM and doesn't
+                # support SetProperty; attempting it would cause an error. The cid: reference still
+                # works for inline rendering even if the attachment is visible in the attachment list.
             } catch {
                 Write-Log "WARNING: Failed to attach logo with CID: $($_.Exception.Message)"
             }

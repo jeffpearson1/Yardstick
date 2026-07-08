@@ -1,0 +1,24 @@
+url: https://github.com/cli/cli
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "gh_.*_windows_amd64\.msi$"
+  $versionRegex = "(\.{0,1}[0-9]{1,3}){3}"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $filename = $downloader.filename
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: github.png
+id: githubcli
+displayName: GitHub CLI
+publisher: GitHub, Inc.
+description: GitHub CLI brings GitHub to the command line.
+fileType: msi
+detectionType: msi
+numVersionsToKeep: 2
+scopeTags:
+  - scopeTag1
+  - scopeTag2

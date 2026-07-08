@@ -2,7 +2,7 @@ url: https://github.com/OrcaSlicer/OrcaSlicer
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
-  $downloadFileRegex = "OrcaSlicer_Windows_Installer.*\.exe$"
+  $downloadFileRegex = "OrcaSlicer_Windows_Installer.*x64\.exe$"
   $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
   $Script:downloader = [GithubDownloader]::new($url, $downloadFileRegex, $versionRegex)
   $downloader.Update()

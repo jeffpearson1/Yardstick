@@ -3,62 +3,80 @@ urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
   $Content = Invoke-WebRequest $URL
-  $URL = ($Content.Links | Where-Object href -Match ".*eclipse-java.*win32-x86_64\.zip")[0].href
+  $URL = ($Content.Links | Where-Object href -Match ".*eclipse-jee.*win32-x86_64\.zip")[0].href
   if (-not $URL.StartsWith("https")) {
     $URL = "https$URL"
   }
   $version = ($URL -split "\/")[-3]
-  $URL = "https://mirror.umd.edu/eclipse/oomph/epp/$version/R/eclipse-inst-jre-win64.zip"
-  # Normalize to 4-part version for detection consistency
-  $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
+  $URL = "https://mirror.umd.edu/eclipse/technology/epp/downloads/release/$version/R/eclipse-jee-$version-R-win32-x86_64.zip"
+  
+  # Product version can differ from release
+  if ($version -match '^\d{4}-\d{2}$') {
+    $noteworthyUrl = "https://eclipseide.org/release/noteworthy/$version/"
+    $noteworthyContent = Invoke-WebRequest $noteworthyUrl
+    if ($noteworthyContent.Content -match "$([regex]::Escape($version))\s*\((\d+\.\d+)\)") {
+      $version = "$($Matches[1]).0"
+    }
+  }
+
+  $fileName = "eclipse-jee-$version-R-win32-x86_64.zip"
 powerShellInstallScript: |
   # This script was taken from https://uga.teamdynamix.com/TDClient/3159/KB/KB/PrintArticle?ID=159435
   $EclipseArchive = "<filename>"
-  $DestinationFolder = "C:\Program Files\Eclipse IDE"
+  $DestinationFolder = "$env:ProgramFiles\Eclipse IDE"
 
   try {
       if (-not (Test-Path -Path $DestinationFolder)) {
           New-Item -ItemType Directory -Path $DestinationFolder
       }
       Expand-Archive -Path $EclipseArchive -DestinationPath $DestinationFolder -Force
-      Copy-Item -Path "uninstallEclipse.ps1" "$env:ProgramFiles\Eclipse IDE\eclipse\uninstallEclipse.ps1"
-    
-      #Create start menu and desktop shortcuts
+
+    # Create start menu shortcut
       $EclipsePath = "$env:ProgramFiles\Eclipse IDE\eclipse\eclipse.exe"
-      $StartMenuShortcutPath = "$env:ALLUSERSPROFILE\Microsoft\Windows\Start Menu\Programs\Eclipse IDE.lnk"
-      $PublicDesktopShortcutPath = "$env:Public\Desktop\Eclipse IDE.lnk"
+      $StartMenuShortcutPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Eclipse IDE.lnk"
       $WScriptShell = New-Object -ComObject WScript.Shell
 
       # Check if shortcuts already exist, delete and recreate them
       if (Test-Path -Path $StartMenuShortcutPath) {
           Remove-Item -Path $StartMenuShortcutPath -Force
       }
-  
+
       $StartMenuShortcut = $WScriptShell.CreateShortcut($StartMenuShortcutPath)
       $StartMenuShortCut.TargetPath = $EclipsePath
+      $StartMenuShortCut.Description = "Eclipse IDE Application"
       $StartMenuShortCut.Save()
-
-      if (Test-Path -Path $PublicDesktopShortcutPath) {
-          Remove-Item -Path $PublicDesktopShortcutPath -Force
-      }
-
-      $PublicDesktopShortcut = $WScriptShell.CreateShortcut($PublicDesktopShortcutPath)
-      $PublicDesktopShortcut.TargetPath = $EclipsePath
-      $PublicDesktopShortcut.Save()
   } catch {
       Write-Output "Error: $_"
   }
-uninstallScript: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path ''C:\Program Files\Eclipse Foundation'') { Remove-Item ''C:\Program Files\Eclipse Foundation'' -Recurse -Force }"'
+installScript: |
+  %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy bypass -File .\install.ps1
+powerShellUninstallScript: |
+  if(Test-Path -Path "$env:ProgramFiles\Eclipse IDE") {
+    Remove-Item -Path "$env:ProgramFiles\Eclipse IDE" -Recurse -Force
+  }
+  if(Test-Path -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Eclipse IDE.lnk") {
+    Remove-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Eclipse IDE.lnk" -Force
+  }
+uninstallScript: |
+  %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy bypass -File .\uninstall.ps1
 iconFile: eclipse.png
 id: eclipse
-fileName: eclipse-inst-jre-win64.zip
-displayName: DEV Eclipse
+displayName: Eclipse
 publisher: The Eclipse Foundation
 description: Eclipse is an integrated development environment (IDE) used in computer programming. It contains a base workspace and an extensible plug-in system for customizing the environment.
-detectionType: file
-fileDetectionPath: 'C:\Program Files\Eclipse Foundation\eclipse'
-fileDetectionName: eclipse.exe
-fileDetectionMethod: exists
+detectionType: script
+detectionScript: |
+  $eclipseVersion = "<version>"
+  $FilePath = "$env:ProgramFiles\Eclipse IDE\eclipse\.eclipseproduct"
+  if (Test-Path -Path $FilePath -ErrorAction SilentlyContinue) {
+      $VersionCheck = (Get-Content -Path $FilePath -ErrorAction SilentlyContinue | Where-Object { $_.Contains("version") }).Split("=")[1]
+      if ($VersionCheck -eq $eclipseVersion) {
+          Write-Output "Detected"
+          exit 0
+      }
+      Write-Output "Not Detected"
+      exit 1
+  }
 installExperience: system
 restartBehavior: suppress
-minOSVersion: W11_23H2
+minOSVersion: W11_24H2

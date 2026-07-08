@@ -1,0 +1,114 @@
+url: https://endnote.com/downloads/available-updates/
+urlRedirects: false
+preDownloadScript: |
+  $updatesIndexUrl = "https://endnote.com/downloads/available-updates/"
+  $updatesIndex = Invoke-WebRequest -Uri $updatesIndexUrl -UseBasicParsing
+  $releaseYear = [regex]::Matches($updatesIndex.Content, "EndNote-(\d{4})-Updates") |
+    ForEach-Object { [int]$_.Groups[1].Value } |
+    Sort-Object -Descending |
+    Select-Object -First 1
+
+  if (-not $releaseYear) {
+    throw "Could not determine the current EndNote release year from $updatesIndexUrl"
+  }
+
+  $majorVersion = [int]($releaseYear.ToString().Substring(2))
+  $downloadRoot = "https://download.endnote.com/downloads/$releaseYear"
+  $fileName = "EN$($releaseYear)Inst.msi"
+  $url = "$downloadRoot/$fileName"
+  $updateFileName = "EN$($releaseYear)Update.msp"
+  $updateUrl = "$downloadRoot/$updateFileName"
+  $updateAvailable = $false
+  $version = "$majorVersion.0.0"
+  $fileDetectionVersion = $version
+  $fileDetectionPath = "C:\Program Files\EndNote $releaseYear"
+
+  try {
+    Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing | Out-Null
+  } catch {
+    throw "EndNote base MSI was not found at $url"
+  }
+
+  try {
+    Invoke-WebRequest -Uri $updateUrl -Method Head -UseBasicParsing | Out-Null
+    $updateAvailable = $true
+  } catch {
+    $updateAvailable = $false
+  }
+
+  if ($updateAvailable) {
+    $tempDir = Join-Path $temp $id
+    if (-not (Test-Path $tempDir)) {
+      New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
+    }
+
+    $updateTempPath = Join-Path $tempDir $updateFileName
+    Invoke-WebRequest -Uri $updateUrl -OutFile $updateTempPath -UseBasicParsing
+
+    $versionPattern = "$majorVersion\.[0-9]+(\.[0-9]+)?"
+    $versionCandidates = @()
+    $versionCandidates += Select-String -Path $updateTempPath -Pattern $versionPattern -AllMatches -Encoding Unicode |
+      ForEach-Object { $_.Matches.Value }
+    $versionCandidates += Select-String -Path $updateTempPath -Pattern $versionPattern -AllMatches |
+      ForEach-Object { $_.Matches.Value }
+
+    $updateVersion = $versionCandidates |
+      Sort-Object -Unique |
+      Sort-Object { [version]$_ } -Descending |
+      Select-Object -First 1
+
+    if (-not $updateVersion) {
+      throw "Could not determine EndNote update version from $updateUrl"
+    }
+
+    $version = $updateVersion
+    $fileDetectionVersion = $version
+  }
+downloadScript: |
+  Start-BitsTransfer -Source $url -Destination $fileName
+
+  if ($updateAvailable -and $updateFileName) {
+    if ($updateTempPath -and (Test-Path $updateTempPath)) {
+      Copy-Item -Path $updateTempPath -Destination $updateFileName -Force
+    } else {
+      Start-BitsTransfer -Source $updateUrl -Destination $updateFileName
+    }
+  }
+powerShellInstallScript: |
+  function Invoke-EndNoteMsiexec {
+    param (
+      [Parameter(Mandatory = $true)]
+      [string]$Arguments
+    )
+
+    $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList $Arguments -Wait -PassThru
+    if ($process.ExitCode -notin @(0, 3010)) {
+      exit $process.ExitCode
+    }
+  }
+
+  Invoke-EndNoteMsiexec -Arguments "/i `"$PSScriptRoot\<filename>`" /qn /norestart"
+
+  Get-ChildItem -Path $PSScriptRoot -Filter "*.msp" |
+    Sort-Object Name |
+    ForEach-Object {
+      Invoke-EndNoteMsiexec -Arguments "/p `"$($_.FullName)`" /qn /norestart"
+    }
+installScript: |
+  %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: endnote.png
+id: endnote
+displayName: EndNote
+publisher: Clarivate
+description: EndNote is a reference management application used to collect, organize, cite, and share research references.
+softwareName: "EndNote*"
+fileType: msi
+detectionType: file
+fileDetectionName: EndNote.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+numVersionsToKeep: 2
+scopeTags:
+  - scopeTag1
+  - scopeTag2
