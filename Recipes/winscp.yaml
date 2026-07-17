@@ -1,0 +1,35 @@
+url: https://winscp.net/eng/download.php
+urlRedirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $url -UseBasicParsing
+  $Target = [regex]::Match($Content.Content, 'href="(/download/WinSCP-([0-9]+\.[0-9]+\.[0-9]+)-Setup\.exe/download)"')
+  $RelativeUrl = $Target.Groups[1].Value
+  $version = $Target.Groups[2].Value
+  $url = "https://winscp.net$RelativeUrl"
+  $filename = ($url -split "/")[-2]
+  $registryDetectionValue = $version
+downloadScript: |
+  $Driver = Start-SeDriver -Browser "Firefox" -StartURL $url -DefaultDownloadPath "$buildSpace\$id\$version" -Arguments @('--headless')
+  $Element = Get-SeElement -By LinkText "CDN download"
+  $url = $element.GetAttribute('href')
+  if (!(Test-Path "$buildspace/$id/$version")) {
+    New-Item -ItemType Directory -Path "$buildspace/$id/$version" | Out-Null
+  }
+  Start-BitsTransfer -Source $url -Destination $buildspace/$id/$version/$filename
+  $Driver.Close()
+installScript: <filename> /VERYSILENT /ALLUSERS /NORESTART
+uninstallScript: '%ProgramFiles(x86)%\\WinSCP\unins000.exe /VERYSILENT /NORESTART'
+iconFile: WinSCP.png
+id: winscp
+displayName: WinSCP
+publisher: Martin Prikryl
+description: WinSCP is an open source free SFTP client, FTP client, WebDAV client and SCP client for Windows. Its main function is file transfer between a local and a remote computer. Beyond this, WinSCP offers scripting and basic file manager functionality.
+detectionType: registry
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\winscp3_is1'
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: equal
+registryDetectionMethod: version
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2

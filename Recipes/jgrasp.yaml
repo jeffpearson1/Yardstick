@@ -1,0 +1,36 @@
+url: https://spider.eng.auburn.edu/user-cgi/grasp/grasp.pl?;dl=download_jgrasp.html
+urlRedirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest $URL -UseBasicParsing
+  $Target = [regex]::Match($Content.Content, 'value="(jgrasp/jgrasp(?!_bdl)[0-9a-zA-Z_]+\.exe)"').Groups[1].Value
+  $URL = "https://www.jgrasp.org/dl4g/$Target"
+  $url = $URL
+  $filename = ($url -split "/")[-1]
+  $VersionMatch = [regex]::Match($Content.Content, 'jGRASP\s+([0-9]+\.[0-9]+\.[0-9]+(?:_[0-9]+)?)')
+  $version = $VersionMatch.Groups[1].Value
+installScript: <filename> /Q
+uninstallScript: '"%ProgramFiles(x86)%\jGRASP\uninstall.exe" /S'
+iconFile: jgrasp.png
+id: jgrasp
+displayName: jGRASP
+publisher: Auburn University
+description: jGRASP is a lightweight development environment, created specifically to provide automatic generation of software visualizations to improve the comprehensibility of software. 
+detectionType: script
+detectionScript: |
+  $registryDetectionKey = "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\jGRASP"
+  $registryDetectionValueName = "DisplayVersion"
+  $version = <version>
+  $version = $version -replace "_", "."
+  if (Test-Path $registryDetectionKey) {
+    $installedVersion = ((Get-ItemProperty -Path $registryDetectionKey).$registryDetectionValueName).replace("_", ".")
+    if ([Version]$installedVersion -ge [Version]$version) {
+      Write-Output "Detected"
+      exit 0
+    }
+  }
+  Write-Output "Not Detected"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2

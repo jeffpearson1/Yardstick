@@ -1,0 +1,24 @@
+url: https://github.com/jasp-stats/jasp-desktop
+urlredirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "JASP-([0-9]+\.[0-9]+\.[0-9]+)-Community\.msi$"
+  $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
+  $Script:downloader = [GithubDownloader]::new($url, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $filename = $downloader.filename
+  $registryDetectionValue = $version
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: jasp.png
+id: jasp
+displayName: JASP
+publisher: University of Amsterdam
+description: JASP is an open-source project supported by the University of Amsterdam. It has an intuitive interface that was designed with the user in mind and offers standard analysis procedures in both their classical and Bayesian form.
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2
