@@ -1561,34 +1561,42 @@ function Add-SuccessfulApplication {
     
     .PARAMETER Action
     The action that was performed (e.g., "Updated", "Added", "Repaired").
+
+    .PARAMETER AutoUpdateStatus
+    Optional short status string from the auto-update handler (e.g. "published (12 device(s))",
+    "no outdated devices", "skipped (no usable installer URL)"). $null when auto-update was disabled.
     #>
     param(
         [Parameter(Mandatory=$true)]
         [string]$ApplicationId,
-        
+
         [Parameter(Mandatory=$true)]
         [string]$DisplayName,
-        
+
         [Parameter(Mandatory=$true)]
         [string]$Version,
 
         # Store a list of dependent apps for this application and whether or not they had their references updated successfully
         [hashtable]$Dependents = @{},
 
-        [string]$Action = "Updated"
+        [string]$Action = "Updated",
+
+        [AllowNull()]
+        [string]$AutoUpdateStatus
     )
-    
+
     if (-not $Script:SuccessfulApplications) {
         $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
     }
-    
+
     $appInfo = [PSCustomObject]@{
-        ApplicationId = $ApplicationId
-        DisplayName = $DisplayName
-        Version = $Version
-        Action = $Action
-        Dependents = $Dependents
-        Timestamp = Get-Date
+        ApplicationId    = $ApplicationId
+        DisplayName      = $DisplayName
+        Version          = $Version
+        Action           = $Action
+        Dependents       = $Dependents
+        AutoUpdateStatus = $AutoUpdateStatus
+        Timestamp        = Get-Date
     }
     
     $Script:SuccessfulApplications.Add($appInfo)
@@ -1995,15 +2003,25 @@ $(if ($RunParameters) { @"
                             <th>Application</th>
                             <th>Version</th>
                             <th>Action</th>
+                            <th>Auto-Update</th>
                             <th>Time</th>
                         </tr>
 "@
             foreach ($app in $Script:SuccessfulApplications) {
+                $auStatus = if ($app.PSObject.Properties['AutoUpdateStatus'] -and $app.AutoUpdateStatus) { $app.AutoUpdateStatus } else { '&mdash;' }
+                $auColor = switch -Regex ($auStatus) {
+                    '^published'   { '#28a745' }
+                    '^no outdated' { '#6c757d' }
+                    '^skipped'     { '#ffc107' }
+                    '^failed'      { '#dc3545' }
+                    default        { '#6c757d' }
+                }
                 $emailBody += @"
                 <tr>
                     <td data-label="Application"><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
                     <td data-label="Version">$($app.Version)</td>
                     <td data-label="Action">$($app.Action)</td>
+                    <td data-label="Auto-Update"><span style="color: $auColor;">$auStatus</span></td>
                     <td data-label="Time" class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
                 </tr>
 "@
@@ -2011,7 +2029,7 @@ $(if ($RunParameters) { @"
                 if ($app.Dependents -and $app.Dependents.Count -gt 0) {
                     $emailBody += @"
                 <tr class="dependents-row">
-                    <td colspan="4" style="background-color: #f8f9fa; color:#1a1a1a; padding-left: 30px;">
+                    <td colspan="5" style="background-color: #f8f9fa; color:#1a1a1a; padding-left: 30px;">
                         <strong style="color:#1a1a1a;">Dependent Applications:</strong>
                         <ul style="margin: 5px 0;">
 "@
