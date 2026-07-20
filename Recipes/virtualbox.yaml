@@ -1,0 +1,50 @@
+url: https://www.virtualbox.org/wiki/Downloads
+urlredirects: false
+preDownloadScript: |
+  $URL = "https://www.virtualbox.org/wiki/Downloads"
+  $Content = Invoke-WebRequest $URL -UseBasicParsing
+  $Target = [regex]::Match($Content.Content, 'href="(https://download\.virtualbox\.org/virtualbox/([0-9]+\.[0-9]+\.[0-9]+)/VirtualBox-\2-[0-9]+-Win\.exe)"')
+  $url = $Target.Groups[1].Value
+  $version = $Target.Groups[2].Value
+  $filename = ($url -split "/")[-1]
+installScript: <filename> --silent --ignore-reboot
+powerShellUninstallScript: |
+  $uninstallRoot = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+  $vs = Get-ItemProperty -Path "$uninstallRoot\*" -ErrorAction SilentlyContinue | Where-Object {
+    $_.DisplayName -like "Oracle VirtualBox*"
+    }
+  $GUID = $vs.PSChildName
+  
+  msiexec /x $GUID /qn /norestart  
+uninstallScript: |
+  %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy bypass -File .\uninstall.ps1
+iconFile: VirtualBox.png
+id: virtualbox
+displayName: Oracle VirtualBox
+publisher: Oracle
+description: VirtualBox is a general-purpose full virtualization software for x86_64 hardware (with version 7.1 additionally for macOS/Arm and with version 7.2 also for Windows/Arm), targeted at laptop, desktop, server and embedded use.)
+detectionType: script
+detectionScript: |
+  $version = "<version>"
+  $uninstallRoot = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+  $vb = Get-ItemProperty -Path "$uninstallRoot\*" -ErrorAction SilentlyContinue | Where-Object {
+    $_.DisplayName -like "Oracle VirtualBox*"
+  }
+  $installedVersion = $vb.DisplayVersion
+
+  if ($null -eq $vb) {
+    Write-Output "Not Detected"
+    exit 1
+  }
+
+  if ([Version]$installedVersion -ge [Version]$version) {
+    Write-Output "Detected"
+    exit 0
+  }
+
+  Write-Output "Not Detected"
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2

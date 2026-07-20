@@ -62,8 +62,6 @@
     This command updates all applications in the repository, excluding interactive applications, forcing the update and preventing the deletion of old versions.
 #>
 
-using module .\Modules\Custom\AdobeDownloader.psm1
-
 param (
     [Alias("AppId", "AppIds")]
     [parameter(ParameterSetName="SingleApp")]

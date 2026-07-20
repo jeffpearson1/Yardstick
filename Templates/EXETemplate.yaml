@@ -26,3 +26,15 @@ fileDetectionOperator: equal
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2
+
+# Auto-update handler (optional). When true, Yardstick publishes an Intune
+# Proactive Remediation that force-updates every managed device with an older
+# version installed - including devices where the app was not installed via
+# Intune. Leave unset to inherit defaultAutoUpdate from preferences.yaml.
+#autoUpdate: true
+# Direct download URL used by the remediation. Falls back to `url` above if
+# unset. Required when `url` contains placeholders or points to a script/API.
+#autoUpdateInstallerUrl:
+# Entra group IDs whose devices should be excluded from auto-update.
+#autoUpdateExcludeGroups:
+#  - "<groupId>"

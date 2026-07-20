@@ -17,9 +17,9 @@ publisher: Auburn University
 description: jGRASP is a lightweight development environment, created specifically to provide automatic generation of software visualizations to improve the comprehensibility of software. 
 detectionType: script
 detectionScript: |
-  $registryDetectionKey = "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\jGRASP"
+  $registryDetectionKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\jGRASP"
   $registryDetectionValueName = "DisplayVersion"
-  $version = <version>
+  $version = "<version>"
   $version = $version -replace "_", "."
   if (Test-Path $registryDetectionKey) {
     $installedVersion = ((Get-ItemProperty -Path $registryDetectionKey).$registryDetectionValueName).replace("_", ".")

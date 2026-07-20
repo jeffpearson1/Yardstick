@@ -644,7 +644,7 @@ detectionScript: |
 
 ### Recipe Inheritance
 
-See the [Recipe Inheritance](#recipe-inheritance) section above. This pattern is commonly used for Adobe products where an SDL (Software Distribution License) variant inherits from the base recipe and overrides only `id`, `displayName`, and scope-related fields.
+See the [Recipe Inheritance](#recipe-inheritance) section above. This pattern is commonly used for products where an architecture-specific (i.e. arm64) variant inherits from the base recipe and overrides only `id`, `displayName`, `preDownloadScript`, etc.
 
 ### Version Normalization
 

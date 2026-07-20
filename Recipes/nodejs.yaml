@@ -1,0 +1,21 @@
+url: https://nodejs.org/dist/index.json
+urlRedirects: false
+preDownloadScript: |
+  $releaseIndex = Invoke-RestMethod -Uri $url
+  $release = $releaseIndex | Where-Object { -not $_.lts -and $_.files -contains "win-x64-msi" } | Select-Object -First 1
+  $version = $release.version.TrimStart("v")
+  $fileName = "node-$($release.version)-x64.msi"
+  $url = "https://nodejs.org/dist/$($release.version)/$fileName"
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: nodejs.png
+id: nodejs
+displayName: Node.js
+publisher: OpenJS Foundation
+description: Node.js is a JavaScript runtime built on Chrome's V8 JavaScript engine.
+fileType: msi
+detectionType: msi
+numVersionsToKeep: 2
+scopeTags:
+  - scopeTag1
+  - scopeTag2
