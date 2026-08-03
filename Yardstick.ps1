@@ -327,6 +327,32 @@ function Set-ScriptVariables {
         $Script:NumVersionsToKeep = if ($null -ne $Parameters.numVersionsToKeep) { $Parameters.numVersionsToKeep } else { $Preferences.defaultNumVersionsToKeep }
     }
 
+    # Supersedence + auto-update wiring. `autoUpdate` is accepted as an alias
+    # for `autoUpdateOnAssignment` so pre-existing recipes continue to work.
+    $Script:Supersedence = if ($null -ne $Parameters.supersedence) {
+        [bool]$Parameters.supersedence
+    } elseif ($null -ne $Preferences.defaultSupersedence) {
+        [bool]$Preferences.defaultSupersedence
+    } else { $true }
+
+    $Script:UninstallPreviousVersion = if ($null -ne $Parameters.uninstallPreviousVersion) {
+        [bool]$Parameters.uninstallPreviousVersion
+    } elseif ($null -ne $Preferences.defaultUninstallPreviousVersion) {
+        [bool]$Preferences.defaultUninstallPreviousVersion
+    } else { $false }
+
+    $Script:AutoUpdateOnAssignment = if ($null -ne $Parameters.autoUpdateOnAssignment) {
+        [bool]$Parameters.autoUpdateOnAssignment
+    } elseif ($null -ne $Parameters.autoUpdate) {
+        [bool]$Parameters.autoUpdate
+    } elseif ($null -ne $Preferences.defaultAutoUpdate) {
+        [bool]$Preferences.defaultAutoUpdate
+    } else { $true }
+
+    $Script:UseDetectAnchor = if ($null -ne $Preferences.useDetectAnchor) {
+        [bool]$Preferences.useDetectAnchor
+    } else { $true }
+
     # Handle PowerShell Script batch handoff
     if (($Script:PowerShellInstallScript) -and (!$Script:InstallScript)) {
         $Script:InstallScript = "powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1"
@@ -698,9 +724,10 @@ foreach ($AppId_Processing in $Applications) {
 
 
         if ($Repair) {
-            # Correct any naming discrepancies before we continue
-            # Rename any apps if they are named incorrectly
-            $CurrentApps = Get-SameAppAllVersions $Script:DisplayName
+            # Correct any naming discrepancies before we continue.
+            # Skip the {DETECT} anchor - it deliberately holds a different name.
+            $anchorName = Get-DetectAnchorName -DisplayName $Script:DisplayName
+            $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName | Where-Object DisplayName -ne $anchorName)
             for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
                 if ($CurrentApps[$i].DisplayName -ne "$($Script:DisplayName) (N-$i)") {
                     Write-Log "Setting name for $($Script:DisplayName) (N-$i)"
@@ -931,97 +958,153 @@ foreach ($AppId_Processing in $Applications) {
 
 
         ###################################################
-        # MIGRATE OLD DEPLOYMENTS
+        # SUPERSEDENCE, RETENTION, AUTO-UPDATE
         ###################################################
 
-        # Check if any existing applications have the same version so we can delete them
-        $ToRemove = $ExistingVersions | where-object displayVersion -eq $Script:Version
-        if ($ToRemove) {
-            # Remove conflicting versions
-            Write-Log "Removing conflicting versions"
-            $CurrentApp = Get-IntuneWin32App -Id $Win32App.id
-            foreach ($RemoveApp in $ToRemove) {
-                Write-Log "Moving assignments before removal..."
-                Move-AssignmentsAndDependencies -From $RemoveApp -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset -AllowDependentLinkUpdates:$Script:AllowDependentLinkUpdates -DependentLinkOptions $DependentLinkOptions -DependentUpdateStatus $DependentUpdateStatus -ProtectedSourceIds $ProtectedDependencyAppIds
-                if ($ProtectedDependencyAppIds.Contains($RemoveApp.id)) {
-                    Write-Log "Skipping removal of $($RemoveApp.DisplayName) because dependent applications are still targeting this version."
-                }
-                else {
-                    Write-Log "Removing App with ID $($RemoveApp.id)"
-                    Remove-IntuneWin32App -Id $RemoveApp.id
-                }
-            }
-        }
-
-        # Define the current version, the version that is one older but shares the same name, and all the ones older than that
+        # Refresh the version list from Intune (retry in case the new upload
+        # has not yet propagated to Get-IntuneWin32App list results).
         Write-Log "Updating local application manifest..."
         Start-Sleep -Seconds 4
         try {
             $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
-            # test if the new app is in the list of all matching apps - if not, wait 5 seconds and try again
             if (!($AllMatchingApps | Where-Object id -eq $Win32App.id)) {
                 Write-Log "Newly created app not found in list of all matching apps. Waiting 5 seconds and trying again..."
                 Start-Sleep -Seconds 5
                 $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
-                if (!($AllMatchingApps | Where-Object id -eq $Win32App.id)) {
-                    Write-Log "Newly created app still not found in list of all matching apps after waiting. Skipping this app to avoid potential issues with moving assignments."
-                    continue
+            }
+            if (!($AllMatchingApps | Where-Object id -eq $Win32App.id)) {
+                # The list endpoint lags behind creation. Fetch the new app directly
+                # by id and splice it in - skipping here would leave a freshly
+                # uploaded app with no assignments and no supersedence, and the next
+                # run would consider the version already published and skip it.
+                Write-Log "Newly created app still missing from the list. Fetching it directly by id."
+                $DirectApp = Get-IntuneWin32App -Id $Win32App.id -ErrorAction Stop
+                if (-not $DirectApp) {
+                    throw "Intune returned no application for id $($Win32App.id)"
                 }
+                $AllMatchingApps = @($DirectApp) + @($AllMatchingApps)
             }
         } catch {
             Write-Log "There was an error fetching information about existing applications. Exiting"
             Exit 4
         }
-        $CurrentApp = $AllMatchingApps[0]
-        $AllOldApps = $AllMatchingApps[1..$($AllMatchingApps.count - 1)]
-        # For any apps that share the same version as the current one, move all their deployments to the current one and remove the rest from the list
-        $SameVersionApps = $AllOldApps | Where-Object displayVersion -eq $CurrentApp.displayVersion
+
+        $CurrentApp = $AllMatchingApps | Where-Object id -eq $Win32App.id | Select-Object -First 1
+        $OtherApps  = @($AllMatchingApps | Where-Object id -ne $CurrentApp.id)
+
+        # 1. Anchor identification. Version-detection recipes (msi, file-by-
+        #    version, registry-by-version) get one sticky {DETECT} anchor so a
+        #    fast-moving app cannot prune away every version that could still
+        #    detect a stale endpoint. The anchor is a permanent supersedence
+        #    target: its detection rule matches a very wide version range, so
+        #    superseding it is what actually pulls ancient installs forward.
+        $Anchor = $null
+        $anchorStatus = $null
+        if ($Script:UseDetectAnchor -and (Test-IsVersionDetection -DetectionType $Script:DetectionType -FileDetectionMethod $Script:FileDetectionMethod -RegistryDetectionMethod $Script:RegistryDetectionMethod)) {
+            $Anchor = Get-DetectAnchor -DisplayName $Script:DisplayName
+            if (-not $Anchor -and $OtherApps.Count -gt 0) {
+                # First run under the new model - pin the oldest surviving version.
+                $AnchorCandidate = $OtherApps | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}} | Select-Object -First 1
+                Set-DetectAnchor -App $AnchorCandidate -DisplayName $Script:DisplayName
+                # Re-fetch so the object reflects the new name. Fall back to the
+                # candidate if Intune has not caught up yet - otherwise the app we
+                # just pinned would be renamed straight back to (N-x) below.
+                $Anchor = Get-DetectAnchor -DisplayName $Script:DisplayName
+                if (-not $Anchor) { $Anchor = $AnchorCandidate }
+                $anchorStatus = "pinned ($($Anchor.displayVersion))"
+            } elseif ($Anchor) {
+                $anchorStatus = "existing ($($Anchor.displayVersion))"
+            } else {
+                $anchorStatus = "n/a (no prior versions)"
+            }
+        }
+
+        # 2. The anchor is off-limits to renaming, assignment migration and pruning.
+        if ($Anchor) {
+            $OtherApps = @($OtherApps | Where-Object id -ne $Anchor.id)
+        }
+
+        # 3. Same-version collision - a prior run (or -Force) can leave an app at
+        #    the same version. Those apps are held aside: their assignments and
+        #    dependencies still migrate in step 6, and they are deleted with the
+        #    rest of the prunable versions in step 8. They are never renamed to
+        #    (N-x) or superseded, because their version is not actually older.
+        $SameVersionApps = @($OtherApps | Where-Object displayVersion -eq $CurrentApp.displayVersion)
         if ($SameVersionApps) {
-            foreach ($App in $SameVersionApps) {
-                Write-Log "Moving assignments from $($App.id) to $($CurrentApp.id)"
-                Move-AssignmentsAndDependencies -From $App -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset -AllowDependentLinkUpdates:$Script:AllowDependentLinkUpdates -DependentLinkOptions $DependentLinkOptions -DependentUpdateStatus $DependentUpdateStatus -ProtectedSourceIds $ProtectedDependencyAppIds
-            }
-            $AllOldApps = $AllOldApps | Where-Object displayVersion -ne $CurrentApp.displayVersion
+            Write-Log "Found $($SameVersionApps.Count) existing app(s) already at version $($CurrentApp.displayVersion); they will be retired after their assignments are migrated."
+            $OtherApps = @($OtherApps | Where-Object displayVersion -ne $CurrentApp.displayVersion)
         }
 
-        
-        # All apps that will be assigned N-1 - these currently do not have the N-<version> suffix
-        $NMinusOneApps = $AllOldApps | Where-Object displayName -eq $Script:DisplayName
-        # All apps that will be assigned N-2 and older - these currently have the N-<version> suffix
-        $NMinusTwoAndOlderApps = $AllOldApps | Where-Object displayName -ne $Script:DisplayName
+        # 4. Compute kept vs prunable. `NumVersionsToKeep` includes the newly
+        #    uploaded app, so we keep (NumVersionsToKeep - 1) of the older ones.
+        $Sorted = @($OtherApps | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true})
+        $ToKeepCount = [Math]::Max(0, $Script:NumVersionsToKeep - 1)
+        $ToKeep = @()
+        $ToPrune = @()
+        if ($Sorted.Count -gt 0) {
+            $ToKeep  = @($Sorted | Select-Object -First $ToKeepCount)
+            $ToPrune = @($Sorted | Select-Object -Skip $ToKeepCount)
+        }
+        # Duplicates of the current version always get retired, regardless of retention.
+        $ToPrune = @($SameVersionApps) + @($ToPrune)
 
-        # Start with the N-1 app first and move all its deployments to the newest one
-        if ($NMinusOneApps) {
-            foreach ($NMinusOneApp in $NMinusOneApps) {
-                if ($CurrentApp) {
-                    Write-Log "Moving assignments from $($NMinusOneApp.id) to $($CurrentApp.id)"
-                    Move-AssignmentsAndDependencies -From $NMinusOneApp -To $CurrentApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset -AllowDependentLinkUpdates:$Script:AllowDependentLinkUpdates -DependentLinkOptions $DependentLinkOptions -DependentUpdateStatus $DependentUpdateStatus -ProtectedSourceIds $ProtectedDependencyAppIds
-                }
-                else {
-                    Write-Log "There was an error fetching information about the current application. Exiting"
-                    Exit 5
-                }
-            }
-        }
-        if ($($NMinusOneApps.count) -gt 1) {
-            $NewestNMinusOneApp = ($NMinusOneApps | Sort-Object createdDateTime -Descending)[0]
-        }
-        for ($i = 0; $i -lt $NMinusTwoAndOlderApps.count; $i++) {
-            # Move all the deployments up one number
-            if ($i -eq 0) {
-                # Move the app assignments in the 0 position to the nminusoneapp
-                if ($NMinusTwoAndOlderApps[$i] -and $NewestNMinusOneApp) {
-                    Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NewestNMinusOneApp -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset
-                }
-            }
-            else {
-                if ($NMinusTwoAndOlderApps[$i] -and $NMinusTwoAndOlderApps[$i - 1]) {
-                    Move-AssignmentsAndDependencies -From $NMinusTwoAndOlderApps[$i] -To $NMinusTwoAndOlderApps[$i - 1] -AvailableDateOffset $Script:AvailableDateOffset -DeadlineDateOffset $Script:DeadlineDateOffset
+        # 5. Rename kept apps to (N-1), (N-2), ...
+        for ($i = 0; $i -lt $ToKeep.Count; $i++) {
+            $targetName = "$($Script:DisplayName) (N-$($i + 1))"
+            if ($ToKeep[$i].DisplayName -ne $targetName) {
+                try {
+                    Set-IntuneWin32App -Id $ToKeep[$i].Id -DisplayName $targetName | Out-Null
+                    Write-Log "Renamed $($ToKeep[$i].DisplayName) -> $targetName"
+                } catch {
+                    Write-Log "ERROR: Failed to rename $($ToKeep[$i].Id) to $targetName : $_"
                 }
             }
         }
 
-        # Add the default deployments if they're not already there from the migration
+        # 6. Intent-based assignment handling.
+        #    - Required: MOVE from older versions to newest (consolidate on one app;
+        #      required deployments already install unconditionally).
+        #    - Available: COPY from older versions to newest (leave the source
+        #      assignment in place). Intune builds the auto-update component on the
+        #      device when a user installs from Company Portal, and documents that
+        #      "any application assignment changes delete the component responsible
+        #      for auto-updating the app" - so removing the available assignment
+        #      from the old version would break auto-update for exactly the devices
+        #      we are trying to update. Supersedence + auto-update on the newest
+        #      version does the pushing instead.
+        #    Dependencies migrate exactly once per source app (during the required
+        #    pass); the available pass runs with -SkipDependencies to avoid
+        #    double-processing them.
+        $allOlder = @($ToKeep) + @($ToPrune)
+        foreach ($old in $allOlder) {
+            try {
+                Move-AssignmentsAndDependencies -From $old -To $CurrentApp `
+                    -AvailableDateOffset $Script:AvailableDateOffset `
+                    -DeadlineDateOffset $Script:DeadlineDateOffset `
+                    -IntentFilter 'required' `
+                    -AllowDependentLinkUpdates $Script:AllowDependentLinkUpdates `
+                    -DependentLinkOptions $DependentLinkOptions `
+                    -DependentUpdateStatus $DependentUpdateStatus `
+                    -ProtectedSourceIds $ProtectedDependencyAppIds
+            } catch {
+                Write-Log "ERROR: Failed required-intent move from $($old.DisplayName): $_"
+            }
+
+            $availOnOld = @(Get-IntuneWin32AppAssignment -Id $old.id | Where-Object Intent -eq 'available')
+            if ($availOnOld.Count -gt 0) {
+                try {
+                    Move-AssignmentsAndDependencies -From $old -To $CurrentApp `
+                        -AvailableDateOffset $Script:AvailableDateOffset `
+                        -DeadlineDateOffset $Script:DeadlineDateOffset `
+                        -IntentFilter 'available' -CopyOnly -SkipDependencies
+                } catch {
+                    Write-Log "ERROR: Failed available-intent copy from $($old.DisplayName): $_"
+                }
+            }
+        }
+
+        # 7. Default deployments (unchanged behavior). Adds default groups as
+        #    available-intent assignments if not already present.
         if ($Script:DefaultDeploymentGroups) {
             $ID = $CurrentApp.Id
             $CurrentlyDeployedIDs = (Get-IntuneWin32AppAssignment -Id $ID).GroupID
@@ -1033,32 +1116,71 @@ foreach ($AppId_Processing in $Applications) {
             }
         }
 
-        # Rename all the old applications to have the appropriate N-<versions behind> in them
-        for ($i = 1; $i -lt $AllMatchingApps.count; $i++) {
-            Set-IntuneWin32App -Id $AllMatchingApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)"
-            if ($?) {
-                Write-Log "Successfully set Application Name to $($Script:DisplayName) (N-$i)"
-            } else {
-                Write-Log "ERROR: Failed to update display name to $($Script:DisplayName) (N-$i)"
+        # 8. Prune before wiring supersedence. Intune refuses to delete an app that
+        #    still participates in a supersedence relationship, so removing the
+        #    expired versions first keeps the graph pointing only at apps that
+        #    survive this run.
+        $Pruned = @()
+        if (!$NoDelete) {
+            foreach ($old in $ToPrune) {
+                if ($ProtectedDependencyAppIds.Contains($old.id)) {
+                    Write-Log "Skipping removal of $($old.displayName) because dependent applications are still targeting this version."
+                    continue
+                }
+                try {
+                    Remove-YardstickApp -App $old
+                    $Pruned += $old.id
+                } catch {
+                    Write-Log "ERROR: Failed to remove $($old.DisplayName) ($($old.id)): $_"
+                }
             }
         }
 
-        # Remove all the old versions 
-        if (!$NoDelete) {
-            for ($i = $Script:NumVersionsToKeep - 1; $i -lt $AllOldApps.count; $i++) {
-                if ($ProtectedDependencyAppIds.Contains($AllOldApps[$i].id)) {
-                    Write-Log "Skipping removal of $($AllOldApps[$i].displayName) because dependent applications are still targeting this version."
-                    continue
-                }
-                Write-Log "Removing old app with id $($AllOldApps[$i].id)"
-                Remove-IntuneWin32App -Id $AllOldApps[$i].id
+        # 9. Supersedence. The newest version becomes the single superseding parent
+        #    for every surviving older version plus the {DETECT} anchor. The anchor
+        #    is forced to "Update" because a "Replace" against its deliberately wide
+        #    detection rule would uninstall the app from every device that has any
+        #    version of it installed.
+        $supersededCount = 0
+        if ($Script:Supersedence) {
+            $SameVersionIds = @($SameVersionApps | Select-Object -ExpandProperty id)
+            $SupersedenceTargets = @($ToKeep)
+            # Anything we intended to prune but could not (protected by a dependent,
+            # or the delete was refused) still needs to be superseded so devices on
+            # it move forward. Same-version leftovers are excluded: superseding an
+            # app that carries the identical version is meaningless.
+            $SupersedenceTargets += @($ToPrune | Where-Object { ($Pruned -notcontains $_.id) -and ($SameVersionIds -notcontains $_.id) })
+            if ($Anchor) { $SupersedenceTargets += $Anchor }
+            $Type = if ($Script:UninstallPreviousVersion) { 'Replace' } else { 'Update' }
+            try {
+                $supersededCount = Set-YardstickSupersedence -NewApp $CurrentApp -SupersededApps $SupersedenceTargets -Type $Type `
+                    -UpdateOnlyIds @(if ($Anchor) { $Anchor.id })
+            } catch {
+                Write-Log "ERROR: Failed to configure supersedence for $($CurrentApp.DisplayName): $_"
             }
-            
-            # If we get here, the application was processed successfully
-            $ActionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
-            Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus
-            Write-Log "Updates complete for $Script:DisplayName"
+        } else {
+            Write-Log "Supersedence disabled for this recipe - skipping"
         }
+
+        # 10. Native auto-update. Intune only honours this on available-intent
+        #     assignments, so required-only recipes are a no-op here by design.
+        $autoUpdateApplied = 0
+        if ($Script:AutoUpdateOnAssignment) {
+            try {
+                $autoUpdateApplied = Set-AssignmentAutoUpdate -AppId $CurrentApp.Id -Enabled $true -IntentFilter 'available'
+            } catch {
+                Write-Log "ERROR: Failed to enable auto-update on assignments for $($CurrentApp.DisplayName): $_"
+            }
+        }
+
+        $ActionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
+        $autoStatusParts = @()
+        if ($supersededCount -gt 0)   { $autoStatusParts += "supersedes $supersededCount" }
+        if ($autoUpdateApplied -gt 0) { $autoStatusParts += "auto-update on $autoUpdateApplied assignment(s)" }
+        if ($anchorStatus)            { $autoStatusParts += "anchor: $anchorStatus" }
+        $autoStatus = if ($autoStatusParts.Count -gt 0) { $autoStatusParts -join ', ' } else { $null }
+        Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus -AutoUpdateStatus $autoStatus
+        Write-Log "Updates complete for $Script:DisplayName"
 
     } catch {
         # Catch any unexpected errors during processing
