@@ -10,17 +10,22 @@
       1. Fetches all Intune versions of the app via Get-SameAppAllVersions.
       2. If the recipe is version-detection and no {DETECT} anchor exists yet,
          pins the oldest surviving version as `{DETECT} <DisplayName>`.
-      3. Strips existing supersedence off every kept version.
-      4. Rebuilds supersedence on the newest app, targeting all other kept
-         versions (excluding the anchor). Uses `Replace` when
-         `uninstallPreviousVersion` is true, else `Update`. Only runs when the
-         recipe involves available-intent assignments.
-      5. Sets the assignment-level `autoUpdate` flag on the newest app's
-         available-intent assignments when `autoUpdateOnAssignment` (or legacy
-         `autoUpdate`) is true.
-      6. For each older version: MOVES required-intent assignments (and
+      3. Strips existing supersedence off every kept version so the newest app
+         is the only superseding parent.
+      4. Rebuilds supersedence on the newest app, targeting all kept versions
+         plus the {DETECT} anchor. Uses `Replace` when
+         `uninstallPreviousVersion` is true, else `Update`; the anchor is always
+         `Update` so a Replace can never mass-uninstall the app.
+      5. For each older version: MOVES required-intent assignments (and
          dependencies) to the newest, then COPIES available-intent assignments
-         to the newest (leaving them on the source).
+         to the newest (leaving them on the source, because removing an available
+         assignment destroys the on-device auto-update component).
+      6. Enables Intune's native auto-update
+         (`autoUpdateSettings.autoUpdateSupersededAppsState = enabled`) on the
+         newest app's available-intent assignments when `autoUpdateOnAssignment`
+         (or legacy `autoUpdate`) is true. Runs last so it also covers the
+         assignments copied in step 5. Intune only honours auto-update for
+         available assignments.
 
     Idempotent - safe to re-run. Use -WhatIf for a dry run.
 
@@ -97,7 +102,7 @@ foreach ($file in $recipeFiles) {
     }
 
     $newest = $all | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true} |
-              Where-Object { $_.DisplayName -ne "{DETECT} $displayName" } |
+              Where-Object { $_.DisplayName -ne (Get-DetectAnchorName -DisplayName $displayName) } |
               Select-Object -First 1
     if (-not $newest) {
         Write-Host "  only the {DETECT} anchor exists - nothing to migrate" -ForegroundColor DarkGray
@@ -115,8 +120,13 @@ foreach ($file in $recipeFiles) {
                 $oldest = $others | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}} | Select-Object -First 1
                 if ($PSCmdlet.ShouldProcess($oldest.DisplayName, "pin as {DETECT} anchor")) {
                     Set-DetectAnchor -App $oldest -DisplayName $displayName
-                    $anchor = Get-DetectAnchor -DisplayName $displayName
-                    Write-Host "  pinned {DETECT} anchor: $($oldest.displayVersion)" -ForegroundColor Green
+                    # Hold on to the candidate in case the lookup is still stale -
+                    # otherwise the app we just pinned would be treated as a normal
+                    # target and could be superseded with 'Replace'.
+                    $anchor = $oldest
+                    $refreshed = Get-DetectAnchor -DisplayName $displayName
+                    if ($refreshed) { $anchor = $refreshed }
+                    Write-Host "  pinned {DETECT} anchor: $($anchor.displayVersion)" -ForegroundColor Green
                 }
             }
         } else {
@@ -131,56 +141,54 @@ foreach ($file in $recipeFiles) {
                    Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true} |
                    Select-Object -First ([Math]::Max(0, $numKeep - 1)))
 
-    # Detect whether any older version has available-intent assignments (or
-    # whether the newest already does). Supersedence + autoUpdate only apply
-    # when the recipe involves available deployments.
-    $availableInPlay = $false
-    foreach ($app in $all) {
-        $avail = @(Get-IntuneWin32AppAssignment -Id $app.id | Where-Object Intent -eq 'available')
-        if ($avail.Count -gt 0) { $availableInPlay = $true; break }
-    }
-
-    # 2. Supersedence (only when available assignments are involved)
-    if ($supersedence -and $availableInPlay) {
+    # 2. Supersedence over kept versions + the anchor. The anchor is forced to
+    #    'Update' so a 'Replace' recipe cannot uninstall the app fleet-wide.
+    if ($supersedence) {
         $type = if ($uninstallPrev) { 'Replace' } else { 'Update' }
-        if ($PSCmdlet.ShouldProcess($newest.DisplayName, "attach supersedence ($type) over $($olderKept.Count) target(s)")) {
-            Set-YardstickSupersedence -NewApp $newest -SupersededApps $olderKept -Type $type | Out-Null
-        }
-    } elseif ($supersedence) {
-        Write-Host "  skipping supersedence - no available-intent assignments in play" -ForegroundColor DarkGray
-    }
-
-    # 3. autoUpdate on assignments (only for available intent)
-    if ($autoUpdate -and $availableInPlay) {
-        if ($PSCmdlet.ShouldProcess($newest.DisplayName, "set autoUpdate on available-intent assignments")) {
-            Set-AssignmentAutoUpdate -AppId $newest.Id -Enabled $true -IntentFilter 'available' | Out-Null
+        $targets = @($olderKept)
+        if ($anchor) { $targets += $anchor }
+        if ($PSCmdlet.ShouldProcess($newest.DisplayName, "attach supersedence ($type) over $($targets.Count) target(s)")) {
+            Set-YardstickSupersedence -NewApp $newest -SupersededApps $targets -Type $type `
+                -UpdateOnlyIds @(if ($anchor) { $anchor.id }) | Out-Null
         }
     }
 
-    # 4. Migrate lingering assignments from older versions to newest, split
-    #    by intent: MOVE required, COPY available.
+    # 3. Migrate lingering assignments from older versions to newest, split by
+    #    intent: MOVE required, COPY available (only when the source ends up
+    #    superseded - otherwise copying would leave a duplicate Company Portal
+    #    listing with no update path, so we move instead). The required pass also
+    #    carries the dependency migration, so it runs for every old app even when
+    #    there are no required assignments to move.
     if (-not $SkipMove) {
         foreach ($old in $olderKept) {
-            $assigns = Get-IntuneWin32AppAssignment -Id $old.id
-            if (-not $assigns -or $assigns.Count -eq 0) { continue }
-
+            $assigns = @(Get-IntuneWin32AppAssignment -Id $old.id)
             $reqCount   = @($assigns | Where-Object Intent -eq 'required').Count
             $availCount = @($assigns | Where-Object Intent -eq 'available').Count
 
-            if ($reqCount -gt 0 -and $PSCmdlet.ShouldProcess($old.DisplayName, "move $reqCount required assignment(s) to newest")) {
+            if ($PSCmdlet.ShouldProcess($old.DisplayName, "move $reqCount required assignment(s) and any dependencies to newest")) {
                 try {
                     Move-AssignmentsAndDependencies -From $old -To $newest -AvailableDateOffset 0 -DeadlineDateOffset 0 -IntentFilter 'required'
                 } catch {
                     Write-Warning "  failed moving required assignments from $($old.DisplayName): $_"
                 }
             }
-            if ($availCount -gt 0 -and $PSCmdlet.ShouldProcess($old.DisplayName, "copy $availCount available assignment(s) to newest")) {
+            $verb = if ($supersedence) { 'copy' } else { 'move' }
+            if ($availCount -gt 0 -and $PSCmdlet.ShouldProcess($old.DisplayName, "$verb $availCount available assignment(s) to newest")) {
                 try {
-                    Move-AssignmentsAndDependencies -From $old -To $newest -AvailableDateOffset 0 -DeadlineDateOffset 0 -IntentFilter 'available' -CopyOnly -SkipDependencies
+                    Move-AssignmentsAndDependencies -From $old -To $newest -AvailableDateOffset 0 -DeadlineDateOffset 0 -IntentFilter 'available' -CopyOnly:$supersedence -SkipDependencies
                 } catch {
                     Write-Warning "  failed copying available assignments from $($old.DisplayName): $_"
                 }
             }
+        }
+    }
+
+    # 4. Native auto-update, applied last so it covers the available assignments
+    #    copied in step 3. Intune only honours this for available intent, and
+    #    Set-AssignmentAutoUpdate is a no-op when there are no such assignments.
+    if ($autoUpdate) {
+        if ($PSCmdlet.ShouldProcess($newest.DisplayName, "enable auto-update on available-intent assignments")) {
+            Set-AssignmentAutoUpdate -AppId $newest.Id -Enabled $true -IntentFilter 'available' | Out-Null
         }
     }
 }

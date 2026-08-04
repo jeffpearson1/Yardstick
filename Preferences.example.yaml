@@ -37,15 +37,18 @@ defaultSupersedence: true
 # before installing the new one). If false, uses "Update" (in-place upgrade).
 # Recipes can override with `uninstallPreviousVersion`.
 defaultUninstallPreviousVersion: false
-# If true, Yardstick sets `autoUpdate=true` on every assignment of the newest
-# app so that Intune pushes it to devices that already have a superseded
-# version installed. Recipes can override with `autoUpdateOnAssignment`
-# (accepted alias: `autoUpdate`).
+# If true, Yardstick enables Intune's native auto-update
+# (settings.autoUpdateSettings.autoUpdateSupersededAppsState = enabled) on the
+# newest app's *available* assignments, so Intune pushes it to devices that
+# already have a superseded version installed. Intune only honours auto-update
+# for available assignments, so required-only recipes are unaffected. Recipes
+# can override with `autoUpdateOnAssignment` (accepted alias: `autoUpdate`).
 defaultAutoUpdate: true
 # Master switch for the {DETECT} anchor behavior. When enabled, the first time
 # Yardstick updates a version-detection app under the new model, the oldest
 # surviving version is renamed "{DETECT} <DisplayName>" and preserved so it
-# continues to detect long-abandoned installs.
+# continues to detect long-abandoned installs. The anchor is always a
+# supersedence target of the newest version, always with type "Update".
 useDetectAnchor: true
 defaultOwner:
 defaultMaximumInstallationTimeInMinutes: 60

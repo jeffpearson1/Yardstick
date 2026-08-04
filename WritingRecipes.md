@@ -393,57 +393,93 @@ These settings control how Intune handles installation. All default to values in
 
 ## Supersedence & Auto-Update
 
-Yardstick uses different strategies for **available** vs **required** deployments:
+Yardstick wires up Intune's **native** update path rather than shipping a custom
+remediation. Every run, the newly uploaded version becomes the single superseding
+parent for the versions Yardstick keeps, and Intune's auto-update setting is
+switched on for its available-intent assignments.
 
-- **Available assignments** are *copied* from older versions onto the newest so
-  Company Portal listings stay stable. Intune-native supersedence + the
-  assignment-level auto-update flag then push the new version to devices that
-  already have a superseded version installed - no separate remediation
-  required.
-- **Required assignments** are *moved* from older versions onto the newest
-  (consolidating them on a single app). Supersedence and auto-update are not
-  configured for required-only recipes - required deployments already have
-  aggressive install semantics.
+Assignments are handled differently per intent:
 
-When a recipe has a mix of intents, both flows run: required moves + available
-copies, and supersedence/auto-update attach to the newest.
+- **Required assignments** are *moved* from older versions onto the newest,
+  consolidating them on a single app. Required deployments install
+  unconditionally, so nothing else is needed for them.
+- **Available assignments** are *copied* onto the newest and deliberately left in
+  place on the older version - but only when that older version ends up
+  superseded. Microsoft documents that "any application assignment changes delete
+  the component responsible for auto-updating the app" - that component is created
+  on the device when the user installs from Company Portal. Removing the old
+  available assignment would therefore break auto-update for exactly the devices
+  we want to update.
+
+When an available assignment's source will *not* be superseded - because the
+recipe sets `supersedence: false`, or because the source is a duplicate of the
+version being published - the assignment is **moved** instead, exactly as older
+Yardstick releases did. Copying without supersedence would only leave a second
+Company Portal listing with no update path.
+
+Supersedence itself is configured regardless of intent; auto-update is only
+applied to **available** assignments because Intune only honours it there
+("the supersedence auto-update only applies for *available* assignments").
 
 **`supersedence`** (boolean) - Whether the newest version declares supersedence over kept older versions.
 - Default: From `preferences.yaml` (`defaultSupersedence`)
 - Example: `supersedence: true`
 - Set `false` for apps where you deliberately want side-by-side installs.
-- Only takes effect when at least one available-intent assignment is involved.
 
 **`uninstallPreviousVersion`** (boolean) - Selects the supersedence behavior.
 - `true` -> Intune supersedence type `Replace` (uninstall the prior version first)
 - `false` -> Intune supersedence type `Update` (in-place upgrade; default)
 - Default: From `preferences.yaml` (`defaultUninstallPreviousVersion`)
+- The `{DETECT}` anchor is always superseded with `Update`, never `Replace`.
 
-**`autoUpdateOnAssignment`** (boolean) - Sets the assignment-level `autoUpdate`
-flag so Intune pushes the new version to devices already running a superseded
-version.
+**`autoUpdateOnAssignment`** (boolean) - Enables Intune's native auto-update
+(`settings.autoUpdateSettings.autoUpdateSupersededAppsState = enabled`) so Intune
+pushes the new version to devices already running a superseded version.
 - Default: From `preferences.yaml` (`defaultAutoUpdate`)
 - Accepted alias: `autoUpdate` (older recipes continue to work).
 - Example: `autoUpdateOnAssignment: true`
-- Only applied to available-intent assignments on the newest app.
+- Only applied to available-intent assignments on the newest app - required-only
+  recipes are a no-op here.
+- Intune needs two device check-ins (roughly 8-16 hours) before an auto-update
+  install lands.
+
+Ordering within a run: assignments migrate first, expired versions are pruned
+next, and only then is supersedence attached. Intune refuses to delete an app that
+still participates in a supersedence relationship, so the graph is always built
+against versions that survive the run. Retention is still governed by
+`numVersionsToKeep`, and Yardstick keeps the graph inside Intune's 10-node
+supersedence limit.
 
 ## The `{DETECT}` Anchor
 
 For recipes that detect installs by *version comparison* (`detectionType: msi`,
 or `file`/`registry` with `fileDetectionMethod: version`/`registryDetectionMethod: version`),
 Yardstick preserves one "anchor" version - renamed `{DETECT} <DisplayName>` -
-that is never pruned. This ensures long-abandoned installs on stale endpoints
-remain in scope even after many new versions have released.
+that is never pruned or renamed.
+
+Supersedence only fires when Intune can *detect* the superseded app on the device.
+A recipe that keeps two versions can only detect the two most recent releases, so
+a machine that has been offline for a year is invisible to the update chain. The
+anchor is an old version whose `greaterThanOrEqual` detection rule matches almost
+any install, and the newest version supersedes it - which is what actually pulls
+those stale endpoints forward.
 
 - The anchor is chosen automatically the first time Yardstick runs against an
   app under the new model: the oldest surviving Intune version is pinned.
 - After it is pinned it stays put forever (unless you manually rename or
   delete it in the Intune console).
-- The anchor holds no supersedence and receives none.
+- The anchor is always a supersedence *target* of the newest version, and always
+  with type `Update` - a `Replace` against its wide detection rule would uninstall
+  the app from every device that has any version installed.
+- The anchor never supersedes anything itself, needs no assignments (a superseded
+  app does not have to be targeted), and is excluded from `(N-x)` renaming.
 - Non-version detection types (script, existence-only checks) do not use an
   anchor - retention behaves like a flat `numVersionsToKeep`.
 - Master switch: `useDetectAnchor: false` in `preferences.yaml` disables the
   anchor concept entirely.
+
+Existing tenants can be brought onto this model in one pass with
+`.\Migrate-ToSupersedenceModel.ps1` (supports `-WhatIf` and `-ApplicationId`).
 
 ## Recipe Inheritance
 

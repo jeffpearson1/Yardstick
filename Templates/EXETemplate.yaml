@@ -28,13 +28,13 @@ restartBehavior: suppress
 minOSVersion: W10_20H2
 
 # Supersedence and auto-update (all optional; inherit from preferences.yaml).
-# When `supersedence` is true, the newest uploaded version declares Intune-
-# native supersedence over all kept older versions. When
-# `uninstallPreviousVersion` is true the supersedence type is "Replace"
-# (Intune uninstalls the prior version before installing the new one);
-# otherwise it is "Update" (in-place upgrade). When
-# `autoUpdateOnAssignment` is true, Intune pushes the new version to every
-# device that already has a superseded version installed.
+# `supersedence`: the newest uploaded version declares Intune-native
+#   supersedence over every version Yardstick keeps, plus the {DETECT} anchor.
+# `uninstallPreviousVersion`: true -> supersedence type "Replace" (Intune
+#   uninstalls the prior version first); false -> "Update" (in-place upgrade).
+# `autoUpdateOnAssignment`: enables Intune's native auto-update
+#   (autoUpdateSupersededAppsState) so devices running a superseded version are
+#   pulled forward. Intune only honours this on *available* assignments.
 #supersedence: true
 #uninstallPreviousVersion: false
 #autoUpdateOnAssignment: true
