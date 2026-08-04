@@ -3,7 +3,7 @@ urlRedirects: true
 preDownloadScript: |
   $version = $url -split '/' | Select-Object -Last 1
   $fileDetectionVersion = $version
-installScript: msiexec /i <filename> /qn /norestart ORGANIZATION="DEF" ONBOARDING=false
+installScript: msiexec /i <filename> /qn /norestart ORGANIZATION="<YOUR_ORG>" ONBOARDING=false
 uninstallScript: msiexec /x <productcode> /silent
 fileName: CloudflareWarp.msi
 iconFile: cloudflare.png
