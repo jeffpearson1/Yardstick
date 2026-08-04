@@ -86,7 +86,7 @@ Yardstick uses Intune's native update path instead of a custom remediation. Afte
 
 * The new version declares **supersedence** over every older version Yardstick keeps (and over the `{DETECT}` anchor, when one exists). ```uninstallPreviousVersion``` selects between Intune's `Update` (in-place upgrade, default) and `Replace` (uninstall first) behavior.
 * **Auto-update** (```autoUpdateSupersededAppsState```) is turned on for the new version's *available* assignments, so Intune pulls devices running a superseded version forward without any user action. Intune only supports auto-update for available assignments, so required-only recipes are unaffected.
-* **Required** assignments are moved onto the new version; **available** assignments are copied and left in place, because removing an available assignment destroys the on-device component Intune uses to auto-update.
+* **Required** assignments are moved onto the new version; **available** assignments are copied and left in place, because removing an available assignment destroys the on-device component Intune uses to auto-update. If the older version will not be superseded (```supersedence: false```), available assignments are moved instead, as in earlier releases.
 
 Defaults live in ```preferences.yaml``` (```defaultSupersedence```, ```defaultUninstallPreviousVersion```, ```defaultAutoUpdate```, ```useDetectAnchor```) and can be overridden per recipe. See [WritingRecipes.md](WritingRecipes.md) for details, including the `{DETECT}` anchor that keeps long-abandoned installs in scope.
 

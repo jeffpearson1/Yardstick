@@ -154,9 +154,11 @@ foreach ($file in $recipeFiles) {
     }
 
     # 3. Migrate lingering assignments from older versions to newest, split by
-    #    intent: MOVE required, COPY available. The required pass also carries the
-    #    dependency migration, so it runs for every old app even when there are no
-    #    required assignments to move.
+    #    intent: MOVE required, COPY available (only when the source ends up
+    #    superseded - otherwise copying would leave a duplicate Company Portal
+    #    listing with no update path, so we move instead). The required pass also
+    #    carries the dependency migration, so it runs for every old app even when
+    #    there are no required assignments to move.
     if (-not $SkipMove) {
         foreach ($old in $olderKept) {
             $assigns = @(Get-IntuneWin32AppAssignment -Id $old.id)
@@ -170,9 +172,10 @@ foreach ($file in $recipeFiles) {
                     Write-Warning "  failed moving required assignments from $($old.DisplayName): $_"
                 }
             }
-            if ($availCount -gt 0 -and $PSCmdlet.ShouldProcess($old.DisplayName, "copy $availCount available assignment(s) to newest")) {
+            $verb = if ($supersedence) { 'copy' } else { 'move' }
+            if ($availCount -gt 0 -and $PSCmdlet.ShouldProcess($old.DisplayName, "$verb $availCount available assignment(s) to newest")) {
                 try {
-                    Move-AssignmentsAndDependencies -From $old -To $newest -AvailableDateOffset 0 -DeadlineDateOffset 0 -IntentFilter 'available' -CopyOnly -SkipDependencies
+                    Move-AssignmentsAndDependencies -From $old -To $newest -AvailableDateOffset 0 -DeadlineDateOffset 0 -IntentFilter 'available' -CopyOnly:$supersedence -SkipDependencies
                 } catch {
                     Write-Warning "  failed copying available assignments from $($old.DisplayName): $_"
                 }

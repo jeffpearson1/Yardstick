@@ -494,4 +494,14 @@ Describe "Move-AssignmentsAndDependencies intent split" {
         Move-AssignmentsAndDependencies -From $from -To $to -IntentFilter 'required'
         Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppAssignmentGroup -Times 0 -Exactly
     }
+
+    It "-CopyOnly:`$false falls back to a move" {
+        # Yardstick passes -CopyOnly:$willBeSuperseded, so the false case must
+        # behave exactly like the old move-everything behavior.
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -IntentFilter 'available' -CopyOnly:$false -SkipDependencies
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $Intent -eq 'available' }
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $GroupID -eq 'g-avail' }
+    }
 }

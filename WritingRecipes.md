@@ -404,11 +404,18 @@ Assignments are handled differently per intent:
   consolidating them on a single app. Required deployments install
   unconditionally, so nothing else is needed for them.
 - **Available assignments** are *copied* onto the newest and deliberately left in
-  place on the older version. Microsoft documents that "any application assignment
-  changes delete the component responsible for auto-updating the app" - that
-  component is created on the device when the user installs from Company Portal.
-  Removing the old available assignment would therefore break auto-update for
-  exactly the devices we want to update.
+  place on the older version - but only when that older version ends up
+  superseded. Microsoft documents that "any application assignment changes delete
+  the component responsible for auto-updating the app" - that component is created
+  on the device when the user installs from Company Portal. Removing the old
+  available assignment would therefore break auto-update for exactly the devices
+  we want to update.
+
+When an available assignment's source will *not* be superseded - because the
+recipe sets `supersedence: false`, or because the source is a duplicate of the
+version being published - the assignment is **moved** instead, exactly as older
+Yardstick releases did. Copying without supersedence would only leave a second
+Company Portal listing with no update path.
 
 Supersedence itself is configured regardless of intent; auto-update is only
 applied to **available** assignments because Intune only honours it there

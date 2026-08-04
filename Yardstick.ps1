@@ -1062,19 +1062,23 @@ foreach ($AppId_Processing in $Applications) {
         }
 
         # 6. Intent-based assignment handling.
-        #    - Required: MOVE from older versions to newest (consolidate on one app;
-        #      required deployments already install unconditionally).
-        #    - Available: COPY from older versions to newest (leave the source
-        #      assignment in place). Intune builds the auto-update component on the
-        #      device when a user installs from Company Portal, and documents that
-        #      "any application assignment changes delete the component responsible
-        #      for auto-updating the app" - so removing the available assignment
-        #      from the old version would break auto-update for exactly the devices
-        #      we are trying to update. Supersedence + auto-update on the newest
-        #      version does the pushing instead.
+        #    - Required: MOVE from older versions to newest, as Yardstick has always
+        #      done - required deployments install unconditionally, so consolidating
+        #      them on a single app is correct.
+        #    - Available: COPY to the newest and leave the source assignment in
+        #      place, but only when the source will actually end up superseded.
+        #      Intune builds the auto-update component on the device when a user
+        #      installs from Company Portal, and documents that "any application
+        #      assignment changes delete the component responsible for auto-updating
+        #      the app" - so removing the available assignment from a superseded
+        #      version would break auto-update for exactly the devices we want to
+        #      update. Where supersedence will NOT be attached, copying would just
+        #      leave a duplicate Company Portal listing with no update path, so we
+        #      fall back to moving.
         #    Dependencies migrate exactly once per source app (during the required
         #    pass); the available pass runs with -SkipDependencies to avoid
         #    double-processing them.
+        $SameVersionIds = @($SameVersionApps | Select-Object -ExpandProperty id)
         $allOlder = @($ToKeep) + @($ToPrune)
         foreach ($old in $allOlder) {
             try {
@@ -1092,13 +1096,16 @@ foreach ($AppId_Processing in $Applications) {
 
             $availOnOld = @(Get-IntuneWin32AppAssignment -Id $old.id | Where-Object Intent -eq 'available')
             if ($availOnOld.Count -gt 0) {
+                # A same-version duplicate is never a supersedence target (superseding
+                # an identical version is meaningless), and it is retired this run.
+                $willBeSuperseded = $Script:Supersedence -and ($SameVersionIds -notcontains $old.id)
                 try {
                     Move-AssignmentsAndDependencies -From $old -To $CurrentApp `
                         -AvailableDateOffset $Script:AvailableDateOffset `
                         -DeadlineDateOffset $Script:DeadlineDateOffset `
-                        -IntentFilter 'available' -CopyOnly -SkipDependencies
+                        -IntentFilter 'available' -CopyOnly:$willBeSuperseded -SkipDependencies
                 } catch {
-                    Write-Log "ERROR: Failed available-intent copy from $($old.DisplayName): $_"
+                    Write-Log "ERROR: Failed available-intent migration from $($old.DisplayName): $_"
                 }
             }
         }
@@ -1143,7 +1150,6 @@ foreach ($AppId_Processing in $Applications) {
         #    version of it installed.
         $supersededCount = 0
         if ($Script:Supersedence) {
-            $SameVersionIds = @($SameVersionApps | Select-Object -ExpandProperty id)
             $SupersedenceTargets = @($ToKeep)
             # Anything we intended to prune but could not (protected by a dependent,
             # or the delete was refused) still needs to be superseded so devices on
