@@ -554,6 +554,31 @@ function Move-AssignmentsAndDependencies {
 
     .PARAMETER ProtectedSourceIds
     HashSet to record source application IDs that should be protected from deletion.
+
+    .PARAMETER IntentFilter
+    When set, only assignments matching this intent are processed (e.g. 'required',
+    'available'). Empty (default) processes all intents.
+
+    .PARAMETER CopyOnly
+    When set, assignments are added to $To but not removed from $From.
+
+    .PARAMETER SkipDependencies
+    When set, dependency migration (child + parent link rewriting) is skipped.
+    Useful when calling this function twice for different intents against the
+    same From/To pair - dependencies only need to be migrated once.
+
+    .NOTES
+    All Devices and All Users assignments that use an assignment filter are not
+    migrated. Add-IntuneWin32AppAssignmentAllDevices/AllUsers accept a filter by
+    name only, while Get-IntuneWin32AppAssignment reports the filter id, so the
+    filter cannot be carried across - and migrating without it would widen the
+    assignment to every device or user. Those assignments are logged and left on
+    $From for manual handling.
+
+    Removal matches on the target alone (a group id, or the virtual target type)
+    because the IntuneWin32App module cannot delete an individual assignment. If
+    $From holds more than one assignment for the same target, migrating one of
+    them removes them all; this is logged when it happens.
     #>
     param(
         [Parameter(Mandatory, Position=0)]
@@ -567,7 +592,11 @@ function Move-AssignmentsAndDependencies {
         [bool] $AllowDependentLinkUpdates = $true,
         [hashtable] $DependentLinkOptions,
         [System.Collections.IDictionary] $DependentUpdateStatus,
-        [System.Collections.Generic.HashSet[string]] $ProtectedSourceIds
+        [System.Collections.Generic.HashSet[string]] $ProtectedSourceIds,
+        [ValidateSet('', 'required', 'available')]
+        [string] $IntentFilter = '',
+        [switch] $CopyOnly,
+        [switch] $SkipDependencies
     )
     # If IDs or Display Names were provided instead of application objects, get the app objects
     if ($From -is [String]) {
@@ -607,8 +636,12 @@ function Move-AssignmentsAndDependencies {
     Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
-    $AvailableDate = (Get-Date).AddDays($AvailableDateOffset).ToString("MM/dd/yyyy")
-    $DeadlineDate = (Get-Date).AddDays($DeadlineDateOffset).ToString("MM/dd/yyyy")
+    # Kept as DateTime, not a formatted string: rebuilding a date by formatting
+    # to "MM/dd/yyyy" and parsing it back with Get-Date makes the result depend
+    # on the host's culture, so on a dd/MM/yyyy host 08/04 silently becomes
+    # 8 April and a day past the 12th throws outright.
+    $AvailableDate = (Get-Date).AddDays($AvailableDateOffset).Date
+    $DeadlineDate = (Get-Date).AddDays($DeadlineDateOffset).Date
     $childDependencies = @()
     $parentDependencies = @()
     if ($FromDependencies) {
@@ -663,198 +696,308 @@ function Move-AssignmentsAndDependencies {
             default { return "Detect" }
         }
     }
+    # Assignment targets that carry no GroupID and need their own cmdlets.
+    $allDevicesTarget = "#microsoft.graph.allDevicesAssignmentTarget"
+    $allUsersTarget = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+
     if ($FromAssignments) {
-        foreach ($Assignment in $FromAssignments) {
-            # Skip assignments without a GroupID
-            if (!$Assignment.GroupID) { 
-                Write-Log "Skipping assignment without a GroupID."
-                continue 
+        # Removal matches on the target alone - a group id, or the virtual target
+        # type - so a source app holding two assignments for the same target (an
+        # include plus an exclude, or two different intents) loses both when one
+        # of them is migrated. The module exposes no way to delete a single
+        # assignment, so warn rather than removing more than was migrated.
+        $targetCounts = @{}
+        foreach ($existingAssignment in $FromAssignments) {
+            $countKey = if ($existingAssignment.GroupID) { $existingAssignment.GroupID } else { $existingAssignment.Type }
+            if ($countKey) {
+                $targetCounts[$countKey] = 1 + [int]$targetCounts[$countKey]
             }
+        }
+
+        foreach ($Assignment in $FromAssignments) {
+            $targetType = $Assignment.Type
+            $isVirtualTarget = ($targetType -eq $allDevicesTarget) -or ($targetType -eq $allUsersTarget)
+            $isExclusion = ($Assignment.GroupMode -eq "Exclude")
+            $hasFilter = $Assignment.FilterID -and $Assignment.FilterType -and ($Assignment.FilterType -ne "none")
+            $assignmentLabel = if ($targetType -eq $allDevicesTarget) {
+                "All Devices"
+            }
+            elseif ($targetType -eq $allUsersTarget) {
+                "All Users"
+            }
+            elseif ($Assignment.GroupID) {
+                "group $($Assignment.GroupID)"
+            }
+            else {
+                $null
+            }
+
+            if (-not $assignmentLabel) {
+                Write-Log "Skipping assignment with no GroupID and unsupported target type '$targetType'."
+                continue
+            }
+            if ($IntentFilter -and ($Assignment.Intent -ne $IntentFilter)) {
+                Write-Log "Skipping assignment for $assignmentLabel - intent $($Assignment.Intent) does not match filter $IntentFilter"
+                continue
+            }
+            # Add-IntuneWin32AppAssignmentAllDevices/AllUsers take a filter by
+            # name only, and Get-IntuneWin32AppAssignment reports the filter id,
+            # so the filter cannot be carried across. Dropping it would widen the
+            # assignment to every device or user, so refuse to migrate instead.
+            if ($isVirtualTarget -and $hasFilter) {
+                Write-Log "WARNING: Skipping $assignmentLabel assignment because filter $($Assignment.FilterID) ($($Assignment.FilterType)) cannot be reapplied by ID. Migrate this assignment manually."
+                continue
+            }
+
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
             Write-Verbose $Assignment
-            Write-Log "Processing assignment for group $($Assignment.GroupID) with intent $($Assignment.Intent)"
-            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                if ($Assignment.InstallTimeSettings) {
-                    Write-Log "Assignment has install time settings."
-                    $useLocalTime = [bool]$Assignment.InstallTimeSettings.useLocalTime
-                    Write-Log "UseLocalTime: $useLocalTime"
-                    $startDateTime = $Assignment.InstallTimeSettings.startDateTime
-                    $deadlineDateTime = $Assignment.InstallTimeSettings.deadlineDateTime
-                    if ($null -ne $startDateTime) {
-                        $startDateTime = Get-Date -Date "$AvailableDate $($startDateTime.ToString("HH:mm"))"
-                        Write-Log "StartDateTime: $startDateTime"
-                    }
-                    if ($null -ne $deadlineDateTime) {
-                        $deadlineDateTime = Get-Date -Date "$DeadlineDate $($deadlineDateTime.ToString("HH:mm"))"
-                        Write-Log "DeadlineDateTime: $deadlineDateTime"
-                    }
-                    
+            Write-Log "Processing $assignmentLabel assignment with intent $($Assignment.Intent)$(if ($isExclusion) { ' (exclusion)' })"
+
+            # Reset per assignment - these must not leak into the next iteration.
+            $startDateTime = $null
+            $deadlineDateTime = $null
+            $useLocalTime = $false
+            if ($Assignment.InstallTimeSettings) {
+                $useLocalTime = [bool]$Assignment.InstallTimeSettings.useLocalTime
+                $sourceStart = $Assignment.InstallTimeSettings.startDateTime
+                $sourceDeadline = $Assignment.InstallTimeSettings.deadlineDateTime
+                # Rebase onto the offset date, keeping the source time of day.
+                # Cast defensively: Graph hands these back as DateTime, but a
+                # string would make .Hour/.Minute silently unavailable.
+                if ($null -ne $sourceStart) {
+                    $sourceStart = [datetime]$sourceStart
+                    $startDateTime = $AvailableDate.AddHours($sourceStart.Hour).AddMinutes($sourceStart.Minute)
                 }
-                if ($Assignment.FilterType -eq "none") {
-                    if ($Assignment.InstallTimeSettings) {
-                        if ($startDateTime -and $deadlineDateTime) {
-                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline and available time settings."
-                            try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime | Out-Null
-                                $successfullyAdded = $true
-                            }
-                            catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                            }
+                if ($null -ne $sourceDeadline) {
+                    $sourceDeadline = [datetime]$sourceDeadline
+                    $deadlineDateTime = $DeadlineDate.AddHours($sourceDeadline.Hour).AddMinutes($sourceDeadline.Minute)
+                }
+
+                # Add-IntuneWin32AppAssignmentGroup rejects a deadline that is
+                # already in the past unless an available time accompanies it -
+                # and it rejects it with `break`, which escapes our try/catch and
+                # kills the foreach, silently abandoning every assignment still
+                # to be migrated. Rebasing onto today (offset 0) puts any
+                # morning deadline in the past for an afternoon run, so nudge it
+                # forward. Intune treats a just-passed deadline the same way:
+                # install at the next check-in.
+                if (($null -ne $deadlineDateTime) -and ($null -eq $startDateTime) -and ($deadlineDateTime -lt (Get-Date))) {
+                    $adjustedDeadline = (Get-Date).AddMinutes(5)
+                    Write-Log "WARNING: Rebased deadline $deadlineDateTime for $assignmentLabel is in the past; moving it to $adjustedDeadline so the assignment is still accepted."
+                    $deadlineDateTime = $adjustedDeadline
+                }
+
+                Write-Log "Install time settings - UseLocalTime: $useLocalTime, StartDateTime: $startDateTime, DeadlineDateTime: $deadlineDateTime"
+            }
+
+            $assignmentParams = @{
+                ID     = $To.id
+                Intent = $Assignment.Intent
+            }
+            if ($isExclusion) {
+                # An exclusion carries no settings of its own: the Exclude
+                # parameter set accepts only ID, GroupID and Intent.
+                $assignmentParams["Exclude"] = $true
+                $assignmentParams["GroupID"] = $Assignment.GroupID
+            }
+            else {
+                if (-not $isVirtualTarget) {
+                    $assignmentParams["Include"] = $true
+                    $assignmentParams["GroupID"] = $Assignment.GroupID
+                }
+                if ($Assignment.Notifications) {
+                    $assignmentParams["Notification"] = $Assignment.Notifications
+                }
+                if ($startDateTime) {
+                    $assignmentParams["AvailableTime"] = $startDateTime
+                }
+                if ($deadlineDateTime) {
+                    $assignmentParams["DeadlineTime"] = $deadlineDateTime
+                }
+                if ($startDateTime -or $deadlineDateTime) {
+                    $assignmentParams["UseLocalTime"] = $useLocalTime
+                }
+                if ($hasFilter -and (-not $isVirtualTarget)) {
+                    $assignmentParams["FilterMode"] = $Assignment.FilterType
+                    $assignmentParams["FilterID"] = $Assignment.FilterID
+                }
+            }
+
+            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                try {
+                    # The IntuneWin32App cmdlets bail out of their Begin block
+                    # with `break` (past deadline, expired token). A bare `break`
+                    # from a called function is not catchable and unwinds to the
+                    # caller's nearest enclosing loop - without this single-pass
+                    # foreach to absorb it, one bad assignment would silently
+                    # abandon every assignment after it. Absorbed here, it just
+                    # leaves $addReturned false and is retried and logged.
+                    $addReturned = $false
+                    foreach ($breakGuard in 1) {
+                        if ($targetType -eq $allDevicesTarget) {
+                            Add-IntuneWin32AppAssignmentAllDevices @assignmentParams | Out-Null
                         }
-                        elseif ($startDateTime) {
-                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with available time settings."
-                            try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime | Out-Null
-                                $successfullyAdded = $true
-                            }
-                            catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                            }
+                        elseif ($targetType -eq $allUsersTarget) {
+                            Add-IntuneWin32AppAssignmentAllUsers @assignmentParams | Out-Null
                         }
-                        elseif ($deadlineDateTime) {
-                            Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline time settings."
-                            try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime | Out-Null
-                                $successfullyAdded = $true
-                            }
-                            catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                            }
+                        else {
+                            Add-IntuneWin32AppAssignmentGroup @assignmentParams | Out-Null
                         }
+                        $addReturned = $true
+                    }
+                    if ($addReturned) {
+                        $successfullyAdded = $true
+                        Write-Log "Added $assignmentLabel assignment to $($To.id)."
                     }
                     else {
-                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
-                        try {
-                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications | Out-Null
-                            $successfullyAdded = $true
-                        }
-                        catch {
-                            Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                        }
-                    }
-                    
-                }
-                else {
-                    # If there is a filter
-                    if ($startDateTime -and $deadlineDateTime) {
-                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline and available time settings."
-                        try {
-                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
-                            $successfullyAdded = $true
-                        } catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                        }
-                    } elseif ($startDateTime) {
-                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with available time settings."
-                        try {
-                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -AvailableTime $startDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
-                            $successfullyAdded = $true
-                        } catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                        }
-                    } elseif ($deadlineDateTime) {
-                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) with deadline time settings."
-                        try {
-                            Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -DeadlineTime $deadlineDateTime -UseLocalTime $useLocalTime -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
-                            $successfullyAdded = $true
-                        } catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                        }
-                    } else {
-                        Write-Log "Adding assignment to $($To.id) for group $($Assignment.GroupID) without time settings."
-                        try {
-                                Add-IntuneWin32AppAssignmentGroup -Include -ID $To.id -GroupID $Assignment.GroupID -Intent $Assignment.Intent -Notification $Assignment.Notifications -FilterMode $Assignment.FilterType -FilterID $Assignment.FilterID | Out-Null
-                                $successfullyAdded = $true
-                        } catch {
-                                Write-Log "Failed to add assignment to $($To.id) for group $($Assignment.GroupID): $_"
-                        }
+                        Write-Log "Add of $assignmentLabel assignment to $($To.id) aborted before returning. Check the preceding warning for the reason."
                     }
                 }
-                if (!$successfullyAdded) {
-                    Write-Log "Retrying to add assignment to $($To.id) for group $($Assignment.GroupID). Attempt $($try) of $($maxRetries)."
+                catch {
+                    Write-Log "Failed to add $assignmentLabel assignment to $($To.id): $_"
+                }
+                if (!$successfullyAdded -and ($try -lt $maxRetries)) {
+                    Write-Log "Retrying to add $assignmentLabel assignment to $($To.id). Attempt $($try) of $($maxRetries)."
                     Start-Sleep -Seconds 2
                 }
             }
+
             # Remove the old assignment
-            if ($successfullyAdded) {
-                for ($i = 0; $i -le 3; $i++) {
+            if ($successfullyAdded -and -not $CopyOnly) {
+                $countKey = if ($Assignment.GroupID) { $Assignment.GroupID } else { $Assignment.Type }
+                if ([int]$targetCounts[$countKey] -gt 1) {
+                    Write-Log "WARNING: $($From.id) has $($targetCounts[$countKey]) assignments for $assignmentLabel. Removing one removes them all."
+                }
+                $maxRemovalAttempts = 3
+                $successfullyRemoved = $false
+                for ($i = 1; ($i -le $maxRemovalAttempts) -and (-not $successfullyRemoved); $i++) {
+                    $removeFailure = $null
                     try {
-                        Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID | Out-Null
-                        if ($?) {
-                            Write-Log "Successfully removed assignment from $($From.id) for group $($Assignment.GroupID)"
-                            break
+                        # Same single-pass foreach as above, absorbing a `break`
+                        # out of the cmdlet's Begin block so it cannot unwind
+                        # this retry loop and the assignment loop around it.
+                        $removeReturned = $false
+                        foreach ($breakGuard in 1) {
+                            if ($targetType -eq $allDevicesTarget) {
+                                Remove-IntuneWin32AppAssignmentAllDevices -ID $From.id | Out-Null
+                            }
+                            elseif ($targetType -eq $allUsersTarget) {
+                                Remove-IntuneWin32AppAssignmentAllUsers -ID $From.id | Out-Null
+                            }
+                            else {
+                                Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID | Out-Null
+                            }
+                            $removeReturned = $true
                         }
-                    } catch {
-                        Write-Log "Failed to remove assignment $($Assignment.GroupID) from group $($From.id):"
-                        if ($i -eq 3) {
-                            Write-Log "Failed to remove assignment after 3 attempts. Skipping removal."
-                            break
-                        } else {
-                            Write-Log "Retrying removal of assignment from $($From.id) for group $($Assignment.GroupID). Attempt $($i + 1) of 3."
+                        if ($removeReturned) {
+                            $successfullyRemoved = $true
+                            Write-Log "Successfully removed $assignmentLabel assignment from $($From.id)."
+                        }
+                        else {
+                            $removeFailure = "aborted before returning. Check the preceding warning for the reason"
+                        }
+                    }
+                    catch {
+                        $removeFailure = $_
+                    }
+                    if (-not $successfullyRemoved) {
+                        Write-Log "Failed to remove $assignmentLabel assignment from $($From.id): $removeFailure"
+                        if ($i -eq $maxRemovalAttempts) {
+                            Write-Log "Failed to remove assignment after $maxRemovalAttempts attempts. Skipping removal."
+                        }
+                        else {
+                            Write-Log "Retrying removal of $assignmentLabel assignment from $($From.id). Attempt $($i + 1) of $maxRemovalAttempts."
                             Start-Sleep -Seconds 2
-                            continue
                         }
                     }
                 }
             }
         }
     }
-    if ($childDependencies -and $childDependencies.Count -gt 0) {
+    if ($SkipDependencies) {
+        Write-Log "Skipping dependency migration as requested."
+        return
+    }
+    # Child dependencies are the apps that $From depends on; $To needs to depend
+    # on the same apps. Add-IntuneWin32AppDependency REPLACES an app's entire
+    # dependency set (it only preserves supersedence), so the complete desired
+    # list has to be submitted in one call - adding them one at a time drops
+    # every dependency configured by the previous call.
+    if ($childDependencies.Count -gt 0) {
+        # targetId -> dependencyType. Seed with what $To already depends on so
+        # existing dependencies survive the replace.
+        $desiredDependencies = [ordered]@{}
+        foreach ($existing in (Get-IntuneWin32AppDependency -ID $To.id)) {
+            if (($existing.PSObject.Properties.Name -contains "targetType") -and ($existing.targetType -eq "parent")) {
+                continue
+            }
+            $desiredDependencies[$existing.targetId] = & $normalizeDependencyType $existing.dependencyType
+        }
         foreach ($dependency in $childDependencies) {
+            # An app cannot depend on itself, and $To must not inherit a
+            # dependency on the app it is replacing.
+            if (($dependency.targetId -eq $To.id) -or ($dependency.targetId -eq $From.id)) {
+                Write-Log "Skipping child dependency $($dependency.targetId) because it points at the source or target app."
+                continue
+            }
+            $desiredDependencies[$dependency.targetId] = & $normalizeDependencyType $dependency.dependencyType
+        }
+
+        if ($desiredDependencies.Count -eq 0) {
+            Write-Log "No child dependencies to migrate to $($To.id)."
+        }
+        else {
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
-            $dependentApps = Get-IntuneWin32AppDependency -ID $dependency.sourceId
-            if ($dependentApps -and $dependentApps.Count -gt 1) {
-
-                Write-Log "Multiple dependencies found for $($dependency.sourceId)"
-                foreach ($dependentApp in $dependentApps) {
-                    $appDependenciesToMigrate = Get-IntuneWin32AppDependency -ID $dependentApp.id
-                    # Clear all existing dependencies
-                    Remove-IntuneWin32AppDependency -ID $dependentApp.targetId
-                    # Add all dependencies back that are not the one we are moving
-                    foreach ($appDependency in $appDependenciesToMigrate) {
-                        $successfullyAdded = $false
-                        $try = 0
-                        while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                            if ($appDependency.targetId -ne $dependency.targetId) {
-                                $toAdd = New-IntuneWin32AppDependency -ID $appDependency.id -DependencyType $appDependency.dependencyType
-                                Add-IntuneWin32AppDependency -ID $dependentApp.targetId -Dependency $toAdd | Out-Null
-                            } else {
-                                # Add the new dependency instead
-                                $NewDependency = New-IntuneWin32AppDependency -ID $To.id -DependencyType $dependency.dependencyType
-                                Add-IntuneWin32AppDependency -ID $dependency.targetId -Dependency $NewDependency | Out-Null
-                            }
-                            # Check that it worked
-                            $AssignedDependencies = Get-IntuneWin32AppDependency -ID $To.id
-                            if ($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
-                                $successfullyAdded = $true
-                                Write-Log "Dependency $($dependency.dependencyId) added successfully to $($To.id)"
-                            } else {
-                                Write-Log "Retrying to add dependency $($dependency.dependencyId) to $($To.id). Attempt $($try) of $($maxRetries)."
-                                Start-Sleep -Seconds 2
-                            }
+            while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                try {
+                    $dependencyObjects = @()
+                    foreach ($targetId in $desiredDependencies.Keys) {
+                        # Returns $null and warns if the target app no longer exists.
+                        $dependencyObject = New-IntuneWin32AppDependency -ID $targetId -DependencyType $desiredDependencies[$targetId]
+                        if ($dependencyObject) {
+                            $dependencyObjects += $dependencyObject
+                        }
+                        else {
+                            Write-Log "Unable to build a dependency object for $targetId. It may no longer exist in Intune."
                         }
                     }
-                }
-            } elseif ($dependentApps) {
-                while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
-                    $NewDependency = New-IntuneWin32AppDependency -ID $dependency.targetId -DependencyType $dependency.dependencyType
-                    Add-IntuneWin32AppDependency -ID $To.id -Dependency $NewDependency | Out-Null
-                    # Check that it worked
-                    $AssignedDependencies = Get-IntuneWin32AppDependency -ID $To.id
-                    if ($AssignedDependencies | Where-Object targetId -eq $dependency.targetId) {
+                    if ($dependencyObjects.Count -eq 0) {
+                        Write-Log "None of the child dependencies could be resolved. Skipping dependency migration to $($To.id)."
+                        break
+                    }
+
+                    Add-IntuneWin32AppDependency -ID $To.id -Dependency $dependencyObjects | Out-Null
+
+                    # Add-IntuneWin32AppDependency warns instead of throwing when
+                    # Graph rejects the update, so read the result back rather
+                    # than assuming the call succeeded.
+                    $assignedTargets = @(Get-IntuneWin32AppDependency -ID $To.id |
+                        Where-Object { $_.targetType -ne "parent" } |
+                        ForEach-Object { $_.targetId })
+                    $missingTargets = @($dependencyObjects.targetId | Where-Object { $assignedTargets -notcontains $_ })
+                    if ($missingTargets.Count -eq 0) {
                         $successfullyAdded = $true
-                        Write-Log "Dependency $($dependency.targetId) added successfully to $($To.id)"
+                        Write-Log "Migrated $($dependencyObjects.Count) child dependency(ies) to $($To.id): $($dependencyObjects.targetId -join ', ')"
+                    }
+                    else {
+                        Write-Log "Dependencies missing from $($To.id) after attempt $($try) of $($maxRetries): $($missingTargets -join ', ')"
                     }
                 }
-            } else {
-                Write-Log "No dependencies found for $($dependency.sourceId). Skipping dependency move."
+                catch {
+                    Write-Log "Failed to migrate child dependencies to $($To.id) on attempt $($try) of $($maxRetries): $_"
+                }
+
+                if (!$successfullyAdded -and ($try -lt $maxRetries)) {
+                    Start-Sleep -Seconds 2
+                }
             }
-            
+            if (!$successfullyAdded) {
+                Write-Log "Unable to migrate child dependencies to $($To.id) after $maxRetries attempts."
+            }
         }
     }
 
@@ -1024,10 +1167,223 @@ function Get-SameAppAllVersions {
         return @()
     }
     
-    # Only return apps that have the same name (not ones that look the same) and apps that are pending approval
-    $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (N-*")})
+    # Include the current name, any (N-x) rename, and the {DETECT} anchor for the same app.
+    $anchorName = "{DETECT} $DisplayName"
+    $sortable = ($AllSimilarApps | Where-Object {
+        ($_.DisplayName -eq $DisplayName) -or
+        ($_.DisplayName -like "$DisplayName (N-*") -or
+        ($_.DisplayName -eq $anchorName)
+    })
     # Sort by version descending, then by createdDateTime descending
     return $sortable | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true}
+}
+
+
+
+function Test-IsVersionDetection {
+    <#
+    .SYNOPSIS
+    Returns $true when the detection type is one that compares against a version
+    number and therefore benefits from a {DETECT} anchor to catch older installs.
+    #>
+    param(
+        [string]$DetectionType,
+        [string]$FileDetectionMethod,
+        [string]$RegistryDetectionMethod
+    )
+    switch ($DetectionType) {
+        'msi'      { return $true }
+        'file'     { return ($FileDetectionMethod -eq 'version') }
+        'registry' { return ($RegistryDetectionMethod -eq 'version') }
+        default    { return $false }
+    }
+}
+
+
+function Get-DetectAnchor {
+    <#
+    .SYNOPSIS
+    Returns the "{DETECT} <DisplayName>" Intune app object if one exists, else $null.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$DisplayName
+    )
+    $anchorName = "{DETECT} $DisplayName"
+    $matches = Get-IntuneWin32App -DisplayName $anchorName -ErrorAction SilentlyContinue
+    if (-not $matches) { return $null }
+    return ($matches | Where-Object DisplayName -eq $anchorName | Select-Object -First 1)
+}
+
+
+function Set-DetectAnchor {
+    <#
+    .SYNOPSIS
+    Renames the given Intune app to "{DETECT} <DisplayName>" so it is preserved
+    across retention cleanup as the low-water-mark detection anchor. Idempotent.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $App,
+        [Parameter(Mandatory=$true)]
+        [string]$DisplayName
+    )
+    $anchorName = "{DETECT} $DisplayName"
+    if ($App.DisplayName -eq $anchorName) {
+        Write-Log "App $($App.Id) is already the {DETECT} anchor for $DisplayName"
+        return
+    }
+    Write-Log "Pinning $($App.DisplayName) ($($App.Id)) as {DETECT} anchor for $DisplayName"
+    Set-IntuneWin32App -Id $App.Id -DisplayName $anchorName | Out-Null
+}
+
+
+function Set-YardstickSupersedence {
+    <#
+    .SYNOPSIS
+    Attaches supersedence from $NewApp to every entry in $SupersededApps, first
+    stripping any prior supersedence links off those older apps so re-runs stay
+    idempotent. Enforces Intune's 10-target maximum by truncating the oldest.
+
+    .PARAMETER Type
+    "Update" (in-place upgrade) or "Replace" (uninstall previous version first).
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $NewApp,
+        [Parameter(Mandatory=$true)]
+        [AllowEmptyCollection()]
+        [array]$SupersededApps,
+        [ValidateSet('Update','Replace')]
+        [string]$Type = 'Update'
+    )
+
+    $targets = @($SupersededApps | Where-Object { $_ -and $_.id -ne $NewApp.id })
+    if (-not $targets -or $targets.Count -eq 0) {
+        Write-Log "No supersedence targets for $($NewApp.DisplayName) - skipping"
+        # Still strip any stale supersedence off the new app in case a prior run left some.
+        try { Remove-IntuneWin32AppSupersedence -ID $NewApp.id -ErrorAction SilentlyContinue | Out-Null } catch {}
+        return 0
+    }
+
+    # Intune caps supersedence at 10 targets per parent.
+    if ($targets.Count -gt 10) {
+        Write-Log "WARNING: $($targets.Count) supersedence targets exceeds Intune's max of 10; truncating oldest"
+        $targets = $targets | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true} | Select-Object -First 10
+    }
+
+    # Strip stale forward-links off every target so we own the supersedence graph.
+    foreach ($t in $targets) {
+        try {
+            Remove-IntuneWin32AppSupersedence -ID $t.id -ErrorAction SilentlyContinue | Out-Null
+        } catch {
+            Write-Log "WARNING: Failed to clear existing supersedence on $($t.DisplayName) ($($t.id)): $_"
+        }
+    }
+
+    # Also clear any prior supersedence on the new app before re-adding so ordering is deterministic.
+    try { Remove-IntuneWin32AppSupersedence -ID $NewApp.id -ErrorAction SilentlyContinue | Out-Null } catch {}
+
+    $supersedence = foreach ($t in $targets) {
+        New-IntuneWin32AppSupersedence -ID $t.id -SupersedenceType $Type
+    }
+
+    Write-Log "Attaching supersedence ($Type) from $($NewApp.DisplayName) to $($targets.Count) target(s)"
+    Add-IntuneWin32AppSupersedence -ID $NewApp.id -Supersedence $supersedence
+    return $targets.Count
+}
+
+
+function Set-AssignmentAutoUpdate {
+    <#
+    .SYNOPSIS
+    Sets the assignment-level `autoUpdate` flag on every existing assignment of
+    the given Win32 app so Intune pushes it to devices with a superseded version
+    installed. Skips silently if no assignments exist yet.
+
+    .DESCRIPTION
+    Only assignments matching -IntentFilter (default: 'available') are touched.
+    Required-intent assignments already have aggressive install semantics and
+    should not be given autoUpdate-driven push behavior.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AppId,
+        [bool]$Enabled = $true,
+        [ValidateSet('', 'required', 'available')]
+        [string]$IntentFilter = 'available'
+    )
+
+    $assignments = Get-IntuneWin32AppAssignment -Id $AppId
+    if (-not $assignments) {
+        Write-Log "No assignments to update autoUpdate flag for $AppId"
+        return 0
+    }
+    if ($IntentFilter) {
+        $assignments = @($assignments | Where-Object Intent -eq $IntentFilter)
+        if (-not $assignments -or $assignments.Count -eq 0) {
+            Write-Log "No $IntentFilter-intent assignments on $AppId to update autoUpdate flag"
+            return 0
+        }
+    }
+
+    if (-not $Global:AuthenticationHeader) {
+        Write-Log "WARNING: Global:AuthenticationHeader missing; cannot set autoUpdate flag"
+        return 0
+    }
+
+    $headers = @{
+        Authorization  = $Global:AuthenticationHeader.Authorization
+        'Content-Type' = 'application/json'
+    }
+
+    $count = 0
+    foreach ($a in $assignments) {
+        # Preserve any existing settings on the assignment. Fetch first so we do
+        # not clobber notifications, delivery optimization, installTime, etc.
+        try {
+            $uri = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$AppId/assignments/$($a.id)"
+            $current = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -ErrorAction Stop
+
+            $settings = if ($current.settings) { $current.settings } else { @{} }
+            if (-not $settings.'@odata.type') {
+                $settings | Add-Member -NotePropertyName '@odata.type' -NotePropertyValue '#microsoft.graph.win32LobAppAssignmentSettings' -Force
+            }
+            $auSettings = @{
+                '@odata.type' = '#microsoft.graph.win32LobAppAutoUpdateSettings'
+                autoUpdateSupersededApps = if ($Enabled) { 'enabled' } else { 'notConfigured' }
+            }
+            $settings | Add-Member -NotePropertyName 'autoUpdateSettings' -NotePropertyValue $auSettings -Force
+
+            $body = @{ settings = $settings } | ConvertTo-Json -Depth 10
+            Invoke-RestMethod -Uri $uri -Headers $headers -Method Patch -Body $body -ErrorAction Stop | Out-Null
+            $count++
+        } catch {
+            Write-Log "WARNING: Failed to set autoUpdate on assignment $($a.id) for app $AppId : $_"
+        }
+    }
+    Write-Log "Set autoUpdate=$Enabled on $count assignment(s) for $AppId"
+    return $count
+}
+
+
+function Remove-YardstickApp {
+    <#
+    .SYNOPSIS
+    Safely deletes an Intune Win32 app. First strips its supersedence relationships
+    so no other app is left pointing at a deleted target, then deletes the app.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $App
+    )
+    try {
+        Remove-IntuneWin32AppSupersedence -ID $App.id -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        Write-Log "WARNING: Failed to strip supersedence from $($App.DisplayName) ($($App.id)) before delete: $_"
+    }
+    Write-Log "Removing app $($App.DisplayName) ($($App.id))"
+    Remove-IntuneWin32App -Id $App.id
 }
 
 

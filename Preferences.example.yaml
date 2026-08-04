@@ -29,7 +29,24 @@ ClientId:
 #####################################
 # PACKAGED APPLICATION DEFAULTS
 #####################################
-defaultNumVersionsToKeep: 3
+defaultNumVersionsToKeep: 2
+# Whether the newest uploaded version declares Intune-native supersedence over
+# all kept older versions. Recipes can override with `supersedence`.
+defaultSupersedence: true
+# If true, supersedence uses "Replace" (Intune uninstalls the prior version
+# before installing the new one). If false, uses "Update" (in-place upgrade).
+# Recipes can override with `uninstallPreviousVersion`.
+defaultUninstallPreviousVersion: false
+# If true, Yardstick sets `autoUpdate=true` on every assignment of the newest
+# app so that Intune pushes it to devices that already have a superseded
+# version installed. Recipes can override with `autoUpdateOnAssignment`
+# (accepted alias: `autoUpdate`).
+defaultAutoUpdate: true
+# Master switch for the {DETECT} anchor behavior. When enabled, the first time
+# Yardstick updates a version-detection app under the new model, the oldest
+# surviving version is renamed "{DETECT} <DisplayName>" and preserved so it
+# continues to detect long-abandoned installs.
+useDetectAnchor: true
 defaultOwner:
 defaultMaximumInstallationTimeInMinutes: 60
 defaultMinOSVersion: W10_20H2

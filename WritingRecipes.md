@@ -391,6 +391,60 @@ These settings control how Intune handles installation. All default to values in
 **`displayVersion`** (string) - Override version shown in Intune (optional).
 - Useful when file version differs from marketing version
 
+## Supersedence & Auto-Update
+
+Yardstick uses different strategies for **available** vs **required** deployments:
+
+- **Available assignments** are *copied* from older versions onto the newest so
+  Company Portal listings stay stable. Intune-native supersedence + the
+  assignment-level auto-update flag then push the new version to devices that
+  already have a superseded version installed - no separate remediation
+  required.
+- **Required assignments** are *moved* from older versions onto the newest
+  (consolidating them on a single app). Supersedence and auto-update are not
+  configured for required-only recipes - required deployments already have
+  aggressive install semantics.
+
+When a recipe has a mix of intents, both flows run: required moves + available
+copies, and supersedence/auto-update attach to the newest.
+
+**`supersedence`** (boolean) - Whether the newest version declares supersedence over kept older versions.
+- Default: From `preferences.yaml` (`defaultSupersedence`)
+- Example: `supersedence: true`
+- Set `false` for apps where you deliberately want side-by-side installs.
+- Only takes effect when at least one available-intent assignment is involved.
+
+**`uninstallPreviousVersion`** (boolean) - Selects the supersedence behavior.
+- `true` -> Intune supersedence type `Replace` (uninstall the prior version first)
+- `false` -> Intune supersedence type `Update` (in-place upgrade; default)
+- Default: From `preferences.yaml` (`defaultUninstallPreviousVersion`)
+
+**`autoUpdateOnAssignment`** (boolean) - Sets the assignment-level `autoUpdate`
+flag so Intune pushes the new version to devices already running a superseded
+version.
+- Default: From `preferences.yaml` (`defaultAutoUpdate`)
+- Accepted alias: `autoUpdate` (older recipes continue to work).
+- Example: `autoUpdateOnAssignment: true`
+- Only applied to available-intent assignments on the newest app.
+
+## The `{DETECT}` Anchor
+
+For recipes that detect installs by *version comparison* (`detectionType: msi`,
+or `file`/`registry` with `fileDetectionMethod: version`/`registryDetectionMethod: version`),
+Yardstick preserves one "anchor" version - renamed `{DETECT} <DisplayName>` -
+that is never pruned. This ensures long-abandoned installs on stale endpoints
+remain in scope even after many new versions have released.
+
+- The anchor is chosen automatically the first time Yardstick runs against an
+  app under the new model: the oldest surviving Intune version is pinned.
+- After it is pinned it stays put forever (unless you manually rename or
+  delete it in the Intune console).
+- The anchor holds no supersedence and receives none.
+- Non-version detection types (script, existence-only checks) do not use an
+  anchor - retention behaves like a flat `numVersionsToKeep`.
+- Master switch: `useDetectAnchor: false` in `preferences.yaml` disables the
+  anchor concept entirely.
+
 ## Recipe Inheritance
 
 Recipes support single-level inheritance via the `base` field. When a recipe contains a `base` field, the referenced base recipe is loaded and the child recipe's fields are overlaid on top.
