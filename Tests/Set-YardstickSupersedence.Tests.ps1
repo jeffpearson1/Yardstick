@@ -426,3 +426,168 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
     }
 }
 
+Describe "Move-AssignmentsAndDependencies install time settings" {
+    BeforeEach {
+        Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport { @() }
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
+        Mock Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
+    }
+
+    It "rebases onto the offset date while keeping the source time of day" {
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-timed'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                InstallTimeSettings = [PSCustomObject]@{
+                    useLocalTime = $true
+                    startDateTime = [datetime]'2020-03-05 09:30'
+                    deadlineDateTime = [datetime]'2020-03-05 17:45'
+                }
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -AvailableDateOffset 2 -DeadlineDateOffset 4 -SkipDependencies
+        $expectedAvailable = (Get-Date).Date.AddDays(2).AddHours(9).AddMinutes(30)
+        $expectedDeadline  = (Get-Date).Date.AddDays(4).AddHours(17).AddMinutes(45)
+        Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            ($AvailableTime -eq $expectedAvailable) -and ($DeadlineTime -eq $expectedDeadline) -and ($UseLocalTime -eq $true)
+        }
+    }
+
+    It "builds the rebased date without going through a culture-formatted string" {
+        # A dd/MM/yyyy culture reads back "08/04/2026" as 8 April, and throws
+        # outright once the day of the month passes the 12th.
+        $originalCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+        try {
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('en-GB')
+            Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+                @([PSCustomObject]@{
+                    Type = '#microsoft.graph.groupAssignmentTarget'
+                    GroupID = 'g-timed'; GroupMode = 'Include'; Intent = 'required'
+                    FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                    InstallTimeSettings = [PSCustomObject]@{
+                        useLocalTime = $false
+                        startDateTime = [datetime]'2020-03-05 09:30'
+                        deadlineDateTime = $null
+                    }
+                })
+            }
+            $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+            $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+            Move-AssignmentsAndDependencies -From $from -To $to -AvailableDateOffset 0 -SkipDependencies
+            $expectedAvailable = (Get-Date).Date.AddHours(9).AddMinutes(30)
+            Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+                $AvailableTime -eq $expectedAvailable
+            }
+        }
+        finally {
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture
+        }
+    }
+
+    It "nudges a rebased deadline that has already passed into the future" {
+        # A deadline-only assignment rebased onto today: an early-morning
+        # deadline is already past for an afternoon run, and the cmdlet rejects
+        # that combination with an uncatchable `break`.
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-timed'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                InstallTimeSettings = [PSCustomObject]@{
+                    useLocalTime = $false
+                    startDateTime = $null
+                    deadlineDateTime = [datetime]'2020-03-05 00:01'
+                }
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -DeadlineDateOffset 0 -SkipDependencies
+        Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            $DeadlineTime -gt (Get-Date)
+        }
+    }
+
+    It "leaves a future deadline alone" {
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-timed'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                InstallTimeSettings = [PSCustomObject]@{
+                    useLocalTime = $false
+                    startDateTime = $null
+                    deadlineDateTime = [datetime]'2020-03-05 23:59'
+                }
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -DeadlineDateOffset 3 -SkipDependencies
+        $expectedDeadline = (Get-Date).Date.AddDays(3).AddHours(23).AddMinutes(59)
+        Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            $DeadlineTime -eq $expectedDeadline
+        }
+    }
+}
+
+Describe "Move-AssignmentsAndDependencies break containment" {
+    It "keeps migrating later assignments when a cmdlet bails out with break" {
+        Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport { @() }
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @(
+                [PSCustomObject]@{
+                    Type = '#microsoft.graph.groupAssignmentTarget'
+                    GroupID = 'g-bails'; GroupMode = 'Include'; Intent = 'required'
+                    FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                },
+                [PSCustomObject]@{
+                    Type = '#microsoft.graph.groupAssignmentTarget'
+                    GroupID = 'g-after'; GroupMode = 'Include'; Intent = 'required'
+                    FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                }
+            )
+        }
+        Mock Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
+
+        $Global:MockBreakAdds = @()
+        try {
+            # Pester's mocks absorb `break`, so shadow the cmdlet with a real
+            # function to reproduce what the IntuneWin32App cmdlets actually do
+            # on a past deadline or an expired token. It has to be global rather
+            # than InModuleScope - a function defined inside an InModuleScope
+            # block dies with that block - and a function outranks a cmdlet in
+            # PowerShell's command resolution, so the module picks this up.
+            function global:Add-IntuneWin32AppAssignmentGroup {
+                [CmdletBinding()]
+                param([switch]$Include, [switch]$Exclude, $ID, $GroupID, $Intent,
+                      $Notification, $AvailableTime, $DeadlineTime, [bool]$UseLocalTime,
+                      $FilterMode, $FilterID)
+                begin {
+                    $Global:MockBreakAdds += $GroupID
+                    if ($GroupID -eq 'g-bails') { break }
+                }
+            }
+            $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+            $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+            Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
+        }
+        finally {
+            Remove-Item function:global:Add-IntuneWin32AppAssignmentGroup -ErrorAction SilentlyContinue
+        }
+
+        # The assignment that bailed is retried, then the loop carries on to the
+        # next one instead of silently abandoning it.
+        @($Global:MockBreakAdds | Where-Object { $_ -eq 'g-bails' }).Count | Should -Be 3
+        $Global:MockBreakAdds | Should -Contain 'g-after'
+        # A bail-out is not success, so the source assignment must survive.
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 0 -ParameterFilter { $GroupID -eq 'g-bails' }
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $GroupID -eq 'g-after' }
+
+        Remove-Variable -Name MockBreakAdds -Scope Global -ErrorAction SilentlyContinue
+    }
+}
+
