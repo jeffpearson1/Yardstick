@@ -1,0 +1,32 @@
+base: visualcplusplusredist
+url: https://aka.ms/vc14/vc_redist.x86.exe
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  if (Test-Path -Path $Script:TEMP\vc_redist.x86.exe) {
+    Remove-Item -Path $Script:TEMP\vc_redist.x86.exe -Force
+  }
+  Start-BitsTransfer -Source $url -Destination $Script:TEMP\vc_redist.x86.exe
+  # Get the version from the downloaded file
+  $fileVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$Script:TEMP\vc_redist.x86.exe")
+  $Script:version = ([VersionPro]$fileVersionInfo.FileVersion).ToString(3)
+downloadScript: |
+  Move-Item -Path $Script:TEMP\vc_redist.x86.exe -Destination . -Force
+postRunScript: |
+  if (Test-Path -Path $Script:TEMP\vc_redist.x86.exe) {
+    Remove-Item -Path $Script:TEMP\vc_redist.x86.exe -Force
+  }
+fileName: vc_redist.x86.exe
+id: visualcplusplusredist.x86
+displayName: Visual C++ Redistributable x86
+detectionScript: |
+  [Version]$currentVersion = ((Get-ItemProperty -Path HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X86).Version -split "v")[1]
+  [Version]$minVersion = "<version>"
+  if ($currentVersion -ge $minVersion) {
+      Write-Host "Current version is greater than or equal to the required version."
+      exit 0
+  }
+  else {
+      Write-Host "Current version is less than the required version."
+      exit 1
+  }

@@ -1221,6 +1221,23 @@ if (-not $NoEmail) {
                 throw "MailKit email delivery method is not yet implemented."
             }
             "outlook" {
+                # If prompt before sending is enabled, ask the user for confirmation
+                if ($Prefs.emailPromptBeforeSending) {
+                    # play notification sound if specified
+                    if ($Prefs.emailNotificationSoundFile -and (Test-Path $Prefs.emailNotificationSoundFile)) {
+                        try {
+                            $sound = New-Object System.Media.SoundPlayer($Prefs.emailNotificationSoundFile)
+                            $sound.Play()
+                        } catch {
+                            Write-Log "WARNING: Failed to play notification sound: $_"
+                        }
+                    }
+                    $confirmation = Read-Host "Do you want to send the email report now? (Y/N)"
+                    if ($confirmation -ne 'Y' -and $confirmation -ne 'y') {
+                        Write-Log "Email report sending skipped by user."
+                        return
+                    }
+                }
                 Write-Log "Sending email report using Outlook"
                 Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters
             }

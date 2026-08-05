@@ -11,22 +11,43 @@ preDownloadScript: |
   if ($version -notmatch "([0-9]+\.[0-9]+\.[0-9]+)") {
     throw "Unable to parse LTspice version number from Analog Devices download page."
   }
-downloadScript: Start-BitsTransfer -Source $url -Dynamic
-installScript: msiexec /i <filename> /qn /norestart ALLUSERS=1 AI_INSTALLPERUSER=3
+downloadScript: |
+  # Download the MSI
+  $filename = "LTspice64.msi"
+  Start-BitsTransfer -Source $Script:URL -Destination "$TEMP\$filename" -Dynamic
+  # Extract the cab files 
+  Start-Process -FilePath "msiexec.exe" -ArgumentList "/a `"$TEMP\$filename`" /qn TARGETDIR=$TEMP\LTspice_Extracted" -Wait
+  # Move the extracted files to the staging area
+  Move-Item -Path "$TEMP\LTspice_Extracted\*" -Destination "$BUILDSPACE\$id\$version" -Force
+powerShellInstallScript: |  
+  # Set Varables
+  $systemProfileLocalPath = Join-Path -Path $env:windir -ChildPath "SysWOW64\config\systemprofile\AppData\Local"
+  $systemProfileLtSpicePath = Join-Path -Path $systemProfileLocalPath -ChildPath "LTspice"
+
+  # Seed the System Profile
+  Copy-Item -Path "$PSScriptRoot\LocalAppDataFolder\LTspice" -Destination "$systemProfileLocalPath" -Recurse -Force
+
+  # Install LTSpice
+  Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$PSScriptRoot\LTSpice64.msi`" ALLUSERS=1 AI_INSTALLPERUSER=3 /qn /norestart" -Wait
+   
+  # Cleanup
+  if (Test-Path -Path $systemProfileLtSpicePath){
+      Remove-Item -Path $systemProfileLtSpicePath -Recurse -Force
+  }
+installScript: '%SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy bypass -File .\install.ps1'
 uninstallScript: msiexec /x <productcode> /qn /norestart
 fileName: LTspice64.msi
 iconFile: ltspice.png
 id: LTSpice
-displayName: DEV LTspice
+displayName: LTspice
 publisher: Analog Devices
 description: LTspice® is a powerful, fast, and free SPICE simulator software, schematic capture and waveform viewer with enhancements and models for improving the simulation of analog circuits.
 dependentApplicationBlacklist:
  - "LTSpice Config"
-fileType: msi
 detectionType: msi
-installExperience: user
+installExperience: system
 restartBehavior: suppress
-minOSVersion: W11_23H2
+minOSVersion: W11_24H2
 numVersionsToKeep: 2
 scopeTags:
   - scopeTag1
