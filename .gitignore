@@ -37,3 +37,6 @@
 
 # Exclude anything in the secrets folder
 /Secrets/*
+
+# Exclude the notification sound
+/notificationSound.wav
