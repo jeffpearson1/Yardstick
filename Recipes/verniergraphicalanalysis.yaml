@@ -9,18 +9,24 @@ preDownloadScript: |
   $filename = Get-ChildItem -Path "$TEMP\VGA_Extracted" -Filter "*.msi" | Select-Object -First 1 | Select-Object -ExpandProperty Name
   # Get the version from the extracted file
   $version = ([string](Get-MsiProperty -Path "$TEMP\VGA_Extracted\$filename" -Property ProductVersion)).Trim()
+  $fileDetectionVerssion = $version
 downloadScript: |
-  # Just move it from the temp folder
+  # Move the extracted files to the staging area
   Move-Item -Path "$TEMP\VGA_Extracted\*" -Destination "$BUILDSPACE\$id\$version" -Force
 installScript: msiexec /i <filename> /qn /norestart
-uninstallScript: msiexec /x <productcode> /qn /norestart
+uninstallScript: |
+  "C:\Program Files (x86)\Vernier Graphical Analysis\Uninstall Vernier Graphical Analysis.exe" /S
 iconFile: verniergraphicalanalysis.png
 id: verniergraphicalanalysis
-displayName: Vernier Graphical Analysis
+displayName: DEV Vernier Graphical Analysis
 publisher: Vernier
 description: Vernier Graphical Analysis software for data collection and analysis.
 softwareName: "Vernier Graphical Analysis*"
-detectionType: msi
+detectionType: file
+fileDetectionPath: 'C:\Program Files (x86)\Vernier Graphical Analysis'
+fileDetectionName: 'Vernier Graphical Analysis.exe'
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
 scopeTags:
   - scopeTag1
   - scopeTag2

@@ -1,0 +1,27 @@
+url: https://software-releases.graphicalanalysis.com/ia/win/release/latest/Vernier-Instrumental-Analysis-Silent-Installer.zip
+urlRedirects: false
+preDownloadScript: |
+  # Start the download
+  $filename = ($url -split "/")[-1]
+  Start-BitsTransfer -Source $Script:URL -Destination "$TEMP\$filename"
+  # Extract the zip file
+  Expand-Archive -Path "$TEMP\$filename" -DestinationPath "$TEMP\VIA_Extracted" -Force
+  $filename = Get-ChildItem -Path "$TEMP\VIA_Extracted" -Filter "*.msi" | Select-Object -First 1 | Select-Object -ExpandProperty Name
+  # Get the version from the extracted file
+  $version = ([string](Get-MsiProperty -Path "$TEMP\VIA_Extracted\$filename" -Property ProductVersion)).Trim()
+downloadScript: |
+  # Just move it from the temp folder
+  Move-Item -Path "$TEMP\VIA_Extracted\*" -Destination "$BUILDSPACE\$id\$version" -Force
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: vernierinstrumentalanalysis.png
+id: vernierinstrumentalanalysis
+displayName: Vernier Instrumental Analysis
+publisher: Vernier
+description: The free Instrumental Analysis app makes it easy to incorporate instrumentation into your chemistry curriculum. The user-friendly interface walks students through the data-collection process and includes instrument-specific analysis features.
+softwareName: "Vernier Instrumental Analysis*"
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2

@@ -1,0 +1,42 @@
+url: https://aka.ms/vc14/vc_redist.x64.exe
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  if (Test-Path -Path $Script:TEMP\vc_redist.x64.exe) {
+    Remove-Item -Path $Script:TEMP\vc_redist.x64.exe -Force
+  }
+  Start-BitsTransfer -Source $url -Destination $Script:TEMP\vc_redist.x64.exe
+  # Get the version from the downloaded file
+  $fileVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$Script:TEMP\vc_redist.x64.exe")
+  $Script:version = ([VersionPro]$fileVersionInfo.FileVersion).ToString(3)
+downloadScript: |
+  Move-Item -Path $Script:TEMP\vc_redist.x64.exe -Destination . -Force
+postRunScript: |
+  if (Test-Path -Path $Script:TEMP\vc_redist.x64.exe) {
+    Remove-Item -Path $Script:TEMP\vc_redist.x64.exe -Force
+  }
+installScript: |
+  <filename> /install /quiet /norestart
+uninstallScript: |
+  <filename> /uninstall /quiet /norestart
+fileName: vc_redist.x64.exe
+iconFile: visualcplusplusredist.png
+id: visualcplusplusredist.x64
+displayName: Visual C++ Redistributable x64
+publisher: Microsoft
+description: Microsoft Visual C++ Redistributable for Visual Studio 2015 and newer.
+detectionType: script
+detectionScript: |
+  [Version]$currentVersion = (Get-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\DevDiv\VC\Servicing\14.0\RuntimeMinimum).Version
+  [Version]$minVersion = "<version>"
+  if ($currentVersion -ge $minVersion) {
+      Write-Host "Current version is the required version."
+      exit 0
+  }
+  else {
+      Write-Host "Current version not equal to required version."
+      exit 1
+  }
+scopeTags:
+  - scopeTag1
+  - scopeTag2

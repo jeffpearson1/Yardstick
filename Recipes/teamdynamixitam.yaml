@@ -1,0 +1,56 @@
+url: https://download.sassafras.com/software/release/current/Installers/Windows/Client/ksp-client-x64.exe
+urlRedirects: false
+preDownloadScript: |
+  $vurl = "https://solutions.teamdynamix.com/TDClient/1965/Portal/KB/Article/169236/Current-ITAM-Downloads"
+  $content = Invoke-WebRequest -Uri $vurl -UseBasicParsing
+  if ($content.Content -match "(?<=Minor Version:<\/strong>\s)([0-9]+\.){2,3}[0-9]+") {
+    $Script:version = $matches[0]
+    $Script:fileDetectionVersion = $Script:version
+  } else {
+    throw "Could not determine current TeamDynamix ITAM client version from $vurl"
+  }
+installScript: <filename> -q -v PROP_HOSTNAME=https://<your_org>.sassafrascloud.com -v PROP_TRUST=10 -v PROP_SECURITY=2 -v PROP_NOURL=0 -v PROP_FORCEHOST=1
+powerShellUninstallScript: |
+  $uninstallKeys = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+  )
+  $entry = Get-ItemProperty -Path $uninstallKeys -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -eq "Sassafras KeyServer Platform Client" } |
+    Select-Object -First 1
+  if (-not $entry) {
+    throw "Could not find Sassafras KeyServer Platform Client uninstall entry in the registry."
+  }
+  $uninstallString = $entry.UninstallString
+  if (-not $uninstallString) {
+    throw "Uninstall entry for '$($entry.DisplayName)' has no UninstallString."
+  }
+  # Get the MSI product code from the uninstall string
+  if ($uninstallString -match "MsiExec\.exe /[Xx]\{([A-F0-9\-]+)\}") {
+    $productCode = $matches[1]
+    $msiArgs = "/x{$productCode} /qn /norestart"
+    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru
+    if ($process.ExitCode -notin @(0, 3010)) {
+      exit $process.ExitCode
+    }
+  } else {
+    throw "UninstallString does not contain an MSI product code: $uninstallString"
+  }
+fileName: ksp-client-x64.exe
+iconFile: teamdynamix.png
+id: teamdynamixitam
+displayName: TeamDynamix ITAM Client (Sassafras KSP)
+publisher: TeamDynamix
+description: TeamDynamix IT Asset Management Client for comprehensive hardware and software inventory tracking, compliance management, and IT asset lifecycle management.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Sassafras K2\Client'
+fileDetectionName: keyacc32.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2
+scopeTags:
+  - scopeTag1
+  - scopeTag2
