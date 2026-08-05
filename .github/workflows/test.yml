@@ -62,7 +62,6 @@ jobs:
             'Yardstick.ps1',
             'Modules/YardstickSupport.psm1',
             'Modules/VersionPro.psm1',
-            'Modules/Custom/AdobeDownloader.psm1',
             'Modules/Custom/GithubDownloader.psm1',
             'Modules/Custom/JetbrainsDownloader.psm1',
             'Modules/Custom/Invoke-SSOAutoSignIn.psm1'
