@@ -19,7 +19,12 @@ jobs:
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
           Install-Module -Name powershell-yaml -Force -Scope CurrentUser
-          Install-Module -Name IntuneWin32App -Force -Scope CurrentUser
+          $intuneModulePath = "$env:USERPROFILE\Documents\PowerShell\Modules\IntuneWin32App"
+          Invoke-WebRequest -Uri 'https://github.com/jeffpearson1/IntuneWin32App/archive/refs/heads/main.zip' -OutFile "$env:TEMP\IntuneWin32App.zip"
+          Expand-Archive -Path "$env:TEMP\IntuneWin32App.zip" -DestinationPath "$env:TEMP\IntuneWin32AppSrc" -Force
+          $srcDir = Get-ChildItem "$env:TEMP\IntuneWin32AppSrc" -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path $intuneModulePath | Out-Null
+          Copy-Item -Path "$($srcDir.FullName)\*" -Destination $intuneModulePath -Recurse -Force
 
       - name: Run Pester tests
         shell: pwsh
