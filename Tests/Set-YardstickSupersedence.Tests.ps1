@@ -409,6 +409,28 @@ Describe "Get-YardstickSupersedenceRelationship" {
         Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest { throw "boom" }
         (Get-YardstickSupersedenceRelationship -Id 'me').Count | Should -Be 0
     }
+
+    It "reports a true count of <expected> to a caller that wraps the call in @()" -ForEach @(
+        @{ expected = 0 }
+        @{ expected = 1 }
+        @{ expected = 2 }
+        @{ expected = 3 }
+    ) {
+        # Regression: the returns used to be comma-wrapped, which handed the
+        # caller a single item that was itself the array. Every count - 0, 2, 3 -
+        # then measured as 1, which is what produced "Expected 2 supersedence
+        # target(s) ... but Intune reports 1" and made the stale-link strip in
+        # Set-YardstickSupersedence fire against apps that had no links at all.
+        $n = $expected
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest {
+            if ($n -eq 0) { return @() }
+            return @(1..$n | ForEach-Object {
+                [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.mobileAppSupersedence'; sourceId = 'me'; targetId = "t$_" }
+            })
+        }
+        # Exactly how Set-YardstickSupersedence consumes it.
+        @(Get-YardstickSupersedenceRelationship -Id 'me' -Direction Forward).Count | Should -Be $expected
+    }
 }
 
 Describe "Get-SameAppAllVersions" {
@@ -453,7 +475,11 @@ Describe "Move-AssignmentsAndDependencies intent split" {
             )
         }
         Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency { @() }
-        Mock -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup {}
+        # A successful add returns the created assignment; that object is the
+        # signal the module uses to skip the read-back.
+        Mock -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup {
+            [PSCustomObject]@{ id = 'new-assignment' }
+        }
         Mock -ModuleName YardstickSupport Remove-IntuneWin32AppAssignmentGroup {}
     }
 
@@ -483,16 +509,21 @@ Describe "Move-AssignmentsAndDependencies intent split" {
     }
 
     It "keeps the source assignment when the target did not actually receive it" {
-        # Add-IntuneWin32AppAssignmentGroup downgrades Graph failures to warnings,
-        # so the target legitimately ends up without the assignment.
+        # Add-IntuneWin32AppAssignmentGroup downgrades Graph failures to warnings
+        # and returns nothing, so the target legitimately ends up without the
+        # assignment. The read-back is the only thing that catches it.
+        Mock -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup {}
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest { @() }
         Mock -ModuleName YardstickSupport Get-IntuneWin32AppAssignment {
             if ($Id -eq 'to') { return @() }
             @([PSCustomObject]@{ id = 'a-req'; GroupID = 'g-req'; Intent = 'required'; FilterType = 'none' })
         }
         $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
         $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
-        Move-AssignmentsAndDependencies -From $from -To $to -IntentFilter 'required'
+        Move-AssignmentsAndDependencies -From $from -To $to -IntentFilter 'required' -RetryDelaySeconds 0
         Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppAssignmentGroup -Times 0 -Exactly
+        # An unverified add is retried rather than accepted on the first pass.
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup -Times 3 -Exactly
     }
 
     It "-CopyOnly:`$false falls back to a move" {
@@ -650,9 +681,10 @@ Describe "Move-AssignmentsAndDependencies child dependencies" {
 Describe "Move-AssignmentsAndDependencies assignment targets" {
     BeforeEach {
         Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport { @() }
-        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
-        Mock Add-IntuneWin32AppAssignmentAllDevices -ModuleName YardstickSupport {}
-        Mock Add-IntuneWin32AppAssignmentAllUsers -ModuleName YardstickSupport {}
+        # A successful add returns the created assignment object.
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport { [PSCustomObject]@{ id = 'new-assignment' } }
+        Mock Add-IntuneWin32AppAssignmentAllDevices -ModuleName YardstickSupport { [PSCustomObject]@{ id = 'new-assignment' } }
+        Mock Add-IntuneWin32AppAssignmentAllUsers -ModuleName YardstickSupport { [PSCustomObject]@{ id = 'new-assignment' } }
         Mock Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
         Mock Remove-IntuneWin32AppAssignmentAllDevices -ModuleName YardstickSupport {}
         Mock Remove-IntuneWin32AppAssignmentAllUsers -ModuleName YardstickSupport {}
@@ -820,7 +852,7 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
 Describe "Move-AssignmentsAndDependencies install time settings" {
     BeforeEach {
         Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport { @() }
-        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport { [PSCustomObject]@{ id = 'new-assignment' } }
         Mock Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
     }
 
@@ -925,6 +957,191 @@ Describe "Move-AssignmentsAndDependencies install time settings" {
     }
 }
 
+Describe "Test-YardstickAssignmentPresent" {
+    BeforeEach {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @(
+                [PSCustomObject]@{ id = 'x1'; intent = 'required';  target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'g-1' } },
+                [PSCustomObject]@{ id = 'x2'; intent = 'available'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget' } }
+            )
+        }
+    }
+
+    It "matches a group assignment by group id and intent" {
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey 'g-1' -Intent 'required' | Should -BeTrue
+    }
+
+    It "does not match when the intent differs" {
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey 'g-1' -Intent 'available' | Should -BeFalse
+    }
+
+    It "falls back to the target type for virtual targets that carry no group id" {
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey '#microsoft.graph.allDevicesAssignmentTarget' -Intent 'available' | Should -BeTrue
+    }
+
+    It "does not mistake an exclusion for the include it was asked about" {
+        # Both carry the same group id, so CountKey alone cannot tell them apart -
+        # and treating one as the other would delete the wrong source assignment.
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{ id = 'x1'; intent = 'required'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.exclusionGroupAssignmentTarget'; groupId = 'g-1' } })
+        }
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey 'g-1' -Intent 'required' -TargetType '#microsoft.graph.groupAssignmentTarget' | Should -BeFalse
+    }
+
+    It "still matches when neither side reports a target type" {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{ id = 'x1'; intent = 'required'; target = [PSCustomObject]@{ groupId = 'g-1' } })
+        }
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey 'g-1' -Intent 'required' | Should -BeTrue
+    }
+
+    It "reports absent rather than throwing when Graph fails" {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport { throw "boom" }
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey 'g-1' -Intent 'required' | Should -BeFalse
+    }
+
+    It "finds an assignment on an app that holds exactly one" {
+        # Get-IntuneWin32AppAssignment returns $null in this case under Windows
+        # PowerShell 5.1, which is why this reads through Graph directly.
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{ id = 'x1'; intent = 'required'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'g-1' } })
+        }
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey 'g-1' -Intent 'required' | Should -BeTrue
+    }
+}
+
+Describe "Move-AssignmentsAndDependencies assignment error handling" {
+    BeforeEach {
+        Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport { @() }
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-1'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+            })
+        }
+        Mock Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
+        # Target reports the assignment as present unless a test overrides this.
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{ id = 'x1'; intent = 'required'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'g-1' } })
+        }
+    }
+
+    It "records the Intune warning in the Yardstick log instead of only the console" {
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: BadRequest: something went wrong"
+        }
+        Mock Write-Log -ModuleName YardstickSupport {}
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+        Should -Invoke Write-Log -ModuleName YardstickSupport -ParameterFilter {
+            $Content -match 'WARNING from Intune' -and $Content -match 'BadRequest'
+        }
+    }
+
+    It "treats an 'already exists' conflict as success when the assignment really is there" {
+        # The exact production case: Intune rejects the duplicate, but the
+        # assignment we wanted is already on the target, so this is a no-op.
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: BadRequest: The MobileApp Assignment already exists"
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+        Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 1 -Exactly
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 1 -Exactly
+    }
+
+    It "does not burn retries on a conflict a retry cannot resolve" {
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: BadRequest: The MobileApp Assignment already exists"
+        }
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport { @() }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+        Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 1 -Exactly
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 0 -Exactly
+    }
+
+    It "retries a transient failure and keeps the source when it never lands" {
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: 503 Service Unavailable"
+        }
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport { @() }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+        Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 3 -Exactly
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 0 -Exactly
+    }
+
+    It "recovers when a retry succeeds after a transient failure" {
+        # Mocks run in the module's scope, so the counter has to be global - the
+        # same convention the break-containment test uses.
+        $Global:MockAddAttempts = 0
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            $Global:MockAddAttempts++
+            if ($Global:MockAddAttempts -eq 1) {
+                Write-Warning "An error occurred while creating a Win32 app assignment. Error message: 429 Too Many Requests"
+                return
+            }
+            [PSCustomObject]@{ id = 'new-assignment' }
+        }
+        # Read-back never finds it, so the first attempt's warning is a real
+        # failure; the second attempt succeeds by returning the created object.
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport { @() }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        try {
+            Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+            Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 2 -Exactly
+            Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 1 -Exactly
+        }
+        finally {
+            Remove-Variable -Name MockAddAttempts -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "trusts a returned assignment object without reading it back" {
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport { [PSCustomObject]@{ id = 'new-assignment' } }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickSupport -Times 0 -Exactly
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 1 -Exactly
+    }
+
+    It "never logs a successful add when Intune rejected it" {
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: BadRequest: nope"
+        }
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport { @() }
+        Mock Write-Log -ModuleName YardstickSupport {}
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+        Should -Invoke Write-Log -ModuleName YardstickSupport -Times 0 -Exactly -ParameterFilter { $Content -match '^Added group' }
+        Should -Invoke Write-Log -ModuleName YardstickSupport -ParameterFilter { $Content -match 'leaving the source assignment' }
+    }
+
+    It "leaves the source alone when the add landed on a different target type" {
+        # Target holds an exclusion for the same group; the include we tried to
+        # add is not there, so the source copy must survive.
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: BadRequest: nope"
+        }
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{ id = 'x1'; intent = 'required'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.exclusionGroupAssignmentTarget'; groupId = 'g-1' } })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 0 -Exactly
+    }
+}
+
 Describe "Move-AssignmentsAndDependencies break containment" {
     It "keeps migrating later assignments when a cmdlet bails out with break" {
         Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport { @() }
@@ -943,6 +1160,16 @@ Describe "Move-AssignmentsAndDependencies break containment" {
             )
         }
         Mock Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {}
+        # Both groups report as present on the target. g-bails must STILL not be
+        # removed: its cmdlet bailed out with `break` and never returned, and a
+        # bail-out is gated out of the read-back precisely so a pre-existing
+        # assignment cannot be mistaken for one this run just created.
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @(
+                [PSCustomObject]@{ id = 'x1'; intent = 'required'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'g-bails' } },
+                [PSCustomObject]@{ id = 'x2'; intent = 'required'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'g-after' } }
+            )
+        }
 
         $Global:MockBreakAdds = @()
         try {

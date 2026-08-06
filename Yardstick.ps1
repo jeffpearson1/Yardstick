@@ -62,6 +62,8 @@
     This command updates all applications in the repository, excluding interactive applications, forcing the update and preventing the deletion of old versions.
 #>
 
+using module .\Modules\VersionPro.psm1
+
 param (
     [Alias("AppId", "AppIds")]
     [parameter(ParameterSetName="SingleApp")]
@@ -93,6 +95,7 @@ param (
 
     [Switch] $NoEmail
 )
+
 # So we can get redirected URLs
 Add-Type -AssemblyName Microsoft.PowerShell.Commands.Utility
 

@@ -521,6 +521,67 @@ function Invoke-WithRetry {
 
 
 
+function Test-YardstickAssignmentPresent {
+    <#
+    .SYNOPSIS
+    Returns $true when the given app already carries an assignment for a target.
+
+    .DESCRIPTION
+    The Add-IntuneWin32AppAssignment* cmdlets downgrade Graph failures and
+    duplicate-target conflicts to warnings and emit nothing on the success
+    stream, so the fact that one of them returned proves nothing. Reading the
+    assignment back off the target app is the only authoritative signal, and it
+    doubles as the idempotency check: Intune rejecting an add with "The MobileApp
+    Assignment already exists" means the assignment we wanted is there, which is
+    a success rather than something to retry.
+
+    Reads through Graph directly rather than Get-IntuneWin32AppAssignment. Under
+    Windows PowerShell 5.1 that cmdlet returns $null for an app holding exactly
+    one assignment (see the note in Move-AssignmentsAndDependencies), which would
+    turn this check into a false negative - and a false negative here is what
+    decides whether a source assignment is preserved or deleted.
+
+    .PARAMETER CountKey
+    The same key used for removal - GroupID when there is one, otherwise the
+    target type - so virtual targets (All Devices/All Users, which carry no
+    GroupID) compare by target type instead of collapsing onto a null GroupID.
+
+    .PARAMETER TargetType
+    The assignment's '@odata.type'. Distinguishes an include from an exclusion
+    for the same group, which CountKey alone cannot. Ignored when either side
+    does not report it, so a partial record cannot veto an otherwise clear match.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AppId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CountKey,
+
+        [string]$Intent,
+
+        [string]$TargetType
+    )
+
+    try {
+        $assignments = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments")
+    } catch {
+        Write-Log "WARNING: Could not read assignments on $AppId to verify $CountKey : $_"
+        return $false
+    }
+
+    foreach ($assignment in $assignments) {
+        $existingType = $assignment.target.'@odata.type'
+        $existingKey = if ($assignment.target.groupId) { $assignment.target.groupId } else { $existingType }
+        if ($existingKey -ne $CountKey) { continue }
+        if ($Intent -and ($assignment.intent -ne $Intent)) { continue }
+        if ($TargetType -and $existingType -and ($existingType -ne $TargetType)) { continue }
+        return $true
+    }
+    return $false
+}
+
+
 function Move-AssignmentsAndDependencies {
     <#
     .SYNOPSIS
@@ -567,6 +628,10 @@ function Move-AssignmentsAndDependencies {
     Useful when calling this function twice for different intents against the
     same From/To pair - dependencies only need to be migrated once.
 
+    .PARAMETER RetryDelaySeconds
+    Seconds to wait between assignment add/remove attempts (default: 2). Exists
+    so tests can drive the retry paths without sleeping.
+
     .NOTES
     All Devices and All Users assignments that use an assignment filter are not
     migrated. Add-IntuneWin32AppAssignmentAllDevices/AllUsers accept a filter by
@@ -596,7 +661,8 @@ function Move-AssignmentsAndDependencies {
         [ValidateSet('', 'required', 'available')]
         [string] $IntentFilter = '',
         [switch] $CopyOnly,
-        [switch] $SkipDependencies
+        [switch] $SkipDependencies,
+        [int] $RetryDelaySeconds = 2
     )
     # If IDs or Display Names were provided instead of application objects, get the app objects
     if ($From -is [String]) {
@@ -634,18 +700,22 @@ function Move-AssignmentsAndDependencies {
         }
     }
     Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
-    # KNOWN ISSUE (IntuneWin32App 1.5.0): Get-IntuneWin32AppAssignment returns
-    # $null for any app that has EXACTLY ONE assignment, so the migration below
-    # silently does nothing for those apps. Get-IntuneWin32AppAssignment.ps1:124
-    # reads the assignments with Invoke-MSGraphOperation, which unrolls a
-    # single-element response to a bare [PSCustomObject]; the guard on the next
-    # line then tests `$response.Count -gt 0`, and PSCustomObject has no
-    # synthetic .Count (unlike other scalars in PS 3.0+), so it evaluates $null
-    # -gt 0 = $false and the cmdlet reports "No assignments found". Two or more
-    # assignments come back as an Object[] and work fine. Wrapping the call in
-    # @() does not help - the data is already discarded inside the cmdlet.
-    # Fixing this needs a Graph-direct reader (see Set-AssignmentAutoUpdate,
-    # which already bypasses the cmdlet via Invoke-YardstickGraphRequest).
+    # KNOWN ISSUE (IntuneWin32App 1.5.0 under Windows PowerShell 5.1):
+    # Get-IntuneWin32AppAssignment returns $null for any app that has EXACTLY ONE
+    # assignment, so the migration below silently does nothing for those apps.
+    # Get-IntuneWin32AppAssignment.ps1:124 reads the assignments with
+    # Invoke-MSGraphOperation, which unrolls a single-element response to a bare
+    # [PSCustomObject]; the guard on the next line then tests `$response.Count
+    # -gt 0`, and under 5.1 PSCustomObject has no synthetic .Count (unlike other
+    # scalars in PS 3.0+), so it evaluates $null -gt 0 = $false and the cmdlet
+    # reports "No assignments found". Two or more assignments come back as an
+    # Object[] and work fine. Wrapping the call in @() does not help - the data is
+    # already discarded inside the cmdlet.
+    # PowerShell 7 gives PSCustomObject a synthetic .Count of 1, so this does not
+    # bite when Yardstick runs on its required host (Yardstick.psd1 pins 7.0). The
+    # read-back in Test-YardstickAssignmentPresent goes through Graph directly
+    # anyway, because a false negative there decides whether a source assignment
+    # is preserved or deleted.
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
     # Kept as DateTime, not a formatted string: rebuilding a date by formatting
@@ -767,6 +837,11 @@ function Move-AssignmentsAndDependencies {
             Write-Verbose $Assignment
             Write-Log "Processing $assignmentLabel assignment with intent $($Assignment.Intent)$(if ($isExclusion) { ' (exclusion)' })"
 
+            # Hoisted out of the removal block below: the post-add verification
+            # needs the same key, and computing it twice invites the two copies
+            # drifting apart.
+            $countKey = if ($Assignment.GroupID) { $Assignment.GroupID } else { $Assignment.Type }
+
             # Reset per assignment - these must not leak into the next iteration.
             $startDateTime = $null
             $deadlineDateTime = $null
@@ -838,6 +913,10 @@ function Move-AssignmentsAndDependencies {
             }
 
             while (!$successfullyAdded -and ($try++ -lt $maxRetries)) {
+                $addResult = $null
+                $addWarnings = @()
+                $addReturned = $false
+                $conflicted = $false
                 try {
                     # The IntuneWin32App cmdlets bail out of their Begin block
                     # with `break` (past deadline, expired token). A bare `break`
@@ -846,65 +925,82 @@ function Move-AssignmentsAndDependencies {
                     # foreach to absorb it, one bad assignment would silently
                     # abandon every assignment after it. Absorbed here, it just
                     # leaves $addReturned false and is retried and logged.
-                    $addReturned = $false
                     foreach ($breakGuard in 1) {
                         if ($targetType -eq $allDevicesTarget) {
-                            Add-IntuneWin32AppAssignmentAllDevices @assignmentParams | Out-Null
+                            $addResult = Add-IntuneWin32AppAssignmentAllDevices @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
                         }
                         elseif ($targetType -eq $allUsersTarget) {
-                            Add-IntuneWin32AppAssignmentAllUsers @assignmentParams | Out-Null
+                            $addResult = Add-IntuneWin32AppAssignmentAllUsers @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
                         }
                         else {
-                            Add-IntuneWin32AppAssignmentGroup @assignmentParams | Out-Null
+                            $addResult = Add-IntuneWin32AppAssignmentGroup @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
                         }
                         $addReturned = $true
                     }
-                    if ($addReturned) {
-                        $successfullyAdded = $true
-                        Write-Log "Added $assignmentLabel assignment to $($To.id)."
+
+                    # The cmdlets swallow every Graph failure into Write-Warning,
+                    # so the warning stream is the only place the real error text
+                    # exists. Left uncaptured it goes to the console and never
+                    # reaches the log, which is how a BadRequest ended up
+                    # recorded as a successful add.
+                    foreach ($addWarning in $addWarnings) {
+                        Write-Log "WARNING from Intune while adding $assignmentLabel to $($To.id): $addWarning"
+                        # Both the client-side duplicate guard and the server-side
+                        # "The MobileApp Assignment already exists" BadRequest are
+                        # idempotent - the assignment is already where we want it,
+                        # and retrying can only reproduce the same conflict.
+                        if ("$addWarning" -match 'already exists') { $conflicted = $true }
+                    }
+
+                    if (-not $addReturned) {
+                        # A bail-out is not success, and must not reach the
+                        # read-back: the assignment could be present on $To for
+                        # unrelated reasons, and treating that as success here
+                        # would delete the source copy.
+                        Write-Log "Add of $assignmentLabel assignment to $($To.id) aborted before returning. Check the preceding warning for the reason."
                     }
                     else {
-                        Write-Log "Add of $assignmentLabel assignment to $($To.id) aborted before returning. Check the preceding warning for the reason."
+                        # A returned assignment object is the one unambiguous
+                        # success signal the cmdlets give us. Anything else -
+                        # including a warning of any kind - has to be read back.
+                        $successfullyAdded = if (($addWarnings.Count -eq 0) -and $addResult -and $addResult.id) {
+                            $true
+                        } else {
+                            Test-YardstickAssignmentPresent -AppId $To.id -CountKey $countKey `
+                                -Intent $Assignment.Intent -TargetType $Assignment.Type
+                        }
+
+                        if ($successfullyAdded) {
+                            Write-Log "Added $assignmentLabel assignment to $($To.id)."
+                        }
+                        else {
+                            Write-Log "ERROR: $assignmentLabel assignment is not present on $($To.id) after the add."
+                        }
                     }
                 }
                 catch {
                     Write-Log "Failed to add $assignmentLabel assignment to $($To.id): $_"
                 }
+
+                if (!$successfullyAdded -and $conflicted) {
+                    Write-Log "Not retrying $assignmentLabel on $($To.id): Intune reported a conflict that a retry cannot resolve."
+                    break
+                }
                 if (!$successfullyAdded -and ($try -lt $maxRetries)) {
                     Write-Log "Retrying to add $assignmentLabel assignment to $($To.id). Attempt $($try) of $($maxRetries)."
-                    Start-Sleep -Seconds 2
+                    Start-Sleep -Seconds $RetryDelaySeconds
                 }
             }
 
             # Remove the old assignment
             if ($successfullyAdded -and -not $CopyOnly) {
-                $countKey = if ($Assignment.GroupID) { $Assignment.GroupID } else { $Assignment.Type }
                 if ([int]$targetCounts[$countKey] -gt 1) {
                     Write-Log "WARNING: $($From.id) has $($targetCounts[$countKey]) assignments for $assignmentLabel. Removing one removes them all."
                 }
 
-                # The Add-IntuneWin32AppAssignment* cmdlets downgrade Graph
-                # failures and duplicate-target conflicts to warnings, so a
-                # returned call does not prove the assignment landed. Confirm it
-                # is really on $To before deleting the only remaining copy.
-                # Match on the same key used for removal so virtual targets
-                # (All Devices/All Users, which carry no GroupID) compare by
-                # target type instead of collapsing onto a null GroupID.
-                $verified = $false
-                try {
-                    $verified = @(Get-IntuneWin32AppAssignment -Id $To.id | Where-Object {
-                        $existingKey = if ($_.GroupID) { $_.GroupID } else { $_.Type }
-                        ($existingKey -eq $countKey) -and ($_.Intent -eq $Assignment.Intent)
-                    }).Count -gt 0
-                }
-                catch {
-                    Write-Log "Could not verify $assignmentLabel assignment on $($To.id): $_"
-                }
-                if (-not $verified) {
-                    Write-Log "ERROR: $assignmentLabel assignment was not found on $($To.id) after the add; leaving the source assignment on $($From.id) intact."
-                    continue
-                }
-
+                # No second verification pass: $successfullyAdded already means
+                # Intune confirmed the assignment is on $To, either by returning
+                # the created object or via the read-back above.
                 $maxRemovalAttempts = 3
                 $successfullyRemoved = $false
                 for ($i = 1; ($i -le $maxRemovalAttempts) -and (-not $successfullyRemoved); $i++) {
@@ -944,10 +1040,13 @@ function Move-AssignmentsAndDependencies {
                         }
                         else {
                             Write-Log "Retrying removal of $assignmentLabel assignment from $($From.id). Attempt $($i + 1) of $maxRemovalAttempts."
-                            Start-Sleep -Seconds 2
+                            Start-Sleep -Seconds $RetryDelaySeconds
                         }
                     }
                 }
+            }
+            elseif (-not $successfullyAdded) {
+                Write-Log "ERROR: $assignmentLabel assignment was not added to $($To.id); leaving the source assignment on $($From.id) intact."
             }
         }
     }
@@ -1395,23 +1494,27 @@ function Get-YardstickSupersedenceRelationship {
             Where-Object { $_.'@odata.type' -eq '#microsoft.graph.mobileAppSupersedence' })
     } catch {
         Write-Log "WARNING: Failed to read supersedence relationships for $Id : $_"
-        return ,@()
+        return @()
     }
 
-    # Every return is comma-wrapped: `return @($x)` unrolls a single-element array
-    # back to a bare object on the way out, and [PSCustomObject] has no synthetic
-    # .Count (unlike other scalars in PS 3.0+), so a caller testing
-    # `(Get-YardstickSupersedenceRelationship ...).Count -gt 0` silently sees $null
-    # and concludes there are no links. That skipped the stale-link strip in
-    # Set-YardstickSupersedence for exactly the one-link case, leaving a target
-    # still pointing at the new app - which Intune then rejects with
-    # "A circular dependency was created while adding app relationships."
+    # Returns are NOT comma-wrapped. `return ,@($x)` emits the outer one-element
+    # array, which unrolls to hand the caller a single item that is itself the
+    # array - so `@(Get-YardstickSupersedenceRelationship ...).Count` came back as
+    # 1 for every real count, including 0 and 2. That is what produced
+    # "Expected 2 supersedence target(s) ... but Intune reports 1" even on runs
+    # where Intune had stored both, and it made the stale-link strip in
+    # Set-YardstickSupersedence fire against apps with no links at all.
+    #
+    # The unrolling this guarded against is real - a bare [PSCustomObject] has no
+    # synthetic .Count under Windows PowerShell 5.1 - but every caller already
+    # wraps the call in @(), which normalizes 0, 1 and many correctly. Keep it
+    # that way: call this as @(Get-YardstickSupersedenceRelationship ...).
     switch ($Direction) {
         # sourceId is only null on freshly-submitted payloads; Graph backfills it
         # with the parent id, so treat null as "this app is the parent".
-        'Forward' { return ,@($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $Id) }) }
-        'Reverse' { return ,@($relationships | Where-Object { $_.sourceId -and ($_.sourceId -ne $Id) -and ($_.targetId -eq $Id) }) }
-        default   { return ,$relationships }
+        'Forward' { return @($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $Id) }) }
+        'Reverse' { return @($relationships | Where-Object { $_.sourceId -and ($_.sourceId -ne $Id) -and ($_.targetId -eq $Id) }) }
+        default   { return $relationships }
     }
 }
 
