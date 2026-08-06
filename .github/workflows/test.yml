@@ -19,6 +19,7 @@ jobs:
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
           Install-Module -Name powershell-yaml -Force -Scope CurrentUser
+          Install-Module -Name IntuneWin32App -Force -Scope CurrentUser
 
       - name: Run Pester tests
         shell: pwsh
