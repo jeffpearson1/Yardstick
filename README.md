@@ -80,6 +80,28 @@ Example: ```versionLock: 19.42.2.x``` will match versions ```19.42.2.24335``` an
 
 Configurable in both the default and application-specific preferences files, ```deadlineDateOffset``` and ```availableDateOffset``` (as well as their defaults) will clone deployment times of application assignments and offset them forward the configured number of days.
 
+### Supersedence & Auto-Update
+
+Yardstick uses Intune's native update path instead of a custom remediation. After each upload:
+
+* The new version declares **supersedence** over every older version Yardstick keeps (and over the `{DETECT}` anchor, when one exists). ```uninstallPreviousVersion``` selects between Intune's `Update` (in-place upgrade, default) and `Replace` (uninstall first) behavior.
+* **Auto-update** (```autoUpdateSupersededAppsState```) is turned on for the new version's *available* assignments, so Intune pulls devices running a superseded version forward without any user action. Intune only supports auto-update for available assignments, so required-only recipes are unaffected.
+* **Required** assignments are moved onto the new version; **available** assignments are copied and left in place, because removing an available assignment destroys the on-device component Intune uses to auto-update. If the older version will not be superseded (```supersedence: false```), available assignments are moved instead, as in earlier releases.
+
+Defaults live in ```preferences.yaml``` (```defaultSupersedence```, ```defaultUninstallPreviousVersion```, ```defaultAutoUpdate```, ```useDetectAnchor```) and can be overridden per recipe. See [WritingRecipes.md](WritingRecipes.md) for details, including the `{DETECT}` anchor that keeps long-abandoned installs in scope.
+
+Existing tenants can be migrated onto this model in one pass:
+
+```powershell
+.\Migrate-ToSupersedenceModel.ps1 -WhatIf
+```
+
+#### Known issue: apps with exactly one assignment
+
+`Get-IntuneWin32AppAssignment` (IntuneWin32App 1.5.0) returns `$null` for any app that has **exactly one** assignment, so assignment migration silently does nothing for those apps. The cmdlet guards its Graph response with `$response.Count -gt 0`; a single-element response is unrolled to a bare `[PSCustomObject]`, which has no synthetic `.Count`, so the guard fails and the cmdlet reports "No assignments found". Apps with two or more assignments are unaffected.
+
+Auto-update is *not* affected, because `Set-AssignmentAutoUpdate` reads assignments directly from Graph rather than through the cmdlet. Fixing the migration path requires the same Graph-direct approach.
+
 #### Other Parameters
 
 * ```-Force``` will overwrite the latest version of any targeted applications if they are the same as the new version, and run normally if a new version is available.

@@ -21,7 +21,7 @@ function Write-Log {
     )
     
     if (-not $LogLocation -or -not $LogFile) {
-        Write-Warning "LOG_LOCATION or LOG_FILE variables are not set. Cannot write to log."
+        Write-Warning "LogLocation or LogFile variables are not set. Cannot write to log."
         if ($Content) {
             Write-Host "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
@@ -634,6 +634,18 @@ function Move-AssignmentsAndDependencies {
         }
     }
     Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
+    # KNOWN ISSUE (IntuneWin32App 1.5.0): Get-IntuneWin32AppAssignment returns
+    # $null for any app that has EXACTLY ONE assignment, so the migration below
+    # silently does nothing for those apps. Get-IntuneWin32AppAssignment.ps1:124
+    # reads the assignments with Invoke-MSGraphOperation, which unrolls a
+    # single-element response to a bare [PSCustomObject]; the guard on the next
+    # line then tests `$response.Count -gt 0`, and PSCustomObject has no
+    # synthetic .Count (unlike other scalars in PS 3.0+), so it evaluates $null
+    # -gt 0 = $false and the cmdlet reports "No assignments found". Two or more
+    # assignments come back as an Object[] and work fine. Wrapping the call in
+    # @() does not help - the data is already discarded inside the cmdlet.
+    # Fixing this needs a Graph-direct reader (see Set-AssignmentAutoUpdate,
+    # which already bypasses the cmdlet via Invoke-YardstickGraphRequest).
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
     # Kept as DateTime, not a formatted string: rebuilding a date by formatting
@@ -1187,13 +1199,552 @@ function Get-SameAppAllVersions {
     
     if (-not $AllSimilarApps) {
         Write-Log "No applications found with the name $DisplayName"
-        return @()
+        return , @()
     }
     
-    # Only return apps that have the same name (not ones that look the same) and apps that are pending approval
-    $sortable = ($AllSimilarApps | Where-Object {($_.DisplayName -eq $DisplayName) -or ($_.DisplayName -like "$DisplayName (N-*")})
-    # Sort by version descending, then by createdDateTime descending
-    return $sortable | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true}
+    # Include the current name, any (N-x) rename, and the {DETECT} anchor for the same app.
+    $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
+    $sortable = ($AllSimilarApps | Where-Object {
+        ($_.DisplayName -eq $DisplayName) -or
+        ($_.DisplayName -like "$DisplayName (N-*") -or
+        ($_.DisplayName -eq $anchorName)
+    })
+    # Sort by version descending, then by createdDateTime descending. The unary
+    # comma keeps a single match from being unrolled into a scalar, so callers can
+    # always index and use .Count safely.
+    return , @($sortable | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true}, @{Expression = "createdDateTime"; Descending = $true})
+}
+
+
+
+function Invoke-YardstickGraphRequest {
+    <#
+    .SYNOPSIS
+    Minimal Microsoft Graph wrapper for the handful of calls that IntuneWin32App
+    does not expose (assignment-level auto-update settings, relationship
+    direction). Reuses the authentication header maintained by
+    Connect-AutoMSIntuneGraph / Connect-MSIntuneGraph.
+
+    .PARAMETER Resource
+    Graph resource path relative to the API version root, e.g.
+    "deviceAppManagement/mobileApps/<id>/assignments".
+
+    .PARAMETER Method
+    HTTP method. Defaults to Get.
+
+    .PARAMETER Body
+    Object to serialize as the JSON request body.
+
+    .PARAMETER ApiVersion
+    "beta" (default) or "v1.0". The auto-update assignment settings and the
+    per-app relationships collection are only exposed on beta.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Resource,
+
+        [ValidateSet('Get', 'Post', 'Patch', 'Put', 'Delete')]
+        [string]$Method = 'Get',
+
+        $Body,
+
+        [ValidateSet('beta', 'v1.0')]
+        [string]$ApiVersion = 'beta'
+    )
+
+    if (-not $Global:AuthenticationHeader -or -not $Global:AuthenticationHeader.Authorization) {
+        throw "Graph authentication header is missing. Call Connect-AutoMSIntuneGraph before using Invoke-YardstickGraphRequest."
+    }
+
+    $headers = @{
+        Authorization  = $Global:AuthenticationHeader.Authorization
+        'Content-Type' = 'application/json'
+    }
+
+    $uri = "https://graph.microsoft.com/$ApiVersion/$($Resource.TrimStart('/'))"
+    $params = @{
+        Uri         = $uri
+        Headers     = $headers
+        Method      = $Method
+        ErrorAction = 'Stop'
+    }
+    if ($null -ne $Body) {
+        $params['Body'] = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 10 }
+    }
+
+    $response = Invoke-RestMethod @params
+
+    # Unwrap OData collections and follow paging so callers always get a flat array.
+    if ($null -ne $response -and $response.PSObject.Properties['value']) {
+        $results = [System.Collections.Generic.List[object]]::new()
+        foreach ($item in $response.value) { $results.Add($item) | Out-Null }
+        $next = $response.'@odata.nextLink'
+        while ($next) {
+            $page = Invoke-RestMethod -Uri $next -Headers $headers -Method Get -ErrorAction Stop
+            foreach ($item in $page.value) { $results.Add($item) | Out-Null }
+            $next = $page.'@odata.nextLink'
+        }
+        return $results.ToArray()
+    }
+    return $response
+}
+
+
+function Test-IsVersionDetection {
+    <#
+    .SYNOPSIS
+    Returns $true when the detection type is one that compares against a version
+    number and therefore benefits from a {DETECT} anchor to catch older installs.
+    #>
+    param(
+        [string]$DetectionType,
+        [string]$FileDetectionMethod,
+        [string]$RegistryDetectionMethod
+    )
+    switch ($DetectionType) {
+        'msi'      { return $true }
+        'file'     { return ($FileDetectionMethod -eq 'version') }
+        'registry' { return ($RegistryDetectionMethod -eq 'version') }
+        default    { return $false }
+    }
+}
+
+
+function Get-DetectAnchor {
+    <#
+    .SYNOPSIS
+    Returns the "{DETECT} <DisplayName>" Intune app object if one exists, else $null.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$DisplayName
+    )
+    $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
+    $candidates = Get-IntuneWin32App -DisplayName $anchorName -ErrorAction SilentlyContinue
+    if (-not $candidates) { return $null }
+    return ($candidates | Where-Object DisplayName -eq $anchorName | Select-Object -First 1)
+}
+
+
+function Get-DetectAnchorName {
+    <#
+    .SYNOPSIS
+    Returns the reserved Intune display name used for an application's detection anchor.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$DisplayName
+    )
+    return "{DETECT} $DisplayName"
+}
+
+
+function Set-DetectAnchor {
+    <#
+    .SYNOPSIS
+    Renames the given Intune app to "{DETECT} <DisplayName>" so it is preserved
+    across retention cleanup as the low-water-mark detection anchor. Idempotent.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $App,
+        [Parameter(Mandatory=$true)]
+        [string]$DisplayName
+    )
+    $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
+    if ($App.DisplayName -eq $anchorName) {
+        Write-Log "App $($App.Id) is already the {DETECT} anchor for $DisplayName"
+        return
+    }
+    Write-Log "Pinning $($App.DisplayName) ($($App.Id)) as {DETECT} anchor for $DisplayName"
+    Set-IntuneWin32App -Id $App.Id -DisplayName $anchorName | Out-Null
+}
+
+
+function Get-YardstickSupersedenceRelationship {
+    <#
+    .SYNOPSIS
+    Returns the supersedence relationships that touch the given Win32 app, in both
+    directions.
+
+    .DESCRIPTION
+    The beta `mobileApps/{id}/relationships` collection contains an entry for every
+    supersedence edge the app participates in. Entries where `sourceId` equals the
+    app id are forward links (this app supersedes `targetId`); entries where
+    `targetId` equals the app id are reverse links (`sourceId` supersedes this app).
+    Reverse links must be cleared from the *parent* before Intune will allow the
+    child to be deleted.
+
+    .PARAMETER Id
+    The Win32 app id to inspect.
+
+    .PARAMETER Direction
+    'Forward' (this app supersedes others), 'Reverse' (others supersede this app),
+    or 'All' (default).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Id,
+
+        [ValidateSet('All', 'Forward', 'Reverse')]
+        [string]$Direction = 'All'
+    )
+
+    try {
+        $relationships = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$Id/relationships" |
+            Where-Object { $_.'@odata.type' -eq '#microsoft.graph.mobileAppSupersedence' })
+    } catch {
+        Write-Log "WARNING: Failed to read supersedence relationships for $Id : $_"
+        return ,@()
+    }
+
+    # Every return is comma-wrapped: `return @($x)` unrolls a single-element array
+    # back to a bare object on the way out, and [PSCustomObject] has no synthetic
+    # .Count (unlike other scalars in PS 3.0+), so a caller testing
+    # `(Get-YardstickSupersedenceRelationship ...).Count -gt 0` silently sees $null
+    # and concludes there are no links. That skipped the stale-link strip in
+    # Set-YardstickSupersedence for exactly the one-link case, leaving a target
+    # still pointing at the new app - which Intune then rejects with
+    # "A circular dependency was created while adding app relationships."
+    switch ($Direction) {
+        # sourceId is only null on freshly-submitted payloads; Graph backfills it
+        # with the parent id, so treat null as "this app is the parent".
+        'Forward' { return ,@($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $Id) }) }
+        'Reverse' { return ,@($relationships | Where-Object { $_.sourceId -and ($_.sourceId -ne $Id) -and ($_.targetId -eq $Id) }) }
+        default   { return ,$relationships }
+    }
+}
+
+
+function Remove-SupersedenceReference {
+    <#
+    .SYNOPSIS
+    Removes a single supersedence target from a parent app, leaving the parent's
+    other supersedence targets (and all of its dependencies) intact.
+
+    .DESCRIPTION
+    Intune has no "delete one relationship" operation for Win32 apps - the whole
+    relationship set is replaced via updateRelationships. This rebuilds the parent's
+    supersedence list without $TargetId and re-submits it.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ParentId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TargetId
+    )
+
+    $forward = @(Get-YardstickSupersedenceRelationship -Id $ParentId -Direction Forward)
+    if (-not ($forward | Where-Object targetId -eq $TargetId)) {
+        return
+    }
+
+    $remaining = @($forward | Where-Object targetId -ne $TargetId)
+    if ($remaining.Count -eq 0) {
+        Write-Log "Clearing supersedence on $ParentId (was its only target: $TargetId)"
+        Remove-IntuneWin32AppSupersedence -ID $ParentId | Out-Null
+        return
+    }
+
+    $rebuilt = New-SupersedenceObject -Relationships $remaining
+    if ($rebuilt.Count -eq 0) {
+        Write-Log "WARNING: Could not rebuild supersedence for $ParentId; leaving it untouched"
+        return
+    }
+    Write-Log "Rebuilding supersedence on $ParentId without target $TargetId ($($rebuilt.Count) remaining)"
+    Add-IntuneWin32AppSupersedence -ID $ParentId -Supersedence $rebuilt | Out-Null
+}
+
+
+function New-SupersedenceObject {
+    <#
+    .SYNOPSIS
+    Builds the OrderedDictionary array that Add-IntuneWin32AppSupersedence expects.
+
+    .DESCRIPTION
+    Accepts either existing relationship objects (which carry targetId +
+    supersedenceType) or an explicit target id / type pair. Any entry that cannot
+    be resolved is dropped rather than passed through as $null, because
+    Add-IntuneWin32AppSupersedence declares [OrderedDictionary[]] with
+    ValidateNotNullOrEmpty and would otherwise fail the whole batch.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Relationships')]
+    [OutputType([System.Collections.Specialized.OrderedDictionary[]])]
+    param(
+        [Parameter(ParameterSetName = 'Relationships')]
+        [AllowEmptyCollection()]
+        [array]$Relationships = @(),
+
+        [Parameter(ParameterSetName = 'Explicit')]
+        [AllowEmptyCollection()]
+        [array]$TargetIds = @(),
+
+        [Parameter(ParameterSetName = 'Explicit')]
+        [ValidateSet('Update', 'Replace')]
+        [string]$Type = 'Update'
+    )
+
+    $pairs = if ($PSCmdlet.ParameterSetName -eq 'Relationships') {
+        foreach ($relationship in $Relationships) {
+            # supersedenceType comes back lowercase from Graph; New-IntuneWin32AppSupersedence validates Update/Replace.
+            $resolved = if ($relationship.supersedenceType -eq 'replace') { 'Replace' } else { 'Update' }
+            [PSCustomObject]@{ TargetId = $relationship.targetId; Type = $resolved }
+        }
+    } else {
+        foreach ($targetId in $TargetIds) {
+            [PSCustomObject]@{ TargetId = $targetId; Type = $Type }
+        }
+    }
+
+    $built = [System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]]::new()
+    foreach ($pair in $pairs) {
+        if (-not $pair.TargetId) { continue }
+        $object = New-IntuneWin32AppSupersedence -ID $pair.TargetId -SupersedenceType $pair.Type
+        if ($object) {
+            $built.Add([System.Collections.Specialized.OrderedDictionary]$object) | Out-Null
+        } else {
+            Write-Log "WARNING: Could not build supersedence object for target $($pair.TargetId) - skipping"
+        }
+    }
+    return , $built.ToArray()
+}
+
+
+function Set-YardstickSupersedence {
+    <#
+    .SYNOPSIS
+    Makes $NewApp the single superseding parent for every entry in $SupersededApps.
+
+    .DESCRIPTION
+    Yardstick maintains a flat supersedence graph: only the newest version ever
+    supersedes anything, so stale forward links are stripped off the targets first
+    and the parent's own list is rebuilt from scratch. This keeps re-runs idempotent
+    and keeps the graph inside Intune's 10-node limit.
+
+    .PARAMETER Type
+    "Update" (in-place upgrade) or "Replace" (uninstall previous version first).
+
+    .PARAMETER UpdateOnlyIds
+    App ids that must always be superseded with "Update" regardless of $Type. The
+    {DETECT} anchor lives here: its detection rule deliberately matches a very wide
+    version range, so a "Replace" against it would uninstall the app from every
+    device that has any version installed.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $NewApp,
+        [Parameter(Mandatory=$true)]
+        [AllowEmptyCollection()]
+        [array]$SupersededApps,
+        [ValidateSet('Update','Replace')]
+        [string]$Type = 'Update',
+        [AllowEmptyCollection()]
+        [string[]]$UpdateOnlyIds = @()
+    )
+
+    $targets = @($SupersededApps | Where-Object { $_ -and $_.id -and $_.id -ne $NewApp.id })
+
+    # De-duplicate: the same app can arrive from both the kept list and the anchor.
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $targets = @($targets | Where-Object { $seen.Add($_.id) })
+
+    if ($targets.Count -eq 0) {
+        Write-Log "No supersedence targets for $($NewApp.DisplayName) - clearing any stale links"
+        if (@(Get-YardstickSupersedenceRelationship -Id $NewApp.id -Direction Forward).Count -gt 0) {
+            Remove-IntuneWin32AppSupersedence -ID $NewApp.id | Out-Null
+        }
+        return 0
+    }
+
+    $updateOnly = [System.Collections.Generic.HashSet[string]]::new([string[]]$UpdateOnlyIds, [StringComparer]::OrdinalIgnoreCase)
+
+    # Intune caps a supersedence graph at 10 nodes, one of which is the parent.
+    # Update-only targets (the {DETECT} anchor) are reserved first: the anchor is
+    # by definition the oldest version, so a plain newest-first trim would drop
+    # exactly the target that catches stale installs.
+    $maxTargets = 9
+    if ($targets.Count -gt $maxTargets) {
+        Write-Log "WARNING: $($targets.Count) supersedence targets exceeds Intune's limit of $maxTargets; trimming the oldest"
+        $reserved = @($targets | Where-Object { $updateOnly.Contains($_.id) } | Select-Object -First $maxTargets)
+        $fill = @($targets |
+            Where-Object { -not $updateOnly.Contains($_.id) } |
+            Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true} |
+            Select-Object -First ($maxTargets - $reserved.Count))
+        $targets = @($fill) + @($reserved)
+    }
+
+    # Strip stale forward links off every target so the newest app is the only parent.
+    foreach ($target in $targets) {
+        try {
+            if (@(Get-YardstickSupersedenceRelationship -Id $target.id -Direction Forward).Count -gt 0) {
+                Write-Log "Clearing stale supersedence on $($target.DisplayName) ($($target.id))"
+                Remove-IntuneWin32AppSupersedence -ID $target.id | Out-Null
+            }
+        } catch {
+            Write-Log "WARNING: Failed to clear existing supersedence on $($target.DisplayName) ($($target.id)): $_"
+        }
+    }
+
+    $supersedence = [System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]]::new()
+    foreach ($target in $targets) {
+        $targetType = if ($updateOnly.Contains($target.id)) { 'Update' } else { $Type }
+        $built = New-SupersedenceObject -TargetIds @($target.id) -Type $targetType
+        foreach ($object in $built) { $supersedence.Add($object) | Out-Null }
+    }
+
+    if ($supersedence.Count -eq 0) {
+        Write-Log "WARNING: No resolvable supersedence targets for $($NewApp.DisplayName) - skipping"
+        return 0
+    }
+
+    Write-Log "Attaching supersedence ($Type) from $($NewApp.DisplayName) to $($supersedence.Count) target(s)"
+    # Add-IntuneWin32AppSupersedence replaces the parent's whole supersedence set,
+    # so there is no need to clear it first.
+    Add-IntuneWin32AppSupersedence -ID $NewApp.id -Supersedence $supersedence.ToArray() | Out-Null
+
+    # The cmdlet downgrades Graph failures to warnings, so read the graph back and
+    # report what Intune actually stored rather than what we asked for.
+    $attached = @(Get-YardstickSupersedenceRelationship -Id $NewApp.id -Direction Forward)
+    if ($attached.Count -ne $supersedence.Count) {
+        Write-Log "ERROR: Expected $($supersedence.Count) supersedence target(s) on $($NewApp.DisplayName) but Intune reports $($attached.Count)"
+    }
+    return $attached.Count
+}
+
+
+function Set-AssignmentAutoUpdate {
+    <#
+    .SYNOPSIS
+    Turns Intune's native auto-update on for a Win32 app's assignments so devices
+    running a superseded version are pulled forward without any custom remediation.
+
+    .DESCRIPTION
+    Sets `settings.autoUpdateSettings.autoUpdateSupersededAppsState` on each matching
+    assignment. Microsoft only honours this for the *available* intent - "the
+    supersedence auto-update only applies for available assignments" - so the default
+    filter is 'available' and required assignments are left alone.
+
+    Assignments are read straight from Graph rather than via
+    Get-IntuneWin32AppAssignment because that cmdlet does not surface the assignment
+    id, which is required to PATCH an individual assignment.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AppId,
+        [bool]$Enabled = $true,
+        [ValidateSet('', 'required', 'available')]
+        [string]$IntentFilter = 'available'
+    )
+
+    try {
+        $assignments = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments")
+    } catch {
+        Write-Log "WARNING: Failed to read assignments for $AppId while setting auto-update: $_"
+        return 0
+    }
+
+    if ($IntentFilter) {
+        $assignments = @($assignments | Where-Object intent -eq $IntentFilter)
+    }
+    if ($assignments.Count -eq 0) {
+        Write-Log "No $(if ($IntentFilter) { "$IntentFilter-intent " })assignments on $AppId to configure auto-update on"
+        return 0
+    }
+
+    $desiredState = if ($Enabled) { 'enabled' } else { 'notConfigured' }
+    $count = 0
+    foreach ($assignment in $assignments) {
+        if (-not $assignment.id) { continue }
+
+        # Exclusion targets carry no settings object and cannot auto-update.
+        if ($assignment.target.'@odata.type' -eq '#microsoft.graph.exclusionGroupAssignmentTarget') { continue }
+
+        if ($assignment.settings.autoUpdateSettings.autoUpdateSupersededAppsState -eq $desiredState) {
+            $count++
+            continue
+        }
+
+        # Re-send the existing settings so notifications, delivery optimization and
+        # install-time settings are not reset by the PATCH.
+        $settings = [ordered]@{
+            '@odata.type'                  = '#microsoft.graph.win32LobAppAssignmentSettings'
+            'notifications'                = if ($assignment.settings.notifications) { $assignment.settings.notifications } else { 'showAll' }
+            'restartSettings'              = $assignment.settings.restartSettings
+            'deliveryOptimizationPriority' = if ($assignment.settings.deliveryOptimizationPriority) { $assignment.settings.deliveryOptimizationPriority } else { 'notConfigured' }
+            'installTimeSettings'          = $assignment.settings.installTimeSettings
+            'autoUpdateSettings'           = [ordered]@{
+                '@odata.type'                  = '#microsoft.graph.win32LobAppAutoUpdateSettings'
+                'autoUpdateSupersededAppsState' = $desiredState
+            }
+        }
+
+        try {
+            Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments/$($assignment.id)" `
+                -Method Patch -Body @{ settings = $settings } | Out-Null
+            $count++
+        } catch {
+            Write-Log "WARNING: Failed to set auto-update on assignment $($assignment.id) for app $AppId : $_"
+        }
+    }
+    Write-Log "Auto-update ($desiredState) is set on $count assignment(s) for $AppId"
+    return $count
+}
+
+
+function Remove-YardstickApp {
+    <#
+    .SYNOPSIS
+    Safely deletes an Intune Win32 app.
+
+    .DESCRIPTION
+    Intune refuses to delete an app that still participates in a supersedence
+    relationship, so both directions are unwound first: any parent that supersedes
+    this app has the reference rebuilt without it, and the app's own forward links
+    are cleared.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $App
+    )
+
+    $relationships = @(Get-YardstickSupersedenceRelationship -Id $App.id)
+
+    $parentIds = @($relationships |
+        Where-Object { $_.sourceId -and ($_.sourceId -ne $App.id) -and ($_.targetId -eq $App.id) } |
+        Select-Object -ExpandProperty sourceId -Unique)
+    foreach ($parentId in $parentIds) {
+        try {
+            Remove-SupersedenceReference -ParentId $parentId -TargetId $App.id
+        } catch {
+            Write-Log "WARNING: Failed to detach $($App.DisplayName) ($($App.id)) from superseding app $parentId : $_"
+        }
+    }
+
+    $hasForwardLinks = @($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $App.id) }).Count -gt 0
+    if ($hasForwardLinks) {
+        try {
+            Remove-IntuneWin32AppSupersedence -ID $App.id | Out-Null
+        } catch {
+            Write-Log "WARNING: Failed to strip supersedence from $($App.DisplayName) ($($App.id)) before delete: $_"
+        }
+    }
+
+    Write-Log "Removing app $($App.DisplayName) ($($App.id))"
+    Remove-IntuneWin32App -Id $App.id
+
+    # Remove-IntuneWin32App downgrades Graph failures (including Intune's refusal
+    # to delete an app that is still in a relationship) to a warning, so confirm
+    # the app is really gone. Callers rely on this throwing to know a prune failed.
+    $stillPresent = $null
+    try {
+        $stillPresent = Get-IntuneWin32App -Id $App.id -ErrorAction SilentlyContinue
+    } catch {
+        $stillPresent = $null
+    }
+    if ($stillPresent) {
+        throw "Intune still reports app $($App.DisplayName) ($($App.id)) after the delete request."
+    }
 }
 
 
@@ -1377,6 +1928,7 @@ function Test-RecipeSchema {
         'dependentApplicationBlacklist', 'dependentLinkUpdateEnabled',
         'dependentLinkUpdateRetryCount', 'dependentLinkUpdateRetryDelaySeconds',
         'dependentLinkUpdateTimeoutSeconds',
+        'supersedence', 'uninstallPreviousVersion', 'autoUpdateOnAssignment', 'autoUpdate',
         'base'
     )
     $knownFieldsLower = $knownFields | ForEach-Object { $_.ToLower() }

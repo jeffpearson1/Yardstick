@@ -5,7 +5,7 @@ preDownloadScript: |
   $Version = (Get-Item $PathToCCMSetupEXE).VersionInfo.ProductVersion
 downloadScript: |
   Copy-Item "$url\*" . -Recurse -Force
-installScript: ccmsetup.exe /noservice /mp:https://YOURMP.URL CCMHOSTNAME="YOURMP.URL" /BITSPriority:HIGH SMSCACHESIZE=20000 SMSSITECODE="DEF"
+installScript: ccmsetup.exe /noservice /mp:https://YOURMP.URL CCMHOSTNAME="YOURMP.URL" /BITSPriority:HIGH SMSCACHESIZE=20000 SMSSITECODE="<YOUR_ORG>"
 uninstallScript: ccmsetup.exe /uninstall
 fileName: ccmsetup.exe
 iconFile: sccm.png
