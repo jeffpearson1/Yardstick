@@ -23,4 +23,3 @@ fileDetectionPath: C:\Program Files\GIMP 3\bin
 fileDetectionName: gimp-3.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
-numVersionsToKeep: 2

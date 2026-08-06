@@ -19,4 +19,3 @@ fileDetectionPath: C:\Program Files\Mendeley Reference Manager
 fileDetectionName: Mendeley Reference Manager.exe
 fileDetectionMethod: version
 fileDetectionOperator: greaterThanOrEqual
-numVersionsToKeep: 2

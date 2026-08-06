@@ -21,7 +21,6 @@ fileDetectionPath: 'C:\Program Files\Unity Hub'
 fileDetectionName: 'Unity Hub.exe'
 fileDetectionMethod: version
 fileDetectionOperator: greaterThanOrEqual
-numVersionsToKeep: 2
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W10_20H2

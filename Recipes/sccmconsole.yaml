@@ -1,4 +1,4 @@
-url: \\yoursiteserver.yourcompany.com\sms_def\tools\ConsoleSetup
+url: \\yoursiteserver.yourcompany.com\sms_<your_org>\tools\ConsoleSetup
 urlRedirects: false
 preDownloadScript: |
   $Version = (Get-Item "$url\ConsoleSetup.exe").VersionInfo.ProductVersion
@@ -15,4 +15,5 @@ description: For admin use only - installs the SCCM Console.
 fileType: msi
 detectionType: msi
 numVersionsToKeep: 1
+autoUpdate: false
 minOSVersion: W10_22H2

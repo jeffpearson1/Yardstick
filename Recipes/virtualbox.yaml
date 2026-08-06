@@ -1,5 +1,5 @@
 url: https://www.virtualbox.org/wiki/Downloads
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $URL = "https://www.virtualbox.org/wiki/Downloads"
   $Content = Invoke-WebRequest $URL -UseBasicParsing
@@ -47,4 +47,3 @@ detectionScript: |
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W11_24H2
-numVersionsToKeep: 2

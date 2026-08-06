@@ -15,7 +15,6 @@ publisher: OpenJS Foundation
 description: Node.js is a JavaScript runtime built on Chrome's V8 JavaScript engine.
 fileType: msi
 detectionType: msi
-numVersionsToKeep: 2
 scopeTags:
   - scopeTag1
   - scopeTag2

@@ -33,4 +33,3 @@ detectionScript: |
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W11_24H2
-numVersionsToKeep: 2

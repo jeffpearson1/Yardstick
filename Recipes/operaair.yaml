@@ -21,4 +21,3 @@ fileDetectionPath: C:\Program Files\Opera Air
 fileDetectionName: opera.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
-numVersionsToKeep: 2

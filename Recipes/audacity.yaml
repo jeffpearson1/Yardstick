@@ -25,4 +25,3 @@ fileDetectionVersion:
 fileDetectionOperator: equal
 installExperience: system
 maximumInstallationTimeInMinutes: 5
-numVersionsToKeep: 2

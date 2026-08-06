@@ -1,4 +1,4 @@
-url: \\yoursiteserver.yourcompany.com\sms_def\Client
+url: \\yoursiteserver.yourcompany.com\sms_<your_org>\Client
 urlRedirects: false
 preDownloadScript: |
   $PathToCCMSetupEXE = "$url\ccmsetup.exe"
@@ -20,4 +20,5 @@ detectionScript: |
     Write-Host "Installed"
   }
 numVersionsToKeep: 1
+autoUpdate: false
 minOSVersion: W10_1709

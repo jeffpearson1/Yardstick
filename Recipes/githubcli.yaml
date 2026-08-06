@@ -18,7 +18,6 @@ publisher: GitHub, Inc.
 description: GitHub CLI brings GitHub to the command line.
 fileType: msi
 detectionType: msi
-numVersionsToKeep: 2
 scopeTags:
   - scopeTag1
   - scopeTag2
