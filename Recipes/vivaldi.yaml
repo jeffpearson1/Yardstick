@@ -1,0 +1,63 @@
+url:
+urlRedirects: false
+preDownloadScript: |
+  # Vivaldi's Sparkle appcast is the only machine-readable source for the current
+  # stable version - https://downloads.vivaldi.com/stable/ returns 403 (no index).
+  $appcast = [xml](Invoke-WebRequest -Uri "https://update.vivaldi.com/update/1.0/public/appcast.x64.xml" -UseBasicParsing).Content
+  $version = @($appcast.rss.channel.item.enclosure.version | Sort-Object { [version]$_ } -Descending)[0]
+  if ($version -notmatch "^\d+\.\d+\.\d+\.\d+$") {
+    throw "Unable to parse Vivaldi version number from the update appcast."
+  }
+  $fileName = "Vivaldi.$version.x64.exe"
+  # The appcast points at stable-auto/; use the canonical stable/ path instead.
+  $url = "https://downloads.vivaldi.com/stable/$fileName"
+  $fileDetectionVersion = $version
+powerShellUninstallScript: |
+  # Vivaldi's uninstaller lives under a version-numbered folder, and the browser
+  # updates itself, so the path is read from the registry rather than hardcoded.
+  $uninstallKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Vivaldi'
+  if (-not (Test-Path -Path $uninstallKey)) {
+      # Nothing installed - nothing to do.
+      exit 0
+  }
+
+  $properties = Get-ItemProperty -Path $uninstallKey
+  $setup = Join-Path -Path $properties.InstallLocation -ChildPath "$($properties.DisplayVersion)\Installer\setup.exe"
+  if (-not (Test-Path -Path $setup)) {
+      # Fall back to the newest Installer\setup.exe under the install location.
+      $setup = Get-ChildItem -Path $properties.InstallLocation -Filter "setup.exe" -Recurse -ErrorAction SilentlyContinue |
+          Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+  }
+  if (-not $setup) {
+      Write-Output "Unable to locate Vivaldi's setup.exe."
+      exit 1
+  }
+
+  $process = Start-Process -FilePath $setup -ArgumentList "--uninstall", "--system-level", "--force-uninstall" -Wait -PassThru
+  # Chromium's installer returns 19 (UNINSTALL_SUCCESSFUL); Intune only treats 0 as success.
+  if ($process.ExitCode -in 0, 19) {
+      exit 0
+  }
+  exit $process.ExitCode
+installScript: '"<filename>" --vivaldi-silent --do-not-launch-chrome --system-level'
+uninstallScript: '%SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy bypass -File .\uninstall.ps1'
+fileName:
+iconFile: vivaldi.png
+id: vivaldi
+displayName: Vivaldi
+publisher: Vivaldi Technologies AS
+description: Vivaldi is a highly customizable Chromium-based web browser with built-in tab management, notes, mail and calendar, and no user tracking.
+fileType: EXE
+detectionType: file
+fileDetectionPath: C:\Program Files\Vivaldi\Application
+fileDetectionName: vivaldi.exe
+fileDetectionMethod: version
+# Vivaldi updates itself, so detection must not break when the installed build
+# runs ahead of the packaged one.
+fileDetectionOperator: greaterThanOrEqual
+installExperience: system
+restartBehavior: suppress
+numVersionsToKeep: 2
+scopeTags:
+  - scopeTag1
+  - scopeTag2

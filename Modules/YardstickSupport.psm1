@@ -21,7 +21,7 @@ function Write-Log {
     )
     
     if (-not $LogLocation -or -not $LogFile) {
-        Write-Warning "LOG_LOCATION or LOG_FILE variables are not set. Cannot write to log."
+        Write-Warning "LogLocation or LogFile variables are not set. Cannot write to log."
         if ($Content) {
             Write-Host "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
@@ -634,6 +634,18 @@ function Move-AssignmentsAndDependencies {
         }
     }
     Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
+    # KNOWN ISSUE (IntuneWin32App 1.5.0): Get-IntuneWin32AppAssignment returns
+    # $null for any app that has EXACTLY ONE assignment, so the migration below
+    # silently does nothing for those apps. Get-IntuneWin32AppAssignment.ps1:124
+    # reads the assignments with Invoke-MSGraphOperation, which unrolls a
+    # single-element response to a bare [PSCustomObject]; the guard on the next
+    # line then tests `$response.Count -gt 0`, and PSCustomObject has no
+    # synthetic .Count (unlike other scalars in PS 3.0+), so it evaluates $null
+    # -gt 0 = $false and the cmdlet reports "No assignments found". Two or more
+    # assignments come back as an Object[] and work fine. Wrapping the call in
+    # @() does not help - the data is already discarded inside the cmdlet.
+    # Fixing this needs a Graph-direct reader (see Set-AssignmentAutoUpdate,
+    # which already bypasses the cmdlet via Invoke-YardstickGraphRequest).
     $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
     # Kept as DateTime, not a formatted string: rebuilding a date by formatting
@@ -1383,15 +1395,23 @@ function Get-YardstickSupersedenceRelationship {
             Where-Object { $_.'@odata.type' -eq '#microsoft.graph.mobileAppSupersedence' })
     } catch {
         Write-Log "WARNING: Failed to read supersedence relationships for $Id : $_"
-        return @()
+        return ,@()
     }
 
+    # Every return is comma-wrapped: `return @($x)` unrolls a single-element array
+    # back to a bare object on the way out, and [PSCustomObject] has no synthetic
+    # .Count (unlike other scalars in PS 3.0+), so a caller testing
+    # `(Get-YardstickSupersedenceRelationship ...).Count -gt 0` silently sees $null
+    # and concludes there are no links. That skipped the stale-link strip in
+    # Set-YardstickSupersedence for exactly the one-link case, leaving a target
+    # still pointing at the new app - which Intune then rejects with
+    # "A circular dependency was created while adding app relationships."
     switch ($Direction) {
         # sourceId is only null on freshly-submitted payloads; Graph backfills it
         # with the parent id, so treat null as "this app is the parent".
-        'Forward' { return @($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $Id) }) }
-        'Reverse' { return @($relationships | Where-Object { $_.sourceId -and ($_.sourceId -ne $Id) -and ($_.targetId -eq $Id) }) }
-        default   { return $relationships }
+        'Forward' { return ,@($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $Id) }) }
+        'Reverse' { return ,@($relationships | Where-Object { $_.sourceId -and ($_.sourceId -ne $Id) -and ($_.targetId -eq $Id) }) }
+        default   { return ,$relationships }
     }
 }
 
@@ -1531,7 +1551,7 @@ function Set-YardstickSupersedence {
 
     if ($targets.Count -eq 0) {
         Write-Log "No supersedence targets for $($NewApp.DisplayName) - clearing any stale links"
-        if ((Get-YardstickSupersedenceRelationship -Id $NewApp.id -Direction Forward).Count -gt 0) {
+        if (@(Get-YardstickSupersedenceRelationship -Id $NewApp.id -Direction Forward).Count -gt 0) {
             Remove-IntuneWin32AppSupersedence -ID $NewApp.id | Out-Null
         }
         return 0
@@ -1557,7 +1577,7 @@ function Set-YardstickSupersedence {
     # Strip stale forward links off every target so the newest app is the only parent.
     foreach ($target in $targets) {
         try {
-            if ((Get-YardstickSupersedenceRelationship -Id $target.id -Direction Forward).Count -gt 0) {
+            if (@(Get-YardstickSupersedenceRelationship -Id $target.id -Direction Forward).Count -gt 0) {
                 Write-Log "Clearing stale supersedence on $($target.DisplayName) ($($target.id))"
                 Remove-IntuneWin32AppSupersedence -ID $target.id | Out-Null
             }

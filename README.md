@@ -96,6 +96,12 @@ Existing tenants can be migrated onto this model in one pass:
 .\Migrate-ToSupersedenceModel.ps1 -WhatIf
 ```
 
+#### Known issue: apps with exactly one assignment
+
+`Get-IntuneWin32AppAssignment` (IntuneWin32App 1.5.0) returns `$null` for any app that has **exactly one** assignment, so assignment migration silently does nothing for those apps. The cmdlet guards its Graph response with `$response.Count -gt 0`; a single-element response is unrolled to a bare `[PSCustomObject]`, which has no synthetic `.Count`, so the guard fails and the cmdlet reports "No assignments found". Apps with two or more assignments are unaffected.
+
+Auto-update is *not* affected, because `Set-AssignmentAutoUpdate` reads assignments directly from Graph rather than through the cmdlet. Fixing the migration path requires the same Graph-direct approach.
+
 #### Other Parameters
 
 * ```-Force``` will overwrite the latest version of any targeted applications if they are the same as the new version, and run normally if a new version is available.
