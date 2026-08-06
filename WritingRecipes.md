@@ -576,7 +576,6 @@ displayName: Google Chrome
 publisher: Google
 description: A web browser by Google
 detectionType: msi
-numVersionsToKeep: 2
 scopeTags:
   - My Scope Tag
   - My Scope Tag 2
@@ -630,7 +629,6 @@ description: Mozilla Firefox is a free and open-source web browser
 detectionType: registry
 registryDetectionMethod: exists
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> (x64 en-US)'
-numVersionsToKeep: 2
 scopeTags:
   - My Scope Tag
   - My Scope Tag 2
