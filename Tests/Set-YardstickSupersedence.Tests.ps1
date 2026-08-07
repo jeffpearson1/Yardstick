@@ -31,7 +31,7 @@ Describe "Test-IsVersionDetection" {
 
 Describe "Get-DetectAnchorName" {
     It "prefixes the reserved marker" {
-        Get-DetectAnchorName -DisplayName 'Google Chrome' | Should -Be '{DETECT} Google Chrome'
+        Get-DetectAnchorName -DisplayName 'Google Chrome' | Should -Be 'Ω DETECT - Google Chrome'
     }
 }
 
@@ -170,7 +170,7 @@ Describe "Set-YardstickSupersedence" {
             [PSCustomObject]@{ id = "old$_"; DisplayName = "App (N-$_)"; displayVersion = "$_.0" }
         })
         # The anchor is deliberately the oldest version - a naive newest-first trim drops it.
-        $targets += [PSCustomObject]@{ id = 'anchor'; DisplayName = '{DETECT} App'; displayVersion = '0.1' }
+        $targets += [PSCustomObject]@{ id = 'anchor'; DisplayName = 'Ω DETECT - App'; displayVersion = '0.1' }
         $count = Set-YardstickSupersedence -NewApp $new -SupersededApps $targets -Type 'Replace' -UpdateOnlyIds @('anchor')
         $count | Should -Be 9
         Should -Invoke -ModuleName YardstickSupport New-IntuneWin32AppSupersedence -Times 1 -Exactly -ParameterFilter { $ID -eq 'anchor' -and $SupersedenceType -eq 'Update' }
@@ -180,7 +180,7 @@ Describe "Set-YardstickSupersedence" {
         $new = [PSCustomObject]@{ id = 'new'; DisplayName = 'App'; displayVersion = '3.0' }
         $targets = @(
             [PSCustomObject]@{ id = 'old';    DisplayName = 'App (N-1)';    displayVersion = '2.0' },
-            [PSCustomObject]@{ id = 'anchor'; DisplayName = '{DETECT} App'; displayVersion = '1.0' }
+            [PSCustomObject]@{ id = 'anchor'; DisplayName = 'Ω DETECT - App'; displayVersion = '1.0' }
         )
         Set-YardstickSupersedence -NewApp $new -SupersededApps $targets -Type 'Replace' -UpdateOnlyIds @('anchor') | Out-Null
         Should -Invoke -ModuleName YardstickSupport New-IntuneWin32AppSupersedence -Times 1 -Exactly -ParameterFilter { $ID -eq 'anchor' -and $SupersedenceType -eq 'Update' }
@@ -289,17 +289,108 @@ Describe "Set-AssignmentAutoUpdate" {
     }
 }
 
+Describe "Set-AssignmentAutoUpdate skip groups" {
+    BeforeEach {
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest {
+            if ($Method -ne 'Patch') {
+                return @(
+                    [PSCustomObject]@{
+                        id       = 'assign-normal'
+                        intent   = 'available'
+                        target   = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'group-normal' }
+                        settings = [PSCustomObject]@{ notifications = 'showAll' }
+                    },
+                    [PSCustomObject]@{
+                        id       = 'assign-skipped'
+                        intent   = 'available'
+                        target   = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'group-skipped' }
+                        settings = [PSCustomObject]@{
+                            notifications      = 'showAll'
+                            autoUpdateSettings = [PSCustomObject]@{ autoUpdateSupersededAppsState = 'enabled' }
+                        }
+                    },
+                    [PSCustomObject]@{
+                        id       = 'assign-all-devices'
+                        intent   = 'available'
+                        target   = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget' }
+                        settings = [PSCustomObject]@{ notifications = 'showAll' }
+                    }
+                )
+            }
+            return $null
+        }
+    }
+
+    It "enables auto-update on groups that are not in the skip list" {
+        Set-AssignmentAutoUpdate -AppId 'app1' -Enabled $true -SkipGroupIds @('group-skipped') | Out-Null
+        Should -Invoke -ModuleName YardstickSupport Invoke-YardstickGraphRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Patch' -and $Resource -like '*assignments/assign-normal' -and
+            $Body.settings.autoUpdateSettings.autoUpdateSupersededAppsState -eq 'enabled'
+        }
+    }
+
+    It "forces a skipped group back to notConfigured" {
+        Set-AssignmentAutoUpdate -AppId 'app1' -Enabled $true -SkipGroupIds @('group-skipped') | Out-Null
+        Should -Invoke -ModuleName YardstickSupport Invoke-YardstickGraphRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Patch' -and $Resource -like '*assignments/assign-skipped' -and
+            $Body.settings.autoUpdateSettings.autoUpdateSupersededAppsState -eq 'notConfigured'
+        }
+    }
+
+    It "matches group ids case-insensitively" {
+        Set-AssignmentAutoUpdate -AppId 'app1' -Enabled $true -SkipGroupIds @('GROUP-SKIPPED') | Out-Null
+        Should -Invoke -ModuleName YardstickSupport Invoke-YardstickGraphRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Patch' -and $Resource -like '*assignments/assign-skipped'
+        }
+    }
+
+    It "does not count skipped assignments in the returned total" {
+        # assign-normal and assign-all-devices are enabled; assign-skipped is not.
+        Set-AssignmentAutoUpdate -AppId 'app1' -Enabled $true -SkipGroupIds @('group-skipped') | Should -Be 2
+    }
+
+    It "cannot skip targets that carry no group id" {
+        Set-AssignmentAutoUpdate -AppId 'app1' -Enabled $true -SkipGroupIds @('group-skipped') | Out-Null
+        Should -Invoke -ModuleName YardstickSupport Invoke-YardstickGraphRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Patch' -and $Resource -like '*assignments/assign-all-devices' -and
+            $Body.settings.autoUpdateSettings.autoUpdateSupersededAppsState -eq 'enabled'
+        }
+    }
+
+    It "leaves every assignment alone when the skip list is empty" {
+        $count = Set-AssignmentAutoUpdate -AppId 'app1' -Enabled $true
+        $count | Should -Be 3
+        Should -Invoke -ModuleName YardstickSupport Invoke-YardstickGraphRequest -Times 0 -Exactly -ParameterFilter {
+            $Method -eq 'Patch' -and $Body.settings.autoUpdateSettings.autoUpdateSupersededAppsState -eq 'notConfigured'
+        }
+    }
+}
+
 Describe "Remove-YardstickApp" {
     BeforeEach {
         Mock -ModuleName YardstickSupport Remove-IntuneWin32App {}
         Mock -ModuleName YardstickSupport Remove-IntuneWin32AppSupersedence {}
         Mock -ModuleName YardstickSupport Remove-SupersedenceReference {}
+        Mock -ModuleName YardstickSupport Remove-IntuneWin32AppDependency {}
+        Mock -ModuleName YardstickSupport Remove-DependencyReference {}
+        # Nothing but supersedence on these apps: no assignments, no dependencies.
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest { @() }
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency { @() }
         # Deletion succeeded: the app is no longer resolvable.
         Mock -ModuleName YardstickSupport Get-IntuneWin32App { $null }
     }
 
+    AfterEach {
+        Remove-Variable -Name MockSupersedenceCleared -Scope Global -ErrorAction SilentlyContinue
+    }
+
     It "detaches superseding parents before deleting" {
+        # The mock models the detach taking effect: the read-back has to come up
+        # empty or Remove-YardstickApp refuses the delete.
+        $Global:MockSupersedenceCleared = $false
+        Mock -ModuleName YardstickSupport Remove-SupersedenceReference { $Global:MockSupersedenceCleared = $true }
         Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship {
+            if ($Global:MockSupersedenceCleared) { return @() }
             @([PSCustomObject]@{ sourceId = 'parent'; targetId = 'doomed' })
         }
         Remove-YardstickApp -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' })
@@ -310,7 +401,10 @@ Describe "Remove-YardstickApp" {
     }
 
     It "clears its own forward links before deleting" {
+        $Global:MockSupersedenceCleared = $false
+        Mock -ModuleName YardstickSupport Remove-IntuneWin32AppSupersedence { $Global:MockSupersedenceCleared = $true }
         Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship {
+            if ($Global:MockSupersedenceCleared) { return @() }
             @([PSCustomObject]@{ sourceId = 'doomed'; targetId = 'older' })
         }
         Remove-YardstickApp -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' })
@@ -333,6 +427,192 @@ Describe "Remove-YardstickApp" {
         }
         { Remove-YardstickApp -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) } |
             Should -Throw -ExpectedMessage "*still reports app*"
+    }
+
+    It "does not attempt the delete when a link survives the unwind" {
+        # A supersedence link that will not go away: the read-back still sees it,
+        # so the delete could only fail. Naming the link beats a bare failure.
+        Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship {
+            @([PSCustomObject]@{ sourceId = 'doomed'; targetId = 'older' })
+        }
+        { Remove-YardstickApp -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) } |
+            Should -Throw -ExpectedMessage "*supersedes older*"
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32App -Times 0 -Exactly
+    }
+
+    It "refuses the delete when the links could not be read back at all" {
+        # An expired token makes the read throw. Treating that as "nothing left"
+        # would delete an app whose links were never confirmed gone.
+        Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship { @() }
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest { throw "Graph authentication header is missing." }
+        { Remove-YardstickApp -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) } |
+            Should -Throw -ExpectedMessage "*could not be read back*"
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32App -Times 0 -Exactly
+    }
+}
+
+Describe "Clear-YardstickAppLink" {
+    BeforeEach {
+        Mock -ModuleName YardstickSupport Remove-IntuneWin32AppSupersedence {}
+        Mock -ModuleName YardstickSupport Remove-SupersedenceReference {}
+        Mock -ModuleName YardstickSupport Remove-IntuneWin32AppDependency {}
+        Mock -ModuleName YardstickSupport Remove-DependencyReference {}
+        Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship { @() }
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency { @() }
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest { @() }
+    }
+
+    AfterEach {
+        Remove-Variable -Name MockDependentDetached, MockDependenciesCleared, MockAssignmentsRead `
+            -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It "deletes every assignment by its own id" {
+        # By-id is the point: Remove-IntuneWin32AppAssignmentGroup matches on the
+        # target, so two assignments sharing a group would go as a pair.
+        $Global:MockAssignmentsRead = $false
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest {
+            if ($Method -eq 'Delete') { return @() }
+            if ($Global:MockAssignmentsRead) { return @() }
+            $Global:MockAssignmentsRead = $true
+            @(
+                [PSCustomObject]@{ id = 'a1'; intent = 'required';  target = @{ groupId = 'g1' } },
+                [PSCustomObject]@{ id = 'a2'; intent = 'available'; target = @{ groupId = 'g1' } }
+            )
+        }
+        $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) -RetryDelaySeconds 0)
+        $surviving | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName YardstickSupport Invoke-YardstickGraphRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Delete' -and $Resource -eq 'deviceAppManagement/mobileApps/doomed/assignments/a1'
+        }
+        Should -Invoke -ModuleName YardstickSupport Invoke-YardstickGraphRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Delete' -and $Resource -eq 'deviceAppManagement/mobileApps/doomed/assignments/a2'
+        }
+    }
+
+    It "detaches the apps that depend on this one" {
+        # The mock models the removal actually taking effect, so the read-back at
+        # the end of Clear-YardstickAppLink sees a clean app.
+        $Global:MockDependentDetached = $false
+        Mock -ModuleName YardstickSupport Remove-DependencyReference { $Global:MockDependentDetached = $true }
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            if ($ID -ne 'doomed' -or $Global:MockDependentDetached) { return @() }
+            @([PSCustomObject]@{ targetId = 'dependent'; targetType = 'parent'; dependencyType = 'detect' })
+        }
+        $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) -RetryDelaySeconds 0)
+        $surviving | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName YardstickSupport Remove-DependencyReference -Times 1 -Exactly -ParameterFilter {
+            $ParentId -eq 'dependent' -and $TargetId -eq 'doomed'
+        }
+    }
+
+    It "clears the app's own dependencies" {
+        $Global:MockDependenciesCleared = $false
+        Mock -ModuleName YardstickSupport Remove-IntuneWin32AppDependency { $Global:MockDependenciesCleared = $true }
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            if ($ID -ne 'doomed' -or $Global:MockDependenciesCleared) { return @() }
+            @([PSCustomObject]@{ targetId = 'vcredist'; targetType = 'child'; dependencyType = 'autoInstall' })
+        }
+        $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) -RetryDelaySeconds 0)
+        $surviving | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppDependency -Times 1 -Exactly -ParameterFilter { $ID -eq 'doomed' }
+    }
+
+    It "reports a dependency that refuses to go away" {
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            if ($ID -ne 'doomed') { return @() }
+            @([PSCustomObject]@{ targetId = 'vcredist'; targetType = 'child'; dependencyType = 'detect' })
+        }
+        $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) -RetryDelaySeconds 0)
+        $surviving | Should -Contain 'dependency on vcredist'
+    }
+
+    It "reports every kind of link that survives" {
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest {
+            if ($Method -eq 'Delete') { return @() }
+            @([PSCustomObject]@{ id = 'a1'; intent = 'required'; target = @{ groupId = 'g1' } })
+        }
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            if ($ID -ne 'doomed') { return @() }
+            @(
+                [PSCustomObject]@{ targetId = 'dependent'; targetType = 'parent'; dependencyType = 'detect' },
+                [PSCustomObject]@{ targetId = 'vcredist';  targetType = 'child';  dependencyType = 'detect' }
+            )
+        }
+        Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship {
+            @(
+                [PSCustomObject]@{ sourceId = 'newest'; targetId = 'doomed' },
+                [PSCustomObject]@{ sourceId = 'doomed'; targetId = 'older' }
+            )
+        }
+        $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) -RetryDelaySeconds 0)
+        $surviving | Should -Contain 'assignment a1'
+        $surviving | Should -Contain 'dependency from dependent'
+        $surviving | Should -Contain 'dependency on vcredist'
+        $surviving | Should -Contain 'superseded by newest'
+        $surviving | Should -Contain 'supersedes older'
+    }
+
+    It "treats a read it could not complete as a surviving link" {
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency { throw "Authentication token was not found" }
+        $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) -RetryDelaySeconds 0)
+        $surviving | Should -Contain 'dependencies (could not be read back)'
+    }
+}
+
+Describe "Remove-DependencyReference" {
+    BeforeEach {
+        Mock -ModuleName YardstickSupport Remove-IntuneWin32AppDependency {}
+        Mock -ModuleName YardstickSupport Add-IntuneWin32AppDependency {}
+        Mock -ModuleName YardstickSupport New-IntuneWin32AppDependency {
+            [ordered]@{ 'targetId' = $ID; 'dependencyType' = $DependencyType }
+        }
+    }
+
+    It "clears dependencies entirely when the removed target was the only one" {
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            @([PSCustomObject]@{ targetId = 'doomed'; targetType = 'child'; dependencyType = 'detect' })
+        }
+        Remove-DependencyReference -ParentId 'parent' -TargetId 'doomed'
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppDependency -Times 1 -Exactly -ParameterFilter { $ID -eq 'parent' }
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppDependency -Times 0 -Exactly
+    }
+
+    It "rebuilds the remaining targets when other dependencies survive" {
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            @(
+                [PSCustomObject]@{ targetId = 'doomed'; targetType = 'child'; dependencyType = 'detect' },
+                [PSCustomObject]@{ targetId = 'keeper'; targetType = 'child'; dependencyType = 'autoInstall' }
+            )
+        }
+        Remove-DependencyReference -ParentId 'parent' -TargetId 'doomed'
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppDependency -Times 1 -Exactly -ParameterFilter {
+            $Dependency.Count -eq 1 -and $Dependency[0].targetId -eq 'keeper' -and $Dependency[0].dependencyType -eq 'AutoInstall'
+        }
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppDependency -Times 0 -Exactly
+    }
+
+    It "leaves the parent's own parent entries alone" {
+        # A 'parent' entry names an app that depends on the parent - not the
+        # parent's dependency, and not ours to rewrite.
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            @(
+                [PSCustomObject]@{ targetId = 'grandparent'; targetType = 'parent'; dependencyType = 'detect' },
+                [PSCustomObject]@{ targetId = 'doomed';      targetType = 'child';  dependencyType = 'detect' }
+            )
+        }
+        Remove-DependencyReference -ParentId 'parent' -TargetId 'doomed'
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppDependency -Times 1 -Exactly -ParameterFilter { $ID -eq 'parent' }
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppDependency -Times 0 -Exactly
+    }
+
+    It "does nothing when the parent does not reference the target" {
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            @([PSCustomObject]@{ targetId = 'someone-else'; targetType = 'child'; dependencyType = 'detect' })
+        }
+        Remove-DependencyReference -ParentId 'parent' -TargetId 'doomed'
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppDependency -Times 0 -Exactly
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppDependency -Times 0 -Exactly
     }
 }
 
@@ -439,7 +719,7 @@ Describe "Get-SameAppAllVersions" {
             @(
                 [PSCustomObject]@{ id = '1'; DisplayName = 'App';           displayVersion = '3.0'; createdDateTime = (Get-Date) },
                 [PSCustomObject]@{ id = '2'; DisplayName = 'App (N-1)';     displayVersion = '2.0'; createdDateTime = (Get-Date) },
-                [PSCustomObject]@{ id = '3'; DisplayName = '{DETECT} App';  displayVersion = '1.0'; createdDateTime = (Get-Date) },
+                [PSCustomObject]@{ id = '3'; DisplayName = 'Ω DETECT - App';  displayVersion = '1.0'; createdDateTime = (Get-Date) },
                 [PSCustomObject]@{ id = '4'; DisplayName = 'App Companion'; displayVersion = '9.0'; createdDateTime = (Get-Date) }
             )
         }
@@ -449,7 +729,7 @@ Describe "Get-SameAppAllVersions" {
         $all = Get-SameAppAllVersions 'App'
         $all.Count | Should -Be 3
         $all.id | Should -Not -Contain '4'
-        $all.DisplayName | Should -Contain '{DETECT} App'
+        $all.DisplayName | Should -Contain 'Ω DETECT - App'
     }
 
     It "sorts newest first" {
@@ -490,6 +770,37 @@ Describe "Move-AssignmentsAndDependencies intent split" {
         Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $Intent -eq 'required' }
         Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup -Times 0 -Exactly -ParameterFilter { $Intent -eq 'available' }
         Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $GroupID -eq 'g-req' }
+    }
+
+    It "IntentFilter='required' with -SkipDependencies moves required and leaves dependencies alone" {
+        # The Ω DETECT - anchor's required pass. Unlike an (N-x) version the anchor is
+        # never deleted, so no dependent link needs rewriting - and its frozen child
+        # set must not be merged onto the current app, where Add-IntuneWin32AppDependency
+        # would resurrect it on every run.
+        Mock -ModuleName YardstickSupport Get-IntuneWin32AppDependency {
+            @([PSCustomObject]@{ id = 'anchor_child1'; sourceId = 'anchor'; targetId = 'child1'; targetType = 'child'; dependencyType = 'detect' })
+        }
+        Mock -ModuleName YardstickSupport New-IntuneWin32AppDependency { [ordered]@{ targetId = $ID; dependencyType = $DependencyType } }
+        Mock -ModuleName YardstickSupport Add-IntuneWin32AppDependency {}
+        Mock -ModuleName YardstickSupport Remove-IntuneWin32AppDependency {}
+        $from = [PSCustomObject]@{ id = 'anchor'; DisplayName = 'Ω DETECT - App' }
+        $to   = [PSCustomObject]@{ id = 'to';     DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -IntentFilter 'required' -SkipDependencies
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $Intent -eq 'required' }
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $ID -eq 'anchor' -and $GroupID -eq 'g-req' }
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppDependency -Times 0 -Exactly
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppDependency -Times 0 -Exactly
+    }
+
+    It "migrates by id, so a source whose rename has not propagated still works" {
+        # $Anchor falls back to the raw pre-rename candidate when Intune's lookup is
+        # still stale (Yardstick.ps1 step 1). The rename is a metadata patch and
+        # assignments are keyed by id, so the lagging DisplayName must not matter.
+        $from = [PSCustomObject]@{ id = 'anchor'; DisplayName = 'App' }  # not yet 'Ω DETECT - App'
+        $to   = [PSCustomObject]@{ id = 'to';     DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -IntentFilter 'required' -SkipDependencies
+        Should -Invoke -ModuleName YardstickSupport Add-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $ID -eq 'to' }
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppAssignmentGroup -Times 1 -Exactly -ParameterFilter { $ID -eq 'anchor' }
     }
 
     It "IntentFilter='available' with CopyOnly copies available and leaves source untouched" {
@@ -637,6 +948,34 @@ Describe "Move-AssignmentsAndDependencies child dependencies" {
         $Global:MockAddDependencyCalls[0].targetId | Should -Be @('child1')
     }
 
+    It "does not carry a dependency onto the target when that app is being deleted this run" {
+        # child2 is pruned later in the same run. Copying the dependency here
+        # would create a fresh link that then blocks child2's own deletion.
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -ExcludeDependencyTargetIds @('child2')
+        $Global:MockAddDependencyCalls[0].targetId | Should -Be @('child1')
+    }
+
+    It "drops a dependency the target already holds on an app being deleted this run" {
+        # Add-IntuneWin32AppDependency replaces the whole set, so re-submitting an
+        # existing entry is what keeps it alive - and it points at a doomed app.
+        $Global:MockToDependencies = @(
+            [PSCustomObject]@{ targetId = 'doomed'; targetType = 'child'; dependencyType = 'detect' }
+        )
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -ExcludeDependencyTargetIds @('doomed')
+        $Global:MockAddDependencyCalls[0].targetId | Should -Be @('child1', 'child2')
+    }
+
+    It "matches excluded dependency targets regardless of GUID casing" {
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -ExcludeDependencyTargetIds @('CHILD2')
+        $Global:MockAddDependencyCalls[0].targetId | Should -Be @('child1')
+    }
+
     It "ignores parent relationships when building the target's dependency set" {
         Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport {
             switch ($ID) {
@@ -734,6 +1073,41 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
         Should -Invoke Add-IntuneWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
         Should -Invoke Remove-IntuneWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
+    }
+
+    It "protects the source from deletion when it holds an assignment that cannot be migrated" {
+        # The filter is only readable by id and only settable by name, so this
+        # assignment cannot be recreated on $to. Pruning $from would destroy
+        # targeting nobody can put back, so retention has to leave it alone.
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.allDevicesAssignmentTarget'
+                GroupID = $null; GroupMode = $null; Intent = 'required'
+                FilterType = 'include'; FilterID = 'filter-1'; Notifications = 'hideAll'
+            })
+        }
+        $protected = [System.Collections.Generic.HashSet[string]]::new()
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -ProtectedSourceIds $protected
+        $protected.Contains('from') | Should -BeTrue
+    }
+
+    It "does not protect the source when the assignment simply belongs to the other intent pass" {
+        # The available pass will migrate this one; protecting here would stop
+        # retention pruning an app that is perfectly safe to delete.
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-avail'; GroupMode = 'Include'; Intent = 'available'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+            })
+        }
+        $protected = [System.Collections.Generic.HashSet[string]]::new()
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -IntentFilter 'required' -ProtectedSourceIds $protected
+        $protected.Count | Should -Be 0
     }
 
     It "keeps a group exclusion an exclusion" {
@@ -1053,6 +1427,34 @@ Describe "Move-AssignmentsAndDependencies assignment error handling" {
         Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 1 -Exactly
     }
 
+    It "never strips the source under -CopyOnly, even when Intune says the target already has it" {
+        # Run N+1 against the Ω DETECT - anchor: the anchor still holds the available
+        # assignment it kept last run, a kept (N-x) version already copied the same
+        # group onto the new app, and Intune rejects the duplicate. That conflict is
+        # a success - but a copy must still never delete what it copied, because
+        # stripping an available assignment destroys the on-device auto-update
+        # component. This is the assertion that the anchor survives repeat runs.
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-1'; GroupMode = 'Include'; Intent = 'available'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+            })
+        }
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{ id = 'x1'; intent = 'available'; target = [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'g-1' } })
+        }
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: BadRequest: The MobileApp Assignment already exists"
+        }
+        $from = [PSCustomObject]@{ id = 'anchor'; DisplayName = 'Ω DETECT - App' }
+        $to   = [PSCustomObject]@{ id = 'to';     DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -IntentFilter 'available' -CopyOnly -SkipDependencies -RetryDelaySeconds 0
+        # A conflict is not retried into a loop, and the copy is not undone.
+        Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 1 -Exactly
+        Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 0 -Exactly
+    }
+
     It "does not burn retries on a conflict a retry cannot resolve" {
         Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
             Write-Warning "An error occurred while creating a Win32 app assignment. Error message: BadRequest: The MobileApp Assignment already exists"
@@ -1075,6 +1477,19 @@ Describe "Move-AssignmentsAndDependencies assignment error handling" {
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
         Should -Invoke Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 3 -Exactly
         Should -Invoke Remove-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport -Times 0 -Exactly
+    }
+
+    It "protects the source from deletion when the assignment never lands on the target" {
+        # The source copy is now the only one, so retention must not prune it.
+        Mock Add-IntuneWin32AppAssignmentGroup -ModuleName YardstickSupport {
+            Write-Warning "An error occurred while creating a Win32 app assignment. Error message: 503 Service Unavailable"
+        }
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport { @() }
+        $protected = [System.Collections.Generic.HashSet[string]]::new()
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0 -ProtectedSourceIds $protected
+        $protected.Contains('from') | Should -BeTrue
     }
 
     It "recovers when a retry succeeds after a transient failure" {

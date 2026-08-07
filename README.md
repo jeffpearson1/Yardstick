@@ -42,6 +42,8 @@ Install-Module -Name Selenium -AllowPrerelease
 
 Most of this file should be fairly self-explanatory. The TenantID, ClientID, and ClientSecrets are required for Yardstick to operate properly. Defaults do not necessarily have to be set, however recipes that don't contain all the values normally set by the defaults may fail to run correctly.
 
+Setting the optional `Backup` folder makes Yardstick keep a copy of every `.intunewin` file it uploads, so a bad release can be traced back to the exact package that shipped. Each recipe gets its own subfolder, and each file is named with the version and the time Intune finished publishing it. The newest three are retained (`backupVersionsToKeep`). The copy runs on a background thread while Yardstick carries on with supersedence and assignments, and a backup failure is reported without failing the application update. Leave `Backup` blank to turn this off.
+
 
 ### Populate the icon cache
 
@@ -85,7 +87,7 @@ Configurable in both the default and application-specific preferences files, ```
 Yardstick uses Intune's native update path instead of a custom remediation. After each upload:
 
 * The new version declares **supersedence** over every older version Yardstick keeps (and over the `{DETECT}` anchor, when one exists). ```uninstallPreviousVersion``` selects between Intune's `Update` (in-place upgrade, default) and `Replace` (uninstall first) behavior.
-* **Auto-update** (```autoUpdateSupersededAppsState```) is turned on for the new version's *available* assignments, so Intune pulls devices running a superseded version forward without any user action. Intune only supports auto-update for available assignments, so required-only recipes are unaffected.
+* **Auto-update** (```autoUpdateSupersededAppsState```) is turned on for the new version's *available* assignments, so Intune pulls devices running a superseded version forward without any user action. Intune only supports auto-update for available assignments, so required-only recipes are unaffected. Specific device or user groups can opt out via ```defaultGroupsSkipAutoUpdates``` in ```preferences.yaml``` or ```groupSkipAutoUpdates``` in a recipe; assignments targeting those groups are held at ```notConfigured```.
 * **Required** assignments are moved onto the new version; **available** assignments are copied and left in place, because removing an available assignment destroys the on-device component Intune uses to auto-update. If the older version will not be superseded (```supersedence: false```), available assignments are moved instead, as in earlier releases.
 
 Defaults live in ```preferences.yaml``` (```defaultSupersedence```, ```defaultUninstallPreviousVersion```, ```defaultAutoUpdate```, ```useDetectAnchor```) and can be overridden per recipe. See [WritingRecipes.md](WritingRecipes.md) for details, including the `{DETECT}` anchor that keeps long-abandoned installs in scope.
@@ -101,6 +103,12 @@ Existing tenants can be migrated onto this model in one pass:
 `Get-IntuneWin32AppAssignment` (IntuneWin32App 1.5.0) returns `$null` for any app that has **exactly one** assignment, so assignment migration silently does nothing for those apps. The cmdlet guards its Graph response with `$response.Count -gt 0`; a single-element response is unrolled to a bare `[PSCustomObject]`, which has no synthetic `.Count`, so the guard fails and the cmdlet reports "No assignments found". Apps with two or more assignments are unaffected.
 
 Auto-update is *not* affected, because `Set-AssignmentAutoUpdate` reads assignments directly from Graph rather than through the cmdlet. Fixing the migration path requires the same Graph-direct approach.
+
+#### Known issue: un-targeting a group requires editing the anchor too
+
+The `{DETECT}` anchor participates in assignment migration like any other older version — its **required** assignments are moved onto the new version, its **available** assignments are copied and left in place. Unlike an (N-x) version, though, the anchor is never pruned, so its available assignments are re-copied onto every subsequent release indefinitely.
+
+The practical consequence: removing an available assignment from the current version alone does **not** un-target that group, because the next Yardstick run re-creates it from the anchor. To drop a group permanently, remove the assignment from the `{DETECT}` anchor as well.
 
 #### Other Parameters
 

@@ -521,6 +521,526 @@ function Invoke-WithRetry {
 
 
 
+function Get-YardstickBackupFileName {
+    <#
+    .SYNOPSIS
+    Builds the file name a .intunewin backup is stored under.
+
+    .DESCRIPTION
+    Returns "<AppId>_<Version>_<yyyyMMdd-HHmmss>.intunewin". The timestamp is the
+    moment Intune reported the application as published, so the name records when
+    the package was actually shipped rather than when it was built.
+
+    Underscores are the field separator, so any underscore inside AppId or Version
+    is replaced along with the characters the filesystem rejects. That keeps the
+    name parseable by Get-YardstickBackupTimestamp.
+
+    .PARAMETER AppId
+    The recipe id the package was built from.
+
+    .PARAMETER Version
+    The application version that was uploaded.
+
+    .PARAMETER Timestamp
+    The time the application finished publishing in Intune.
+
+    .OUTPUTS
+    String file name (no directory component).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$AppId,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Version,
+
+        [Parameter(Mandatory)]
+        [datetime]$Timestamp
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AppId)) {
+        throw "AppId is required to build a backup file name."
+    }
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        throw "Version is required to build a backup file name."
+    }
+
+    $invalid = [System.IO.Path]::GetInvalidFileNameChars() + [char[]]@('_')
+
+    $sanitize = {
+        param([string]$Value)
+        $builder = [System.Text.StringBuilder]::new()
+        foreach ($char in $Value.Trim().ToCharArray()) {
+            if ($invalid -contains $char) { [void]$builder.Append('-') } else { [void]$builder.Append($char) }
+        }
+        # Collapse runs of '-' so "a//b" does not become "a--b"
+        ($builder.ToString() -replace '-{2,}', '-').Trim('-')
+    }
+
+    $safeId = & $sanitize $AppId
+    $safeVersion = & $sanitize $Version
+    $stamp = $Timestamp.ToString('yyyyMMdd-HHmmss', [cultureinfo]::InvariantCulture)
+
+    return "${safeId}_${safeVersion}_${stamp}.intunewin"
+}
+
+
+
+function Get-YardstickBackupTimestamp {
+    <#
+    .SYNOPSIS
+    Extracts the upload timestamp embedded in a backup file name.
+
+    .DESCRIPTION
+    Parses the trailing _yyyyMMdd-HHmmss field written by
+    Get-YardstickBackupFileName. Returns $null rather than throwing for names that
+    do not conform, so retention can fall back to file metadata for anything that
+    predates this naming scheme.
+
+    .PARAMETER FileName
+    The file name (or full path) to parse.
+
+    .OUTPUTS
+    DateTime, or $null when the name does not carry a parseable timestamp.
+    #>
+    [CmdletBinding()]
+    [OutputType([datetime])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$FileName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($FileName)) { return $null }
+
+    $leaf = [System.IO.Path]::GetFileName($FileName)
+    # -match rather than -notmatch: only -match reliably populates $matches.
+    if (-not ($leaf -match '_(\d{8}-\d{6})\.intunewin$')) { return $null }
+
+    # ParseExact is pinned to the invariant culture - the format is fixed, so the
+    # machine's regional settings must not change how it reads.
+    $parsed = [datetime]::MinValue
+    $ok = [datetime]::TryParseExact(
+        $matches[1],
+        'yyyyMMdd-HHmmss',
+        [cultureinfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::None,
+        [ref]$parsed
+    )
+
+    if ($ok) { return $parsed }
+    return $null
+}
+
+
+
+function Invoke-YardstickBackupCopy {
+    <#
+    .SYNOPSIS
+    Copies a .intunewin file to the backup share and prunes older backups.
+
+    .DESCRIPTION
+    The synchronous body of a backup. Runs either on the main thread or inside the
+    thread job started by Start-YardstickBackup, so it takes everything by
+    parameter, never calls Write-Log (the job runspace has no $LogLocation), and
+    never throws - a backup problem must not be able to fail an application run.
+    Log lines are returned for the caller to replay on the main thread.
+
+    The copy lands on a .tmp name and is only renamed into place once its length
+    has been verified against the source. That rename is the commit point: a
+    process killed mid-copy can only ever leave a .tmp behind, which retention
+    ignores and later runs sweep up.
+
+    .PARAMETER SourcePath
+    Full path to the .intunewin file to back up.
+
+    .PARAMETER BackupRoot
+    Root backup folder. A subfolder named for AppId is created beneath it.
+
+    .PARAMETER AppId
+    The recipe id, used as the subfolder name.
+
+    .PARAMETER FileName
+    Destination file name, from Get-YardstickBackupFileName.
+
+    .PARAMETER VersionsToKeep
+    How many .intunewin files to retain in the app's backup folder (default: 3).
+    Zero or negative disables pruning.
+
+    .PARAMETER RemoveSource
+    Delete SourcePath when finished. Applied whether or not the copy succeeded.
+
+    .PARAMETER StaleTmpHours
+    Age at which abandoned .tmp files are cleaned up (default: 24).
+
+    .OUTPUTS
+    PSCustomObject with AppId, Success, Status, BackupPath, Removed,
+    SourceRemoved and Log.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourcePath,
+
+        [Parameter(Mandatory)]
+        [string]$BackupRoot,
+
+        [Parameter(Mandatory)]
+        [string]$AppId,
+
+        [Parameter(Mandatory)]
+        [string]$FileName,
+
+        [int]$VersionsToKeep = 3,
+
+        [switch]$RemoveSource,
+
+        [int]$StaleTmpHours = 24
+    )
+
+    # A thread job runspace does not inherit this from the parent - it defaults to
+    # Continue, which would silently swallow the failures we are trying to report.
+    $ErrorActionPreference = 'Stop'
+
+    $log = [System.Collections.Generic.List[string]]::new()
+    $removed = [System.Collections.Generic.List[string]]::new()
+    $success = $false
+    $status = "failed: unknown"
+    $backupPath = $null
+    $sourceRemoved = $false
+
+    # Bail sentinel. `return` inside the try below would exit the whole function
+    # and skip building the result object, so steps that give up throw this after
+    # setting $status, and the catch recognises it as already-reported.
+    $bail = "YardstickBackupBail"
+
+    try {
+        if (-not (Test-Path -LiteralPath $SourcePath)) {
+            $status = "failed: source missing"
+            $log.Add("Backup for $AppId skipped - source file no longer exists: $SourcePath")
+            throw $bail
+        }
+
+        $appDir = Join-Path $BackupRoot $AppId
+        try {
+            if (-not (Test-Path -LiteralPath $appDir)) {
+                New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+            }
+        } catch {
+            $status = "failed: backup folder unreachable"
+            $log.Add("ERROR: Could not create backup folder '$appDir': $_")
+            throw $bail
+        }
+
+        $target = Join-Path $appDir $FileName
+        $tempTarget = "$target.tmp"
+
+        try {
+            Copy-Item -LiteralPath $SourcePath -Destination $tempTarget -Force
+
+            $sourceLength = (Get-Item -LiteralPath $SourcePath).Length
+            $copiedLength = (Get-Item -LiteralPath $tempTarget).Length
+            if ($copiedLength -ne $sourceLength) {
+                throw "copied $copiedLength bytes but source is $sourceLength bytes"
+            }
+
+            # Commit point - until this succeeds no complete backup exists.
+            Move-Item -LiteralPath $tempTarget -Destination $target -Force
+            # Move-Item moves *into* a directory that shares the target's name
+            # rather than failing, so confirm we actually landed a file.
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+                throw "destination '$target' is not a file after the move"
+            }
+
+            $success = $true
+            $backupPath = $target
+            $log.Add("Backed up $AppId to $target")
+        } catch {
+            $status = "failed: $($_.Exception.Message)"
+            $log.Add("ERROR: Failed to back up $AppId to '$target': $_")
+            Remove-Item -LiteralPath $tempTarget -Force -ErrorAction SilentlyContinue
+            throw $bail
+        }
+
+        # Sweep .tmp files abandoned by a run that was killed mid-copy.
+        try {
+            $tmpCutoff = (Get-Date).ToUniversalTime().AddHours(-$StaleTmpHours)
+            Get-ChildItem -LiteralPath $appDir -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -eq '.tmp' -and $_.LastWriteTimeUtc -lt $tmpCutoff } |
+                ForEach-Object {
+                    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+                    $log.Add("Removed stale partial backup $($_.Name)")
+                }
+        } catch {
+            $log.Add("WARNING: Could not sweep stale partial backups in '$appDir': $_")
+        }
+
+        # Prune to the retention count. Filtering on .Extension rather than
+        # -Filter "*.intunewin" avoids the FileSystem provider's 8.3 short-name
+        # wildcard matching, which can match names it should not.
+        if ($VersionsToKeep -gt 0) {
+            try {
+                $byTimestamp = @{
+                    Expression = {
+                        $ts = Get-YardstickBackupTimestamp -FileName $_.Name
+                        if ($ts) { $ts } else { $_.LastWriteTimeUtc }
+                    }
+                    Descending = $true
+                }
+                $byName = @{ Expression = { $_.Name }; Descending = $true }
+
+                $existing = @(
+                    Get-ChildItem -LiteralPath $appDir -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Extension -eq '.intunewin' } |
+                        Sort-Object -Property $byTimestamp, $byName
+                )
+                foreach ($old in ($existing | Select-Object -Skip $VersionsToKeep)) {
+                    Remove-Item -LiteralPath $old.FullName -Force
+                    $removed.Add($old.FullName)
+                    $log.Add("Pruned old backup $($old.Name)")
+                }
+                $status = "ok ($([Math]::Min($existing.Count, $VersionsToKeep)) kept)"
+            } catch {
+                # The backup itself landed, so this is not a failure of the backup.
+                $status = "ok (prune failed)"
+                $log.Add("WARNING: Could not prune old backups in '$appDir': $_")
+            }
+        } else {
+            $status = "ok (retention disabled)"
+        }
+    } catch {
+        if ($_.Exception.Message -ne $bail) {
+            $status = "failed: $($_.Exception.Message)"
+            $log.Add("ERROR: Unexpected failure backing up ${AppId}: $_")
+        }
+    } finally {
+        if ($RemoveSource) {
+            # Removed regardless of outcome: Invoke-Cleanup would delete it at the
+            # end of the run anyway, so keeping a failed copy's source only fills
+            # up the Published folder.
+            Remove-Item -LiteralPath $SourcePath -Force -ErrorAction SilentlyContinue
+            $sourceRemoved = -not (Test-Path -LiteralPath $SourcePath)
+        }
+    }
+
+    return [PSCustomObject]@{
+        AppId         = $AppId
+        Success       = $success
+        Status        = $status
+        BackupPath    = $backupPath
+        Removed       = [string[]]$removed
+        SourceRemoved = $sourceRemoved
+        Log           = [string[]]$log
+    }
+}
+
+
+
+function Start-YardstickBackup {
+    <#
+    .SYNOPSIS
+    Starts a background thread that backs up a .intunewin file.
+
+    .DESCRIPTION
+    Hands the copy to a thread job so it overlaps the supersedence and assignment
+    work that follows an upload, and registers the job so Wait-YardstickBackup can
+    drain it before anything deletes the source.
+
+    A thread job runspace inherits nothing from its parent - not the globally
+    imported YardstickSupport module, not $LogLocation, not even
+    $ErrorActionPreference - so the scriptblock re-imports this module by absolute
+    path and receives its arguments explicitly.
+
+    .PARAMETER SourcePath
+    Full path to the staged .intunewin file. The thread deletes it when done.
+
+    .PARAMETER BackupRoot
+    Root backup folder from the Backup preference.
+
+    .PARAMETER AppId
+    The recipe id, used as the backup subfolder name and to correlate the result.
+
+    .PARAMETER FileName
+    Destination file name, from Get-YardstickBackupFileName.
+
+    .PARAMETER VersionsToKeep
+    How many .intunewin files to retain per app (default: 3).
+
+    .PARAMETER ModulePath
+    Path to this module, re-imported inside the thread. Defaults to this module's
+    own location.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '',
+        Justification = 'The thread job scriptblock declares its own param() block and is fed by -ArgumentList, which is deliberate: $using: would silently capture whatever happens to be in scope instead.')]
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourcePath,
+
+        [Parameter(Mandatory)]
+        [string]$BackupRoot,
+
+        [Parameter(Mandatory)]
+        [string]$AppId,
+
+        [Parameter(Mandatory)]
+        [string]$FileName,
+
+        [int]$VersionsToKeep = 3,
+
+        [string]$ModulePath = $PSCommandPath
+    )
+
+    if (-not $Script:YardstickBackupJobs) {
+        $Script:YardstickBackupJobs = [System.Collections.Generic.List[PSObject]]::new()
+    }
+
+    # Explicit rather than relying on auto-loading, so a scheduled task running
+    # with $PSModuleAutoLoadingPreference = 'None' fails here with a clear message.
+    Import-Module Microsoft.PowerShell.ThreadJob -ErrorAction Stop
+
+    $job = Start-ThreadJob -Name "YardstickBackup_$AppId" -ArgumentList $ModulePath, $SourcePath, $BackupRoot, $AppId, $FileName, $VersionsToKeep -ScriptBlock {
+        param($ModulePath, $SourcePath, $BackupRoot, $AppId, $FileName, $VersionsToKeep)
+        $ErrorActionPreference = 'Stop'
+        Import-Module $ModulePath -Force
+        Invoke-YardstickBackupCopy -SourcePath $SourcePath -BackupRoot $BackupRoot `
+            -AppId $AppId -FileName $FileName -VersionsToKeep $VersionsToKeep -RemoveSource
+    }
+
+    $Script:YardstickBackupJobs.Add([PSCustomObject]@{
+        Job        = $job
+        AppId      = $AppId
+        SourcePath = $SourcePath
+        Started    = Get-Date
+    })
+}
+
+
+
+function Get-YardstickBackupInFlight {
+    <#
+    .SYNOPSIS
+    Returns the source paths of backups that are still being copied.
+
+    .DESCRIPTION
+    Used to confirm that nothing is mid-copy before a caller deletes files from
+    the Published folder.
+
+    .OUTPUTS
+    String array of source paths. Empty when nothing is in flight.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+
+    if (-not $Script:YardstickBackupJobs) { return [string[]]@() }
+
+    return [string[]]@(
+        $Script:YardstickBackupJobs |
+            Where-Object { $_.Job.State -eq 'Running' -or $_.Job.State -eq 'NotStarted' } |
+            ForEach-Object { $_.SourcePath }
+    )
+}
+
+
+
+function Wait-YardstickBackup {
+    <#
+    .SYNOPSIS
+    Waits for outstanding backup threads and reports their results.
+
+    .DESCRIPTION
+    Drains every job registered by Start-YardstickBackup, replays the log lines
+    each one collected (Write-Log is not thread-safe and the job runspace has no
+    log configuration, so logging is deferred to here), and records the outcome on
+    the matching successful-application entry for the email report.
+
+    Safe to call when nothing is registered, which it is - the script drains at
+    several points to guarantee no other code deletes a .intunewin mid-copy.
+
+    .PARAMETER TimeoutSeconds
+    Total time to wait for all outstanding jobs (default: 600). Jobs still running
+    when it expires are stopped and reported as timed out.
+
+    .OUTPUTS
+    The result objects returned by Invoke-YardstickBackupCopy.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [int]$TimeoutSeconds = 600
+    )
+
+    if (-not $Script:YardstickBackupJobs -or $Script:YardstickBackupJobs.Count -eq 0) {
+        return @()
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $results = [System.Collections.Generic.List[PSObject]]::new()
+
+    foreach ($entry in @($Script:YardstickBackupJobs)) {
+        $result = $null
+        try {
+            $remaining = [int][Math]::Max(0, ($deadline - (Get-Date)).TotalSeconds)
+            $finished = Wait-Job -Job $entry.Job -Timeout $remaining
+
+            if (-not $finished) {
+                Stop-Job -Job $entry.Job -ErrorAction SilentlyContinue
+                Write-Log "WARNING: Backup of $($entry.AppId) timed out after $TimeoutSeconds seconds and was stopped."
+                $result = [PSCustomObject]@{
+                    AppId = $entry.AppId; Success = $false; Status = "timed out"
+                    BackupPath = $null; Removed = [string[]]@(); SourceRemoved = $false
+                    Log = [string[]]@()
+                }
+            } else {
+                # Same process, so results come back as live objects with no
+                # serialization loss.
+                $result = Receive-Job -Job $entry.Job -ErrorAction Stop | Select-Object -Last 1
+            }
+        } catch {
+            Write-Log "WARNING: Backup of $($entry.AppId) failed: $_"
+            $result = [PSCustomObject]@{
+                AppId = $entry.AppId; Success = $false; Status = "failed: $_"
+                BackupPath = $null; Removed = [string[]]@(); SourceRemoved = $false
+                Log = [string[]]@()
+            }
+        } finally {
+            Remove-Job -Job $entry.Job -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not $result) {
+            $result = [PSCustomObject]@{
+                AppId = $entry.AppId; Success = $false; Status = "failed: no result returned"
+                BackupPath = $null; Removed = [string[]]@(); SourceRemoved = $false
+                Log = [string[]]@()
+            }
+        }
+
+        foreach ($line in @($result.Log)) { Write-Log $line }
+
+        # Record on the email report entry for this app, if it has one.
+        if ($Script:SuccessfulApplications) {
+            $appEntry = $Script:SuccessfulApplications | Where-Object ApplicationId -eq $result.AppId | Select-Object -Last 1
+            if ($appEntry -and $appEntry.PSObject.Properties['BackupStatus']) {
+                $appEntry.BackupStatus = $result.Status
+            }
+        }
+
+        $results.Add($result)
+    }
+
+    $Script:YardstickBackupJobs.Clear()
+    return $results.ToArray()
+}
+
+
+
 function Test-YardstickAssignmentPresent {
     <#
     .SYNOPSIS
@@ -616,6 +1136,11 @@ function Move-AssignmentsAndDependencies {
     .PARAMETER ProtectedSourceIds
     HashSet to record source application IDs that should be protected from deletion.
 
+    .PARAMETER ExcludeDependencyTargetIds
+    Application IDs that must not be added as dependencies of $To. Callers pass the
+    apps they intend to delete this run: copying a dependency that points at one of
+    them would create a fresh link that then blocks its deletion.
+
     .PARAMETER IntentFilter
     When set, only assignments matching this intent are processed (e.g. 'required',
     'available'). Empty (default) processes all intents.
@@ -638,7 +1163,11 @@ function Move-AssignmentsAndDependencies {
     name only, while Get-IntuneWin32AppAssignment reports the filter id, so the
     filter cannot be carried across - and migrating without it would widen the
     assignment to every device or user. Those assignments are logged and left on
-    $From for manual handling.
+    $From, and $From is added to $ProtectedSourceIds so retention will not delete
+    it: deleting the app would destroy targeting nobody can recreate. The same
+    protection applies when an assignment could not be added to $To at all. Such an
+    app is superseded instead of pruned, and an admin can migrate the assignment by
+    hand.
 
     Removal matches on the target alone (a group id, or the virtual target type)
     because the IntuneWin32App module cannot delete an individual assignment. If
@@ -658,12 +1187,14 @@ function Move-AssignmentsAndDependencies {
         [hashtable] $DependentLinkOptions,
         [System.Collections.IDictionary] $DependentUpdateStatus,
         [System.Collections.Generic.HashSet[string]] $ProtectedSourceIds,
+        [string[]] $ExcludeDependencyTargetIds = @(),
         [ValidateSet('', 'required', 'available')]
         [string] $IntentFilter = '',
         [switch] $CopyOnly,
         [switch] $SkipDependencies,
         [int] $RetryDelaySeconds = 2
     )
+
     # If IDs or Display Names were provided instead of application objects, get the app objects
     if ($From -is [String]) {
         if ($From -match "^[0-9a-fA-F\-]{36}$") {
@@ -770,14 +1301,6 @@ function Move-AssignmentsAndDependencies {
             [void]$ProtectedSourceIds.Add($id)
         }
     }
-    $normalizeDependencyType = {
-        param($type)
-        if (-not $type) { return "Detect" }
-        switch ($type.ToString().ToLower()) {
-            "autoinstall" { return "AutoInstall" }
-            default { return "Detect" }
-        }
-    }
     # Assignment targets that carry no GroupID and need their own cmdlets.
     $allDevicesTarget = "#microsoft.graph.allDevicesAssignmentTarget"
     $allUsersTarget = "#microsoft.graph.allLicensedUsersAssignmentTarget"
@@ -815,7 +1338,8 @@ function Move-AssignmentsAndDependencies {
             }
 
             if (-not $assignmentLabel) {
-                Write-Log "Skipping assignment with no GroupID and unsupported target type '$targetType'."
+                Write-Log "Skipping assignment with no GroupID and unsupported target type '$targetType'. $($From.id) will not be deleted while it is there."
+                & $addProtectedSourceId $From.id
                 continue
             }
             if ($IntentFilter -and ($Assignment.Intent -ne $IntentFilter)) {
@@ -825,9 +1349,12 @@ function Move-AssignmentsAndDependencies {
             # Add-IntuneWin32AppAssignmentAllDevices/AllUsers take a filter by
             # name only, and Get-IntuneWin32AppAssignment reports the filter id,
             # so the filter cannot be carried across. Dropping it would widen the
-            # assignment to every device or user, so refuse to migrate instead.
+            # assignment to every device or user, so refuse to migrate instead -
+            # and protect $From from deletion, because pruning it would destroy
+            # targeting that cannot be recreated from what Intune reports.
             if ($isVirtualTarget -and $hasFilter) {
-                Write-Log "WARNING: Skipping $assignmentLabel assignment because filter $($Assignment.FilterID) ($($Assignment.FilterType)) cannot be reapplied by ID. Migrate this assignment manually."
+                Write-Log "WARNING: Skipping $assignmentLabel assignment because filter $($Assignment.FilterID) ($($Assignment.FilterType)) cannot be reapplied by ID. Migrate this assignment manually; $($From.id) will not be deleted while it is there."
+                & $addProtectedSourceId $From.id
                 continue
             }
 
@@ -1046,7 +1573,10 @@ function Move-AssignmentsAndDependencies {
                 }
             }
             elseif (-not $successfullyAdded) {
-                Write-Log "ERROR: $assignmentLabel assignment was not added to $($To.id); leaving the source assignment on $($From.id) intact."
+                # The source assignment is the only surviving copy, so $From must
+                # not be pruned out from under it.
+                Write-Log "ERROR: $assignmentLabel assignment was not added to $($To.id); leaving the source assignment on $($From.id) intact and protecting it from deletion."
+                & $addProtectedSourceId $From.id
             }
         }
     }
@@ -1060,6 +1590,15 @@ function Move-AssignmentsAndDependencies {
     # list has to be submitted in one call - adding them one at a time drops
     # every dependency configured by the previous call.
     if ($childDependencies.Count -gt 0) {
+        # Apps the caller intends to delete this run. A dependency pointing at one
+        # of them is a link that would block its deletion, so it is dropped rather
+        # than carried forward - including one $To already holds, which Intune
+        # would otherwise keep alive through the replace below.
+        $excludedTargets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($excludedId in $ExcludeDependencyTargetIds) {
+            if ($excludedId) { [void]$excludedTargets.Add([string]$excludedId) }
+        }
+
         # targetId -> dependencyType. Seed with what $To already depends on so
         # existing dependencies survive the replace.
         $desiredDependencies = [ordered]@{}
@@ -1067,7 +1606,11 @@ function Move-AssignmentsAndDependencies {
             if (($existing.PSObject.Properties.Name -contains "targetType") -and ($existing.targetType -eq "parent")) {
                 continue
             }
-            $desiredDependencies[$existing.targetId] = & $normalizeDependencyType $existing.dependencyType
+            if ($excludedTargets.Contains([string]$existing.targetId)) {
+                Write-Log "Dropping existing dependency $($existing.targetId) from $($To.id) because that app is scheduled for deletion."
+                continue
+            }
+            $desiredDependencies[$existing.targetId] = ConvertTo-DependencyType $existing.dependencyType
         }
         foreach ($dependency in $childDependencies) {
             # An app cannot depend on itself, and $To must not inherit a
@@ -1076,7 +1619,11 @@ function Move-AssignmentsAndDependencies {
                 Write-Log "Skipping child dependency $($dependency.targetId) because it points at the source or target app."
                 continue
             }
-            $desiredDependencies[$dependency.targetId] = & $normalizeDependencyType $dependency.dependencyType
+            if ($excludedTargets.Contains([string]$dependency.targetId)) {
+                Write-Log "Skipping child dependency $($dependency.targetId) because that app is scheduled for deletion."
+                continue
+            }
+            $desiredDependencies[$dependency.targetId] = ConvertTo-DependencyType $dependency.dependencyType
         }
 
         if ($desiredDependencies.Count -eq 0) {
@@ -1209,7 +1756,7 @@ function Move-AssignmentsAndDependencies {
                     $hasLinkToSource = $false
                     foreach ($entry in $childItems) {
                         $targetAppId = $entry.targetId
-                        $normalizedTypeValue = & $normalizeDependencyType $entry.dependencyType
+                        $normalizedTypeValue = ConvertTo-DependencyType $entry.dependencyType
                         $originalDependencies += New-IntuneWin32AppDependency -ID $targetAppId -DependencyType $normalizedTypeValue
                         if ($targetAppId -eq $From.id) {
                             $hasLinkToSource = $true
@@ -1301,7 +1848,7 @@ function Get-SameAppAllVersions {
         return , @()
     }
     
-    # Include the current name, any (N-x) rename, and the {DETECT} anchor for the same app.
+    # Include the current name, any (N-x) rename, and the Ω DETECT - anchor for the same app.
     $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
     $sortable = ($AllSimilarApps | Where-Object {
         ($_.DisplayName -eq $DisplayName) -or
@@ -1393,7 +1940,7 @@ function Test-IsVersionDetection {
     <#
     .SYNOPSIS
     Returns $true when the detection type is one that compares against a version
-    number and therefore benefits from a {DETECT} anchor to catch older installs.
+    number and therefore benefits from a Ω DETECT - anchor to catch older installs.
     #>
     param(
         [string]$DetectionType,
@@ -1412,7 +1959,7 @@ function Test-IsVersionDetection {
 function Get-DetectAnchor {
     <#
     .SYNOPSIS
-    Returns the "{DETECT} <DisplayName>" Intune app object if one exists, else $null.
+    Returns the "Ω DETECT - <DisplayName>" Intune app object if one exists, else $null.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -1434,14 +1981,14 @@ function Get-DetectAnchorName {
         [Parameter(Mandatory=$true)]
         [string]$DisplayName
     )
-    return "{DETECT} $DisplayName"
+    return "Ω DETECT - $DisplayName"
 }
 
 
 function Set-DetectAnchor {
     <#
     .SYNOPSIS
-    Renames the given Intune app to "{DETECT} <DisplayName>" so it is preserved
+    Renames the given Intune app to "Ω DETECT - <DisplayName>" so it is preserved
     across retention cleanup as the low-water-mark detection anchor. Idempotent.
     #>
     param(
@@ -1452,10 +1999,10 @@ function Set-DetectAnchor {
     )
     $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
     if ($App.DisplayName -eq $anchorName) {
-        Write-Log "App $($App.Id) is already the {DETECT} anchor for $DisplayName"
+        Write-Log "App $($App.Id) is already the Ω DETECT - anchor for $DisplayName"
         return
     }
-    Write-Log "Pinning $($App.DisplayName) ($($App.Id)) as {DETECT} anchor for $DisplayName"
+    Write-Log "Pinning $($App.DisplayName) ($($App.Id)) as Ω DETECT - anchor for $DisplayName"
     Set-IntuneWin32App -Id $App.Id -DisplayName $anchorName | Out-Null
 }
 
@@ -1560,6 +2107,96 @@ function Remove-SupersedenceReference {
 }
 
 
+function ConvertTo-DependencyType {
+    <#
+    .SYNOPSIS
+    Maps a dependencyType off a Graph relationship onto the casing
+    New-IntuneWin32AppDependency validates.
+
+    .DESCRIPTION
+    Graph hands the type back lowercase ("autoinstall"), and the cmdlet's
+    ValidateSet only accepts "AutoInstall"/"Detect". Anything unrecognised - or
+    missing entirely - falls back to Detect, which is the weaker of the two: it
+    reports the dependency as unmet rather than silently installing an app the
+    admin never asked for.
+    #>
+    param(
+        [AllowNull()]
+        $DependencyType
+    )
+
+    if (-not $DependencyType) { return "Detect" }
+    switch ($DependencyType.ToString().ToLower()) {
+        "autoinstall" { return "AutoInstall" }
+        default       { return "Detect" }
+    }
+}
+
+
+function Remove-DependencyReference {
+    <#
+    .SYNOPSIS
+    Removes a single dependency target from a parent app, leaving the parent's
+    other dependencies (and its supersedence) intact.
+
+    .DESCRIPTION
+    The dependency mirror of Remove-SupersedenceReference. Intune has no "delete
+    one relationship" operation for Win32 apps - Add-IntuneWin32AppDependency
+    replaces the whole dependency set (preserving supersedence) - so this rebuilds
+    the parent's child dependency list without $TargetId and re-submits it.
+
+    Needed because Intune refuses to delete an app that anything still depends on,
+    and Remove-YardstickApp previously only unwound supersedence.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ParentId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TargetId
+    )
+
+    # A parent's own dependency list is its child entries; entries flagged
+    # "parent" describe apps that depend on it and are not ours to rewrite.
+    $children = @(Get-IntuneWin32AppDependency -ID $ParentId |
+        Where-Object { ($_.targetType -eq "child") -or (-not $_.targetType) })
+    if (-not ($children | Where-Object targetId -eq $TargetId)) {
+        return
+    }
+
+    $remaining = @($children | Where-Object targetId -ne $TargetId)
+    if ($remaining.Count -eq 0) {
+        Write-Log "Clearing dependencies on $ParentId (was its only target: $TargetId)"
+        Remove-IntuneWin32AppDependency -ID $ParentId | Out-Null
+        return
+    }
+
+    $rebuilt = @()
+    foreach ($entry in $remaining) {
+        $dependencyObject = New-IntuneWin32AppDependency -ID $entry.targetId `
+            -DependencyType (ConvertTo-DependencyType $entry.dependencyType)
+        if ($dependencyObject) {
+            $rebuilt += $dependencyObject
+        }
+        else {
+            Write-Log "WARNING: Could not rebuild dependency on $ParentId for target $($entry.targetId) - it may no longer exist in Intune"
+        }
+    }
+
+    if ($rebuilt.Count -eq 0) {
+        # Every survivor failed to resolve. Clearing outright is still correct -
+        # the caller needs $TargetId detached and the leftovers point at apps
+        # Intune can no longer find.
+        Write-Log "Clearing dependencies on $ParentId - none of the $($remaining.Count) remaining target(s) could be rebuilt"
+        Remove-IntuneWin32AppDependency -ID $ParentId | Out-Null
+        return
+    }
+
+    Write-Log "Rebuilding dependencies on $ParentId without target $TargetId ($($rebuilt.Count) remaining)"
+    Add-IntuneWin32AppDependency -ID $ParentId -Dependency $rebuilt | Out-Null
+}
+
+
 function New-SupersedenceObject {
     <#
     .SYNOPSIS
@@ -1630,7 +2267,7 @@ function Set-YardstickSupersedence {
 
     .PARAMETER UpdateOnlyIds
     App ids that must always be superseded with "Update" regardless of $Type. The
-    {DETECT} anchor lives here: its detection rule deliberately matches a very wide
+    Ω DETECT - anchor lives here: its detection rule deliberately matches a very wide
     version range, so a "Replace" against it would uninstall the app from every
     device that has any version installed.
     #>
@@ -1663,7 +2300,7 @@ function Set-YardstickSupersedence {
     $updateOnly = [System.Collections.Generic.HashSet[string]]::new([string[]]$UpdateOnlyIds, [StringComparer]::OrdinalIgnoreCase)
 
     # Intune caps a supersedence graph at 10 nodes, one of which is the parent.
-    # Update-only targets (the {DETECT} anchor) are reserved first: the anchor is
+    # Update-only targets (the Ω DETECT - anchor) are reserved first: the anchor is
     # by definition the oldest version, so a plain newest-first trim would drop
     # exactly the target that catches stale installs.
     $maxTargets = 9
@@ -1731,14 +2368,26 @@ function Set-AssignmentAutoUpdate {
     Assignments are read straight from Graph rather than via
     Get-IntuneWin32AppAssignment because that cmdlet does not surface the assignment
     id, which is required to PATCH an individual assignment.
+
+    .PARAMETER SkipGroupIds
+    Entra group ids that must never auto-update. Assignments targeting one of these
+    groups are forced to 'notConfigured' rather than merely left alone, so adding a
+    group to the list turns off auto-update a previous run had already enabled.
     #>
     param(
         [Parameter(Mandatory=$true)]
         [string]$AppId,
         [bool]$Enabled = $true,
         [ValidateSet('', 'required', 'available')]
-        [string]$IntentFilter = 'available'
+        [string]$IntentFilter = 'available',
+        [string[]]$SkipGroupIds = @()
     )
+
+    # Group ids come from YAML, where casing is whatever the admin pasted in.
+    $skipSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($groupId in $SkipGroupIds) {
+        if ($groupId) { $skipSet.Add([string]$groupId) | Out-Null }
+    }
 
     try {
         $assignments = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments")
@@ -1755,16 +2404,21 @@ function Set-AssignmentAutoUpdate {
         return 0
     }
 
-    $desiredState = if ($Enabled) { 'enabled' } else { 'notConfigured' }
     $count = 0
+    $skipped = 0
     foreach ($assignment in $assignments) {
         if (-not $assignment.id) { continue }
 
         # Exclusion targets carry no settings object and cannot auto-update.
         if ($assignment.target.'@odata.type' -eq '#microsoft.graph.exclusionGroupAssignmentTarget') { continue }
 
+        # A skipped group is forced off regardless of $Enabled. All-devices and
+        # all-users targets carry no groupId and can never be skipped this way.
+        $isSkipped = $assignment.target.groupId -and $skipSet.Contains([string]$assignment.target.groupId)
+        $desiredState = if ($Enabled -and -not $isSkipped) { 'enabled' } else { 'notConfigured' }
+
         if ($assignment.settings.autoUpdateSettings.autoUpdateSupersededAppsState -eq $desiredState) {
-            $count++
+            if ($isSkipped) { $skipped++ } else { $count++ }
             continue
         }
 
@@ -1785,13 +2439,235 @@ function Set-AssignmentAutoUpdate {
         try {
             Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments/$($assignment.id)" `
                 -Method Patch -Body @{ settings = $settings } | Out-Null
-            $count++
+            if ($isSkipped) { $skipped++ } else { $count++ }
         } catch {
             Write-Log "WARNING: Failed to set auto-update on assignment $($assignment.id) for app $AppId : $_"
         }
     }
-    Write-Log "Auto-update ($desiredState) is set on $count assignment(s) for $AppId"
+    $desiredStateForApp = if ($Enabled) { 'enabled' } else { 'notConfigured' }
+    Write-Log "Auto-update ($desiredStateForApp) is set on $count assignment(s) for $AppId"
+    if ($skipped -gt 0) {
+        Write-Log "Auto-update held at notConfigured on $skipped assignment(s) for $AppId (group in the auto-update skip list)"
+    }
     return $count
+}
+
+
+function Clear-YardstickAppLink {
+    <#
+    .SYNOPSIS
+    Removes every link that would stop Intune deleting a Win32 app, and reports
+    anything it could not remove.
+
+    .DESCRIPTION
+    Intune refuses to delete an app that still participates in a relationship, and
+    Remove-IntuneWin32App downgrades that refusal to a warning - so a prune used to
+    fail with no indication of which link was responsible. This strips all of them,
+    in the order that leaves the app least exposed if a later step fails:
+
+      1. Assignments                - devices stop being targeted before the
+                                      relationship graph is torn down
+      2. Dependencies, reverse      - apps that depend on this one
+      3. Dependencies, forward      - apps this one depends on
+      4. Supersedence, reverse      - apps that supersede this one
+      5. Supersedence, forward      - apps this one supersedes
+
+    Individual assignments are deleted through Graph by assignment id. The
+    IntuneWin32App module can only remove assignments by target, which takes out
+    every assignment sharing that target - see the note in
+    Move-AssignmentsAndDependencies. They are all going anyway, but by-id keeps the
+    log honest about what was actually removed.
+
+    Assignments are read straight from Graph rather than via
+    Get-IntuneWin32AppAssignment, which returns $null for an app holding exactly one
+    assignment under Windows PowerShell 5.1 (see the note in
+    Move-AssignmentsAndDependencies) and does not surface the assignment id anyway.
+
+    Call this immediately before the delete, never earlier: an app whose links were
+    stripped and which then survives is worse off than one left alone. No single
+    stuck link abandons the rest, and the closing sweep re-reads Intune so the
+    return value reflects what is really still there - a read that could not be
+    completed counts as a surviving link rather than being taken for "clear".
+
+    .PARAMETER RetryDelaySeconds
+    Seconds between attempts (default: 2). Exists so tests can drive the retry paths
+    without sleeping.
+
+    .OUTPUTS
+    String array describing the links that survived. Empty means the app is
+    deletable. Call as @(Clear-YardstickAppLink ...) - an empty array unrolls to
+    $null otherwise.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory = $true)]
+        $App,
+
+        [int]$RetryDelaySeconds = 2
+    )
+
+    $appId = $App.id
+    $label = if ($App.DisplayName) { "$($App.DisplayName) ($appId)" } else { $appId }
+
+    # Every IntuneWin32App cmdlet can bail out of its Begin block with a bare
+    # `break` (expired token, most often) rather than throwing. A bare break is not
+    # catchable and unwinds to the caller's nearest enclosing loop - see the long
+    # note in Move-AssignmentsAndDependencies. One escaping from here would skip
+    # both the unwind and the verification below, and Remove-YardstickApp would go
+    # on to delete an app whose links were never touched. So every read runs inside
+    # a single-pass foreach that absorbs it and reports Ok = $false, which the
+    # closing sweep treats as "not proven deletable" rather than "clear".
+    $readLinks = {
+        param([string]$What, [scriptblock]$Read)
+        $items = @()
+        $ok = $false
+        try {
+            foreach ($breakGuard in 1) {
+                $items = @(& $Read)
+                $ok = $true
+            }
+            if (-not $ok) {
+                Write-Log "WARNING: Reading $What on $label aborted before returning. Check the preceding warning for the reason."
+            }
+        } catch {
+            Write-Log "WARNING: Could not read $What on $label : $_"
+        }
+        [PSCustomObject]@{ Ok = $ok; Items = $items; What = $What }
+    }
+
+    # Each read is used twice - once to decide what to remove, once to verify the
+    # removal took - so the queries live in one place.
+    $assignmentQuery = {
+        Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$appId/assignments"
+    }
+    $dependentQuery = {
+        Get-IntuneWin32AppDependency -ID $appId |
+            Where-Object targetType -eq "parent" |
+            Select-Object -ExpandProperty targetId -Unique
+    }
+    $dependencyQuery = {
+        Get-IntuneWin32AppDependency -ID $appId |
+            Where-Object { ($_.targetType -eq "child") -or (-not $_.targetType) } |
+            Select-Object -ExpandProperty targetId -Unique
+    }
+    $supersedenceQuery = {
+        Get-YardstickSupersedenceRelationship -Id $appId
+    }
+
+    # 1. Assignments.
+    foreach ($assignment in (& $readLinks "assignments" $assignmentQuery).Items) {
+        if (-not $assignment.id) { continue }
+        $assignmentId = $assignment.id
+        $target = if ($assignment.target.groupId) {
+            "group $($assignment.target.groupId)"
+        } else {
+            $assignment.target.'@odata.type'
+        }
+        $removed = Invoke-WithRetry -Label "Remove assignment for $target from $label" `
+            -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
+                # Graph throws on failure here, unlike the module's Remove-*
+                # cmdlets, so a return is proof enough - no VerifyBlock needed.
+                Invoke-YardstickGraphRequest -Method Delete `
+                    -Resource "deviceAppManagement/mobileApps/$appId/assignments/$assignmentId" | Out-Null
+                $true
+            }
+        if ($removed) {
+            Write-Log "Removed $($assignment.intent) assignment for $target from $label"
+        }
+    }
+
+    # 2. Apps that depend on this one. Intune will not delete a dependency target.
+    #    Invoke-WithRetry's own retry loop absorbs a break out of the cmdlets here
+    #    and reports the attempt as failed, which is what we want.
+    foreach ($dependentId in (& $readLinks "dependent apps" $dependentQuery).Items) {
+        $currentDependentId = $dependentId
+        $detached = Invoke-WithRetry -Label "Detach $label from dependent app $currentDependentId" `
+            -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
+                Remove-DependencyReference -ParentId $currentDependentId -TargetId $appId
+                $true
+            } -VerifyBlock {
+                -not @(Get-IntuneWin32AppDependency -ID $currentDependentId |
+                    Where-Object { (($_.targetType -eq "child") -or (-not $_.targetType)) -and ($_.targetId -eq $appId) })
+            }
+        if ($detached) {
+            Write-Log "Detached $label from dependent app $currentDependentId"
+        }
+    }
+
+    # 3. This app's own dependencies.
+    $dependencyIds = @((& $readLinks "dependencies" $dependencyQuery).Items)
+    if ($dependencyIds.Count -gt 0) {
+        $cleared = Invoke-WithRetry -Label "Clear $($dependencyIds.Count) dependency(ies) from $label" `
+            -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
+                Remove-IntuneWin32AppDependency -ID $appId | Out-Null
+                $true
+            } -VerifyBlock {
+                $recheck = & $readLinks "dependencies" $dependencyQuery
+                $recheck.Ok -and ($recheck.Items.Count -eq 0)
+            }
+        if ($cleared) {
+            Write-Log "Cleared dependencies from $label ($($dependencyIds -join ', '))"
+        }
+    }
+
+    # 4/5. Supersedence, both directions.
+    $relationships = @((& $readLinks "supersedence" $supersedenceQuery).Items)
+
+    $supersedingIds = @($relationships |
+        Where-Object { $_.sourceId -and ($_.sourceId -ne $appId) -and ($_.targetId -eq $appId) } |
+        Select-Object -ExpandProperty sourceId -Unique)
+    foreach ($supersedingId in $supersedingIds) {
+        $currentSupersedingId = $supersedingId
+        Invoke-WithRetry -Label "Detach $label from superseding app $currentSupersedingId" `
+            -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
+                Remove-SupersedenceReference -ParentId $currentSupersedingId -TargetId $appId
+                $true
+            } | Out-Null
+    }
+
+    $hasForwardLinks = @($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $appId) }).Count -gt 0
+    if ($hasForwardLinks) {
+        Invoke-WithRetry -Label "Strip supersedence from $label" `
+            -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
+                Remove-IntuneWin32AppSupersedence -ID $appId | Out-Null
+                $true
+            } | Out-Null
+    }
+
+    # 6. Read everything back. The cmdlets above downgrade Graph failures to
+    #    warnings, so only a re-read can say whether the app is really deletable -
+    #    and a read that could not be completed counts against it.
+    $surviving = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($query in @(
+        @{ What = "assignments";  Query = $assignmentQuery;   Describe = { param($x) "assignment $($x.id)" } }
+        @{ What = "dependent apps"; Query = $dependentQuery;  Describe = { param($x) "dependency from $x" } }
+        @{ What = "dependencies"; Query = $dependencyQuery;   Describe = { param($x) "dependency on $x" } }
+    )) {
+        $result = & $readLinks $query.What $query.Query
+        if (-not $result.Ok) {
+            $surviving.Add("$($query.What) (could not be read back)")
+            continue
+        }
+        foreach ($item in $result.Items) {
+            $surviving.Add((& $query.Describe $item))
+        }
+    }
+
+    $supersedenceResult = & $readLinks "supersedence" $supersedenceQuery
+    if (-not $supersedenceResult.Ok) {
+        $surviving.Add("supersedence (could not be read back)")
+    }
+    foreach ($relationship in $supersedenceResult.Items) {
+        if ($relationship.sourceId -and ($relationship.sourceId -ne $appId)) {
+            $surviving.Add("superseded by $($relationship.sourceId)")
+        } else {
+            $surviving.Add("supersedes $($relationship.targetId)")
+        }
+    }
+
+    return [string[]]$surviving
 }
 
 
@@ -1801,36 +2677,25 @@ function Remove-YardstickApp {
     Safely deletes an Intune Win32 app.
 
     .DESCRIPTION
-    Intune refuses to delete an app that still participates in a supersedence
-    relationship, so both directions are unwound first: any parent that supersedes
-    this app has the reference rebuilt without it, and the app's own forward links
-    are cleared.
+    Intune refuses to delete an app that still participates in a relationship, so
+    Clear-YardstickAppLink unwinds all of them - assignments, dependencies and
+    supersedence, in both directions - immediately before the delete. When a link
+    cannot be removed the delete is not attempted at all: it could only fail, and
+    throwing here names the link instead of leaving the caller with a bare
+    "failed to remove". Callers treat that throw as a failed prune, which in
+    Yardstick.ps1 means the app is superseded rather than deleted.
     #>
     param(
         [Parameter(Mandatory=$true)]
         $App
     )
 
-    $relationships = @(Get-YardstickSupersedenceRelationship -Id $App.id)
-
-    $parentIds = @($relationships |
-        Where-Object { $_.sourceId -and ($_.sourceId -ne $App.id) -and ($_.targetId -eq $App.id) } |
-        Select-Object -ExpandProperty sourceId -Unique)
-    foreach ($parentId in $parentIds) {
-        try {
-            Remove-SupersedenceReference -ParentId $parentId -TargetId $App.id
-        } catch {
-            Write-Log "WARNING: Failed to detach $($App.DisplayName) ($($App.id)) from superseding app $parentId : $_"
+    $surviving = @(Clear-YardstickAppLink -App $App)
+    if ($surviving.Count -gt 0) {
+        foreach ($link in $surviving) {
+            Write-Log "ERROR: $($App.DisplayName) ($($App.id)) still holds a link that blocks deletion: $link"
         }
-    }
-
-    $hasForwardLinks = @($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $App.id) }).Count -gt 0
-    if ($hasForwardLinks) {
-        try {
-            Remove-IntuneWin32AppSupersedence -ID $App.id | Out-Null
-        } catch {
-            Write-Log "WARNING: Failed to strip supersedence from $($App.DisplayName) ($($App.id)) before delete: $_"
-        }
+        throw "Cannot delete $($App.DisplayName) ($($App.id)): $($surviving.Count) link(s) could not be removed - $($surviving -join '; ')"
     }
 
     Write-Log "Removing app $($App.DisplayName) ($($App.id))"
@@ -2032,6 +2897,7 @@ function Test-RecipeSchema {
         'dependentLinkUpdateRetryCount', 'dependentLinkUpdateRetryDelaySeconds',
         'dependentLinkUpdateTimeoutSeconds',
         'supersedence', 'uninstallPreviousVersion', 'autoUpdateOnAssignment', 'autoUpdate',
+        'groupSkipAutoUpdates',
         'base'
     )
     $knownFieldsLower = $knownFields | ForEach-Object { $_.ToLower() }
@@ -2417,6 +3283,9 @@ function Add-SuccessfulApplication {
         Action           = $Action
         Dependents       = $Dependents
         AutoUpdateStatus = $AutoUpdateStatus
+        # Filled in later by Wait-YardstickBackup, once the background copy of
+        # this app's .intunewin has finished.
+        BackupStatus     = $null
         Timestamp        = Get-Date
     }
     
@@ -2813,6 +3682,11 @@ $(if ($RunParameters) { @"
 "@
 
         if ($Script:SuccessfulApplications.Count -gt 0) {
+            # Only show the Backup column when backups are actually configured,
+            # so runs without a Backup preference do not carry an empty column.
+            $anyBackup = @($Script:SuccessfulApplications | Where-Object { $_.PSObject.Properties['BackupStatus'] -and $_.BackupStatus }).Count -gt 0
+            $backupHeader = if ($anyBackup) { "`n                            <th>Backup</th>" } else { "" }
+            $successColSpan = if ($anyBackup) { 6 } else { 5 }
             $emailBody += @"
 
         <table cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#d4edda" style="width:100%; background-color:#d4edda; border-collapse:separate; border-radius:5px; margin:10px 0;">
@@ -2824,7 +3698,7 @@ $(if ($RunParameters) { @"
                             <th>Application</th>
                             <th>Version</th>
                             <th>Action</th>
-                            <th>Auto-Update</th>
+                            <th>Auto-Update</th>$backupHeader
                             <th>Time</th>
                         </tr>
 "@
@@ -2837,12 +3711,23 @@ $(if ($RunParameters) { @"
                     '^failed'      { '#dc3545' }
                     default        { '#6c757d' }
                 }
+                $backupCell = ""
+                if ($anyBackup) {
+                    $bkStatus = if ($app.PSObject.Properties['BackupStatus'] -and $app.BackupStatus) { $app.BackupStatus } else { '&mdash;' }
+                    $bkColor = switch -Regex ($bkStatus) {
+                        '^ok'              { '#28a745' }
+                        '^skipped'         { '#6c757d' }
+                        '^failed|^timed'   { '#dc3545' }
+                        default            { '#6c757d' }
+                    }
+                    $backupCell = "`n                    <td data-label=`"Backup`"><span style=`"color: $bkColor;`">$bkStatus</span></td>"
+                }
                 $emailBody += @"
                 <tr>
                     <td data-label="Application"><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
                     <td data-label="Version">$($app.Version)</td>
                     <td data-label="Action">$($app.Action)</td>
-                    <td data-label="Auto-Update"><span style="color: $auColor;">$auStatus</span></td>
+                    <td data-label="Auto-Update"><span style="color: $auColor;">$auStatus</span></td>$backupCell
                     <td data-label="Time" class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
                 </tr>
 "@
@@ -2850,7 +3735,7 @@ $(if ($RunParameters) { @"
                 if ($app.Dependents -and $app.Dependents.Count -gt 0) {
                     $emailBody += @"
                 <tr class="dependents-row">
-                    <td colspan="5" style="background-color: #f8f9fa; color:#1a1a1a; padding-left: 30px;">
+                    <td colspan="$successColSpan" style="background-color: #f8f9fa; color:#1a1a1a; padding-left: 30px;">
                         <strong style="color:#1a1a1a;">Dependent Applications:</strong>
                         <ul style="margin: 5px 0;">
 "@

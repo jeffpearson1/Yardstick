@@ -65,6 +65,7 @@ These variables are set once at startup from `preferences.yaml` and are availabl
 | `$Temp` | Temp directory |
 | `$Scripts` | Scripts directory |
 | `$Published` | Output directory for .intunewin files |
+| `$Backup` | Backup directory for uploaded .intunewin files (empty when backups are disabled) |
 | `$Recipes` | Recipes directory |
 | `$Icons` | Icons directory |
 | `$Tools` | Tools directory |
@@ -442,6 +443,22 @@ pushes the new version to devices already running a superseded version.
   recipes are a no-op here.
 - Intune needs two device check-ins (roughly 8-16 hours) before an auto-update
   install lands.
+
+**`groupSkipAutoUpdates`** (array) - Entra group IDs (device or user) that must
+never be auto-updated for this app, even though `autoUpdateOnAssignment` is on.
+- Default: none, but the list is **added to** `preferences.yaml`
+  (`defaultGroupsSkipAutoUpdates`) rather than replacing it. This is the one
+  recipe setting that unions with its preference instead of overriding it: a
+  group excluded tenant-wide cannot be re-enabled by a recipe.
+- Assignments targeting a listed group are held at `notConfigured`, so adding a
+  group here also turns *off* auto-update that an earlier run enabled.
+- Only group-targeted assignments can be skipped. All-devices and all-users
+  assignment targets carry no group ID and are unaffected.
+- Example:
+  ```yaml
+  groupSkipAutoUpdates:
+    - 00000000-1111-2222-3333-444444444444
+  ```
 
 Ordering within a run: assignments migrate first, expired versions are pruned
 next, and only then is supersedence attached. Intune refuses to delete an app that

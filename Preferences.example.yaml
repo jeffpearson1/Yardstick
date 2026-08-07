@@ -16,6 +16,15 @@ Tools: <REPLACE_WITH_YARDSTICK_ROOT>\Tools
 Temp: <REPLACE_WITH_YARDSTICK_ROOT>\Temp
 Secrets: <REPLACE_WITH_YARDSTICK_ROOT>\Secrets
 Modules: <REPLACE_WITH_YARDSTICK_ROOT>\Modules
+# Optional. When set, every .intunewin file Yardstick uploads is copied here on a
+# background thread, into a subfolder named after the recipe id, under a file name
+# carrying the version and the time Intune finished publishing it. Leave blank or
+# omit the key entirely to disable backups. A network path is fine - the copy runs
+# off the main thread, and a backup failure never fails an application update.
+Backup:
+# How many .intunewin files to retain per recipe in the Backup folder - the newest
+# plus N-1 and N-2 by default. Set to 0 to keep every backup forever.
+backupVersionsToKeep: 3
 
 
 #####################################
@@ -44,6 +53,13 @@ defaultUninstallPreviousVersion: false
 # for available assignments, so required-only recipes are unaffected. Recipes
 # can override with `autoUpdateOnAssignment` (accepted alias: `autoUpdate`).
 defaultAutoUpdate: true
+# Entra group IDs (device or user) that must never be auto-updated, even when
+# auto-update is on for the app. Assignments targeting one of these groups are
+# held at `notConfigured`, so adding a group here also turns off auto-update a
+# previous run had already enabled. Recipes ADD to this list with
+# `groupSkipAutoUpdates` - a recipe cannot remove a group listed here.
+defaultGroupsSkipAutoUpdates:
+  - Group IDs go here and will be excluded from supersedence auto-update
 # Master switch for the {DETECT} anchor behavior. When enabled, the first time
 # Yardstick updates a version-detection app under the new model, the oldest
 # surviving version is renamed "{DETECT} <DisplayName>" and preserved so it

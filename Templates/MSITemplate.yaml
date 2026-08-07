@@ -22,12 +22,16 @@ minOSVersion: W10_20H2
 
 # Supersedence and auto-update (all optional; inherit from preferences.yaml).
 # `supersedence`: the newest uploaded version declares Intune-native
-#   supersedence over every version Yardstick keeps, plus the {DETECT} anchor.
+#   supersedence over every version Yardstick keeps, plus the Ω DETECT - anchor.
 # `uninstallPreviousVersion`: true -> supersedence type "Replace" (Intune
 #   uninstalls the prior version first); false -> "Update" (in-place upgrade).
 # `autoUpdateOnAssignment`: enables Intune's native auto-update
 #   (autoUpdateSupersededAppsState) so devices running a superseded version are
 #   pulled forward. Intune only honours this on *available* assignments.
+# `groupSkipAutoUpdates`: group IDs that never auto-update, added to (not
+#   replacing) preferences.yaml's `defaultGroupsSkipAutoUpdates`.
 #supersedence: true
 #uninstallPreviousVersion: false
 #autoUpdateOnAssignment: true
+#groupSkipAutoUpdates:
+#  - 00000000-1111-2222-3333-444444444444

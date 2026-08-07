@@ -352,6 +352,14 @@ function Set-ScriptVariables {
         [bool]$Preferences.defaultAutoUpdate
     } else { $true }
 
+    # Groups that opt out of native auto-update. Unlike every other recipe
+    # setting this is a union, not an override: a group excluded tenant-wide
+    # stays excluded even when a recipe supplies its own list.
+    $Script:GroupsSkipAutoUpdates = @(
+        @($Preferences.defaultGroupsSkipAutoUpdates) + @($Parameters.groupSkipAutoUpdates) |
+            Where-Object { $_ } | Select-Object -Unique
+    )
+
     $Script:UseDetectAnchor = if ($null -ne $Preferences.useDetectAnchor) {
         [bool]$Preferences.useDetectAnchor
     } else { $true }
@@ -376,6 +384,13 @@ $Script:Recipes = $Prefs.Recipes
 $Script:Icons = $Prefs.Icons
 $Script:Tools = $Prefs.Tools
 $Script:Secrets = $Prefs.Secrets
+
+# Backup of uploaded .intunewin files is optional - a blank or absent Backup key
+# turns it off. A present-but-empty YAML key comes through as "", so this checks
+# for whitespace rather than just $null.
+$Script:Backup = $Prefs.Backup
+$Script:BackupEnabled = -not [string]::IsNullOrWhiteSpace($Script:Backup)
+$Script:BackupVersionsToKeep = if (($Prefs.backupVersionsToKeep -as [int]) -gt 0) { [int]$Prefs.backupVersionsToKeep } else { 3 }
 
 # Import Intune Connection Settings
 $Global:TenantID = $Prefs.TenantID
@@ -629,6 +644,10 @@ function Invoke-Cleanup {
     This function cleans up temporary files and directories created during
     the application processing, with error handling for non-critical failures.
     #>
+    # Backups read from the Published folder on a background thread, so make sure
+    # none are still in flight before anything here deletes their source.
+    Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
+
     Write-Log "Cleaning up the Buildspace..."
     try {
         Get-ChildItem $BuildSpace -Exclude ".gitkeep" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
@@ -728,7 +747,7 @@ foreach ($AppId_Processing in $Applications) {
 
         if ($Repair) {
             # Correct any naming discrepancies before we continue.
-            # Skip the {DETECT} anchor - it deliberately holds a different name.
+            # Skip the Ω DETECT - anchor - it deliberately holds a different name.
             $anchorName = Get-DetectAnchorName -DisplayName $Script:DisplayName
             $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName | Where-Object DisplayName -ne $anchorName)
             for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
@@ -952,11 +971,41 @@ foreach ($AppId_Processing in $Applications) {
                 if ((Get-Date) -gt $PublishTimeout) {
                     throw "Timed out waiting for Intune to publish $Script:DisplayName after 30 minutes (state: $($LiveWin32App.publishingState))"
                 }
-            } while ($LiveWin32App.publishingState -ne "published")   
+            } while ($LiveWin32App.publishingState -ne "published")
+            $UploadedAt = Get-Date
         } catch {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
             Write-Error "Failed to upload application to Intune: $_"
             continue
+        }
+
+        # Hand the .intunewin off to a background thread that copies it to the
+        # backup share and then deletes the local copy. Staging it out of
+        # $Published first is what stops the next app's
+        # New-IntuneWin32AppPackage -Force (which names its output from the setup
+        # file, so two recipes can collide) from clobbering a file the thread is
+        # still reading. Nothing in here may throw - a bad backup share must not
+        # turn a successful upload into a failed application.
+        if ($Script:BackupEnabled) {
+            try {
+                $BackupFileName = Get-YardstickBackupFileName -AppId $Script:Id -Version $Script:Version -Timestamp $UploadedAt
+                $StageDir = Join-Path (Join-Path $Published '_BackupQueue') $Script:Id
+                if (-not (Test-Path -LiteralPath $StageDir)) {
+                    New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
+                }
+                $StagedPath = Join-Path $StageDir $BackupFileName
+                Invoke-WithRetry -Label "Stage .intunewin for backup" -MaxRetries 3 -DelaySeconds 1 `
+                    -ScriptBlock { Move-Item -LiteralPath $App.path -Destination $StagedPath -Force } `
+                    -VerifyBlock { Test-Path -LiteralPath $StagedPath } | Out-Null
+                if (-not (Test-Path -LiteralPath $StagedPath)) {
+                    throw "could not stage $($App.path)"
+                }
+                Start-YardstickBackup -SourcePath $StagedPath -BackupRoot $Script:Backup -AppId $Script:Id `
+                    -FileName $BackupFileName -VersionsToKeep $Script:BackupVersionsToKeep
+                Write-Log "Queued backup of $BackupFileName to $Script:Backup"
+            } catch {
+                Write-Log "WARNING: Could not queue backup for $($Script:Id): $_"
+            }
         }
 
 
@@ -989,6 +1038,9 @@ foreach ($AppId_Processing in $Applications) {
             }
         } catch {
             Write-Log "There was an error fetching information about existing applications. Exiting"
+            # exit does not wait for background threads, so drain the backup we
+            # queued a few lines above before tearing the process down.
+            Wait-YardstickBackup -TimeoutSeconds 120 | Out-Null
             Exit 4
         }
 
@@ -996,7 +1048,7 @@ foreach ($AppId_Processing in $Applications) {
         $OtherApps  = @($AllMatchingApps | Where-Object id -ne $CurrentApp.id)
 
         # 1. Anchor identification. Version-detection recipes (msi, file-by-
-        #    version, registry-by-version) get one sticky {DETECT} anchor so a
+        #    version, registry-by-version) get one sticky Ω DETECT - anchor so a
         #    fast-moving app cannot prune away every version that could still
         #    detect a stale endpoint. The anchor is a permanent supersedence
         #    target: its detection rule matches a very wide version range, so
@@ -1022,7 +1074,15 @@ foreach ($AppId_Processing in $Applications) {
             }
         }
 
-        # 2. The anchor is off-limits to renaming, assignment migration and pruning.
+        # 2. The anchor is off-limits to renaming (step 5) and pruning (step 8): it
+        #    holds a reserved name forever, so it must never be numbered (N-x), and it
+        #    must not count against NumVersionsToKeep. It is NOT off-limits to
+        #    assignment migration - step 6 re-adds it to that sweep explicitly. The
+        #    anchor is pinned from the oldest surviving version, which on the first run
+        #    under this model is usually the previously-CURRENT app, so it carries that
+        #    version's live assignments. Dropping it here and never re-adding it
+        #    stranded them on an app that is never renamed, never pruned and never
+        #    revisited.
         if ($Anchor) {
             $OtherApps = @($OtherApps | Where-Object id -ne $Anchor.id)
         }
@@ -1033,6 +1093,7 @@ foreach ($AppId_Processing in $Applications) {
         #    rest of the prunable versions in step 8. They are never renamed to
         #    (N-x) or superseded, because their version is not actually older.
         $SameVersionApps = @($OtherApps | Where-Object displayVersion -eq $CurrentApp.displayVersion)
+        $SameVersionIds = @($SameVersionApps | Select-Object -ExpandProperty id)
         if ($SameVersionApps) {
             Write-Log "Found $($SameVersionApps.Count) existing app(s) already at version $($CurrentApp.displayVersion); they will be retired after their assignments are migrated."
             $OtherApps = @($OtherApps | Where-Object displayVersion -ne $CurrentApp.displayVersion)
@@ -1050,6 +1111,7 @@ foreach ($AppId_Processing in $Applications) {
         }
         # Duplicates of the current version always get retired, regardless of retention.
         $ToPrune = @($SameVersionApps) + @($ToPrune)
+        $ToPruneIds = @($ToPrune | Select-Object -ExpandProperty id)
 
         # 5. Rename kept apps to (N-1), (N-2), ...
         for ($i = 0; $i -lt $ToKeep.Count; $i++) {
@@ -1080,10 +1142,43 @@ foreach ($AppId_Processing in $Applications) {
         #      fall back to moving.
         #    Dependencies migrate exactly once per source app (during the required
         #    pass); the available pass runs with -SkipDependencies to avoid
-        #    double-processing them.
-        $SameVersionIds = @($SameVersionApps | Select-Object -ExpandProperty id)
+        #    double-processing them. Dependencies that point at a version being
+        #    pruned this run are dropped rather than carried onto the new app - the
+        #    fresh link would block that version's own deletion in step 8.
+        #
+        #    The Ω DETECT - anchor is swept here too, on every run, even though steps 5
+        #    and 8 leave it alone. Step 2 removed it from $OtherApps to keep it out of
+        #    the (N-x) numbering and the retention count, not because its assignments
+        #    are special - and excluding it from this loop is what stranded the
+        #    assignments of any app whose only prior version got pinned.
+        #    It is appended LAST so a (N-x) version wins any duplicate-target race:
+        #    Intune rejects the second add for a target with "already exists", so the
+        #    first assignment to land is the one whose notification and install-time
+        #    settings survive, and a kept version's schedule is more current than the
+        #    anchor's. The generic -CopyOnly:$willBeSuperseded rule below resolves
+        #    correctly for it without a special case - the anchor is never in $ToPrune,
+        #    so $isDoomed is false and the flag collapses to $Script:Supersedence, which
+        #    is exactly "step 9 will supersede this app" (line 1222). With supersedence
+        #    off there is no auto-update component to protect and no update path, so
+        #    falling back to a move is right there too.
+        #
+        #    Dependencies are skipped for the anchor. Unlike an (N-x) version there is
+        #    no deletion to unblock - the anchor is never pruned, so a dependent app
+        #    pointing at it is not holding anything hostage. And its child dependency
+        #    set is frozen at whatever the recipe declared when it was pinned;
+        #    Add-IntuneWin32AppDependency replaces the target's whole set from a merged
+        #    list, so migrating it would re-merge that stale set onto the current app on
+        #    every run, resurrecting dependencies the recipe has since dropped.
         $allOlder = @($ToKeep) + @($ToPrune)
+        # $Anchor can be the raw pre-rename candidate (see step 1) when Intune's lookup
+        # is still stale. Only .id and .DisplayName are read, and both objects come from
+        # Get-IntuneWin32App, so the shapes are interchangeable. The id guard is cheap
+        # insurance: From -eq To would add the assignment, read it back as present, then
+        # delete it off the app it was just confirmed on.
+        if ($Anchor -and ($Anchor.id -ne $CurrentApp.id)) { $allOlder += $Anchor }
         foreach ($old in $allOlder) {
+            $isDoomed = $ToPruneIds -contains $old.id
+            $isAnchor = ($null -ne $Anchor) -and ($old.id -eq $Anchor.id)
             try {
                 Move-AssignmentsAndDependencies -From $old -To $CurrentApp `
                     -AvailableDateOffset $Script:AvailableDateOffset `
@@ -1092,20 +1187,25 @@ foreach ($AppId_Processing in $Applications) {
                     -AllowDependentLinkUpdates $Script:AllowDependentLinkUpdates `
                     -DependentLinkOptions $DependentLinkOptions `
                     -DependentUpdateStatus $DependentUpdateStatus `
-                    -ProtectedSourceIds $ProtectedDependencyAppIds
+                    -ProtectedSourceIds $ProtectedDependencyAppIds `
+                    -ExcludeDependencyTargetIds $ToPruneIds `
+                    -SkipDependencies:$isAnchor
             } catch {
                 Write-Log "ERROR: Failed required-intent move from $($old.DisplayName): $_"
             }
 
             $availOnOld = @(Get-IntuneWin32AppAssignment -Id $old.id | Where-Object Intent -eq 'available')
             if ($availOnOld.Count -gt 0) {
-                # A same-version duplicate is never a supersedence target (superseding
-                # an identical version is meaningless), and it is retired this run.
-                $willBeSuperseded = $Script:Supersedence -and ($SameVersionIds -notcontains $old.id)
+                # A pruned app is never a supersedence target - step 9 only supersedes
+                # the versions that survive - so there is no auto-update path to
+                # protect and copying would just strand the assignment on an app
+                # about to be deleted. Move it instead.
+                $willBeSuperseded = $Script:Supersedence -and (-not $isDoomed)
                 try {
                     Move-AssignmentsAndDependencies -From $old -To $CurrentApp `
                         -AvailableDateOffset $Script:AvailableDateOffset `
                         -DeadlineDateOffset $Script:DeadlineDateOffset `
+                        -ProtectedSourceIds $ProtectedDependencyAppIds `
                         -IntentFilter 'available' -CopyOnly:$willBeSuperseded -SkipDependencies
                 } catch {
                     Write-Log "ERROR: Failed available-intent migration from $($old.DisplayName): $_"
@@ -1147,7 +1247,7 @@ foreach ($AppId_Processing in $Applications) {
         }
 
         # 9. Supersedence. The newest version becomes the single superseding parent
-        #    for every surviving older version plus the {DETECT} anchor. The anchor
+        #    for every surviving older version plus the Ω DETECT - anchor. The anchor
         #    is forced to "Update" because a "Replace" against its deliberately wide
         #    detection rule would uninstall the app from every device that has any
         #    version of it installed.
@@ -1176,7 +1276,8 @@ foreach ($AppId_Processing in $Applications) {
         $autoUpdateApplied = 0
         if ($Script:AutoUpdateOnAssignment) {
             try {
-                $autoUpdateApplied = Set-AssignmentAutoUpdate -AppId $CurrentApp.Id -Enabled $true -IntentFilter 'available'
+                $autoUpdateApplied = Set-AssignmentAutoUpdate -AppId $CurrentApp.Id -Enabled $true -IntentFilter 'available' `
+                    -SkipGroupIds $Script:GroupsSkipAutoUpdates
             } catch {
                 Write-Log "ERROR: Failed to enable auto-update on assignments for $($CurrentApp.DisplayName): $_"
             }
@@ -1210,7 +1311,18 @@ foreach ($AppId_Processing in $Applications) {
             Write-Error "Error while running post run PowerShell script: $_"
         }
     }
+
+    # Drain this app's backup before moving on, so at most one copy is ever in
+    # flight and an abrupt exit in the next iteration cannot orphan it. The
+    # thread still ran concurrently with all the supersedence and assignment work
+    # above, which is where the time actually goes.
+    Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
 }
+
+# Final drain. This has to happen before the email report is built, because
+# Wait-YardstickBackup is what records each app's backup status on it - and
+# because the email block can return early, skipping Invoke-Cleanup entirely.
+Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
 
 # Send email report if enabled
 if (-not $NoEmail) {
