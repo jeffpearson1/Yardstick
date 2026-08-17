@@ -21,6 +21,7 @@ Yardstick depends on (and we are extremely grateful for) a handful of PowerShell
 * [Selenium-Powershell](https://github.com/adamdriscoll/selenium-powershell)
 * [IntuneWin32App](https://github.com/MSEndpointMgr/IntuneWin32App)
 * [PowerShell_Credential_Manager](https://github.com/echalone/PowerShell_Credential_Manager)
+* [MSAL.PS](https://github.com/AzureAD/MSAL.PS)
 
 
 ### Installing
@@ -30,7 +31,7 @@ Yardstick depends on (and we are extremely grateful for) a handful of PowerShell
     * The remaining modules can be installed from the PowerShell Gallery:
 
 ```powershell
-Install-Module -Name Powershell-Yaml, TUN.CredentialManager
+Install-Module -Name Powershell-Yaml, TUN.CredentialManager, MSAL.PS
 Install-Module -Name Selenium -AllowPrerelease
 ```
 
