@@ -1,0 +1,35 @@
+url: https://www.jamovi.org/
+urlRedirects: false
+preDownloadScript: |
+  # Official jamovi site publishes the current version as SoftwareApplication JSON-LD. Never pin a version here.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  if ($html -notmatch '"softwareVersion"\s*:\s*"(?<ver>[0-9]+(?:\.[0-9]+)+)"') {
+      throw 'No jamovi version was found in the official site metadata.'
+  }
+  $version = $Matches['ver']
+  $fileName = "jamovi-$version-win-x64.exe"
+  $url = "https://archives.jamovi.org/$fileName"
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+  # jamovi installs into a version-stamped directory ("jamovi 2.7.34.0") with the
+  # launcher under bin\. fileDetectionPath takes no <version> substitution, so build
+  # the real path here.
+  $fileDetectionPath = "%ProgramFiles%\jamovi $version\bin"
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\jamovi <version>\uninstall.exe" /S'
+iconFile: jamovi.png
+id: jamovi
+displayName: jamovi
+publisher: The jamovi Project
+description: jamovi is an open statistical spreadsheet built on R.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\jamovi'  # replaced at build time with the version-stamped bin folder
+fileDetectionName: jamovi.exe
+# jamovi.exe carries an unrelated internal version (31.7.7 for release 2.7.34.0), so a version
+# comparison would match any build. The version-stamped install directory is the real signal:
+# it only exists for the version being detected, so an existence check is exact.
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

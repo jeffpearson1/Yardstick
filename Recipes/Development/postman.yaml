@@ -1,0 +1,44 @@
+url: https://dl.pstmn.io/changelog
+urlRedirects: false
+preDownloadScript: |
+  # Official Postman release changelog feed. Never pin a version here.
+  $release = (Invoke-RestMethod -Uri $url).changelog | Where-Object { $_.channel -eq 'stable' } | Select-Object -First 1
+  if (-not $release) { throw 'The official Postman changelog reported no stable release.' }
+  $version = [string]$release.name
+  if ($version -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "Unexpected Postman version string '$version'." }
+  $asset = $release.assets | Where-Object { $_.url -match '/windows64$' } | Select-Object -First 1
+  if (-not $asset) { throw "The official Postman changelog listed no Windows x64 asset for $version." }
+  $url = [string]$asset.url
+  $fileName = "Postman-win64-$version.exe"
+installScript: <filename> -s
+powerShellUninstallScript: |
+  # Postman's Squirrel installer auto-launches the app, and Squirrel refuses to
+  # uninstall while an instance holds its global lock ("Couldn't acquire lock").
+  # Stop the app first, then run the Squirrel uninstaller.
+  Get-Process -Name 'Postman' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 5
+
+  $updater = Join-Path $env:LOCALAPPDATA 'Postman\Update.exe'
+  if (Test-Path -LiteralPath $updater) {
+      Start-Process -FilePath $updater -ArgumentList '--uninstall', '-s' -Wait
+  }
+
+  # Squirrel leaves the root folder and its ARP entry behind on a silent uninstall.
+  Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA 'Postman') -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Postman' -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+iconFile: postman.png
+id: postman
+displayName: Postman
+publisher: Postman, Inc.
+description: Postman is a desktop platform for designing, testing, documenting, and collaborating on APIs.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\Postman'
+fileDetectionName: Postman.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

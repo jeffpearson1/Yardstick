@@ -1,0 +1,40 @@
+url: https://updates.emeditor.com/emed64_updates5u.txt
+urlRedirects: false
+preDownloadScript: |
+  # Official EmEditor 64-bit updater feed (UTF-16LE INI). Never pin a version here.
+  # The feed is UTF-16LE with a BOM, which PowerShell's default decoding would mangle.
+  $response = Invoke-WebRequest -Uri $url -UseBasicParsing
+  $bytes = if ($response.Content -is [byte[]]) { $response.Content } else { $response.RawContentStream.ToArray() }
+  $text = if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+      [System.Text.Encoding]::Unicode.GetString($bytes)
+  } else {
+      [System.Text.Encoding]::UTF8.GetString($bytes)
+  }
+  # The feed also advertises plug-ins, so consider every [update64_*] section and take the highest.
+  $best = $null
+  foreach ($section in [regex]::Matches($text, '(?ms)^\[update64_[^\]]+\]\s*(?<body>.*?)(?=^\[|\z)')) {
+      $body = $section.Groups['body'].Value
+      $candidateVersion = [regex]::Match($body, '(?m)^ProductVersion\s*=\s*(\S+)').Groups[1].Value
+      $candidateUrl = [regex]::Match($body, '(?m)^URL\s*=\s*(https://\S+\.msi)').Groups[1].Value
+      if ($candidateVersion -match '^[0-9]+(\.[0-9]+)+$' -and $candidateUrl) {
+          if (-not $best -or [version]$candidateVersion -gt [version]$best.Version) {
+              $best = [pscustomobject]@{ Version = $candidateVersion; Url = $candidateUrl }
+          }
+      }
+  }
+  if (-not $best) { throw 'No EmEditor 64-bit MSI was found in the official update feed.' }
+  $version = $best.Version
+  $url = $best.Url
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: emeditor.png
+id: emeditor
+displayName: EmEditor
+publisher: Emurasoft, Inc.
+description: EmEditor is a fast Windows text editor for large files, structured data, code, and automation.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

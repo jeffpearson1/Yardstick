@@ -1,0 +1,31 @@
+url: https://dbschema.com/download.html
+urlRedirects: false
+preDownloadScript: |
+  # Official DbSchema download page. Never pin a version here.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  # This pattern deliberately excludes the ZIP, MSI, and ARM64 variants.
+  $installer = [regex]::Match($html, 'https://dbschema\.com/download/dbschema_windows_(?<ver>[0-9]+(?:_[0-9]+)+)\.exe')
+  if (-not $installer.Success) { throw 'No DbSchema Windows installer was found on the official download page.' }
+  $version = $installer.Groups['ver'].Value.Replace('_', '.')
+  $url = $installer.Value
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+installScript: <filename> -q
+uninstallScript: '"%ProgramFiles%\DbSchema\Uninstaller.exe" -q'
+iconFile: dbschema.png
+id: dbschema
+displayName: DbSchema
+publisher: Wise Coders GmbH
+description: DbSchema is a database design, documentation, query, and data-management application.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\DbSchema'
+fileDetectionName: DbSchema.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+

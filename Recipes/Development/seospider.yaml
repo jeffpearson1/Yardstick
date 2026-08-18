@@ -1,0 +1,27 @@
+url: https://www.screamingfrog.co.uk/seo-spider/
+urlRedirects: false
+preDownloadScript: |
+  $page = Invoke-WebRequest -Uri $url -UseBasicParsing
+  $match = [regex]::Match([string]$page.Content, 'https://download\.screamingfrog\.co\.uk/products/seo-spider/ScreamingFrogSEOSpider-(?<version>[0-9]+(?:\.[0-9]+)+)\.exe')
+  if (-not $match.Success) { throw 'The current Screaming Frog Windows installer link was not found.' }
+  $version = $match.Groups['version'].Value
+  $url = $match.Value
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+uninstallScript: '"%ProgramFiles%\Screaming Frog SEO Spider\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: seospider.png
+id: seospider
+displayName: Screaming Frog SEO Spider
+publisher: Screaming Frog Ltd
+description: Screaming Frog SEO Spider crawls websites to audit links, metadata, redirects, and technical SEO issues.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Screaming Frog SEO Spider'
+fileDetectionName: ScreamingFrogSEOSpider.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

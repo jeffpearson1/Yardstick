@@ -1,0 +1,25 @@
+url: https://download.teamviewer.com/download/update/TVMSIVersion15.txt
+urlRedirects: false
+preDownloadScript: |
+  # Official TeamViewer 15 MSI version feed. Never pin a version here.
+  $version = ([string](Invoke-RestMethod -Uri $url)).Trim()
+  if ($version -notmatch '^15\.[0-9]+\.[0-9]+$') { throw "Unexpected TeamViewer 15 version string '$version'." }
+  $fileName = "Update_msi_${version}_x64.zip"
+  $url = "https://download.teamviewer.com/download/version_15x/update/$fileName"
+postDownloadScript: |
+  Expand-Archive -LiteralPath $fileName -DestinationPath $PWD -Force
+  $msi = Get-ChildItem -LiteralPath $PWD -Filter '*.msi' -File | Select-Object -First 1
+  if (-not $msi) { throw 'TeamViewer full-client MSI was not found in the vendor ZIP.' }
+  $fileName = $msi.Name
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: teamviewer.png
+id: teamviewer
+displayName: TeamViewer
+publisher: TeamViewer Germany GmbH
+description: TeamViewer provides remote access, remote support, screen sharing, and device connectivity.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

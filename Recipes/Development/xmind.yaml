@@ -1,0 +1,45 @@
+url: https://xmind.app/zen/download/win64/
+urlRedirects: false
+preDownloadScript: |
+  # Official version-neutral Xmind download locator. Never pin a version here.
+  $response = Invoke-WebRequest -Uri 'https://xmind.app/zen/download/win64/' -Method Head -MaximumRedirection 10 -UseBasicParsing
+  $resolved = [string]$response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+  if ($resolved -notmatch '/Xmind-for-Windows-x64bit-(?<ver>[0-9]+\.[0-9]+\.[0-9]+)-(?<build>[0-9]+)\.exe$') {
+      throw "The official Xmind locator did not resolve to a Windows x64 installer: '$resolved'."
+  }
+  $url = $resolved
+  $version = $Matches['ver']
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+installScript: <filename> /S
+uninstallScript: '"%LocalAppData%\Programs\Xmind\Uninstall Xmind.exe" /S'
+iconFile: xmind.png
+id: xmind
+displayName: Xmind
+publisher: XMIND LIMITED
+description: Xmind is a mind-mapping and brainstorming application for structuring ideas and outlines.
+detectionType: script
+detectionScript: |
+  # Xmind's published version (26.05.01106) is zero-padded, while the installed
+  # Xmind.exe reports 26.5.1106.<build>. Compare the first three components only.
+  $expected = '<version>'
+  $expectedParts = @(($expected -split '\.') | Select-Object -First 3)
+  if ($expectedParts.Count -ne 3) { Write-Output 'Not Detected'; exit 1 }
+  $expectedVersion = [version](($expectedParts | ForEach-Object { [int]$_ }) -join '.')
+  $exe = Join-Path $env:LOCALAPPDATA 'Programs\Xmind\Xmind.exe'
+  if (Test-Path -LiteralPath $exe) {
+      $raw = [string](Get-Item -LiteralPath $exe).VersionInfo.FileVersion
+      $parts = @(($raw -split '\.') | Select-Object -First 3)
+      if ($parts.Count -eq 3 -and ($parts -notmatch '\D')) {
+          $installed = [version](($parts | ForEach-Object { [int]$_ }) -join '.')
+          if ($installed -ge $expectedVersion) {
+              Write-Output 'Detected'
+              exit 0
+          }
+      }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

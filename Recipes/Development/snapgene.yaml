@@ -1,0 +1,34 @@
+url: https://www.snapgene.com/updates
+urlRedirects: false
+preDownloadScript: |
+  $releasePage = Invoke-WebRequest -Uri $url -UseBasicParsing
+  $downloadLink = $releasePage.Links |
+    Where-Object { $_.PSObject.Properties['href'] -and $_.href -match '/SnapGene/.+/snapgene_([0-9.]+)_win\.exe$' } |
+    Select-Object -First 1
+  if (-not $downloadLink) {
+    throw 'The official SnapGene Windows download link was not found.'
+  }
+  $url = [string]$downloadLink.href
+  if ($url -notmatch 'snapgene_([0-9.]+)_win\.exe$') {
+    throw "The SnapGene version could not be parsed from '$url'."
+  }
+  $version = [string]$Matches[1]
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+fileName:
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\SnapGene\uninstall.exe" /S'
+iconFile: snapgene.png
+id: snapgene
+displayName: SnapGene
+publisher: GSL Biotech LLC
+description: SnapGene is molecular biology software for planning, visualizing, and documenting DNA cloning procedures.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\SnapGene'
+fileDetectionName: SnapGene.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,29 @@
+url: https://github.com/paintdotnet/release
+urlRedirects: false
+preDownloadScript: |
+  # Official paint.net release repository. Never pin a version here.
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'paint\.net\.[0-9.]+\.winmsi\.x64\.zip$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName) { throw 'No stable paint.net winmsi x64 archive was found in the official releases.' }
+  if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw "Unexpected paint.net version string '$version'." }
+postDownloadScript: |
+  Expand-Archive -LiteralPath $fileName -DestinationPath $PWD -Force
+  $msi = Get-ChildItem -LiteralPath $PWD -Filter '*.msi' -File | Select-Object -First 1
+  if (-not $msi) { throw 'paint.net MSI was not found in the vendor ZIP.' }
+  $fileName = $msi.Name
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: paintdotnet.png
+id: paintdotnet
+displayName: paint.net
+publisher: dotPDN LLC
+description: paint.net is an image and photo editor for Windows.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,62 @@
+url: https://ams.ecosia-browser.net/api/getLatest/0aac13df-2a94-4570-8229-285102897d3d/win/?channelprofilename=PROD&arch=x64
+urlRedirects: false
+preDownloadScript: |
+  # Official Ecosia Browser update service. Never pin a version here.
+  $release = Invoke-RestMethod -Uri $url
+  $version = [string]$release.Version
+  if ($version -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "Unexpected Ecosia Browser version '$version'." }
+  # LocationUri is a presigned URL, so keep its query string intact.
+  $url = [string]$release.LocationUri
+  if (-not $url) { throw 'The Ecosia Browser update service returned no download location.' }
+  $fileName = [Uri]::UnescapeDataString([IO.Path]::GetFileName(([Uri]$url).AbsolutePath))
+  $registryDetectionValue = $version
+downloadScript: |
+  # The presigned Cloudflare R2 signature covers GET only, so any HEAD probe against it
+  # returns 403. BITS and the lab harness both issue a HEAD before downloading, which
+  # fails the whole recipe. Fetch the installer directly with a plain GET instead.
+  Invoke-WebRequest -Uri $url -OutFile $fileName -UseBasicParsing
+  if (-not (Test-Path -LiteralPath $fileName)) {
+      throw "The Ecosia Browser installer was not downloaded to '$fileName'."
+  }
+installScript: <filename> --system-level --do-not-launch-chrome
+powerShellUninstallScript: |
+  # Chromium's setup.exe reports UNINSTALL_SUCCESSFUL as exit code 19, which Intune would read as
+  # a failure, so run it and report success based on whether the product actually went away.
+  $ErrorActionPreference = 'SilentlyContinue'
+
+  foreach ($proc in @(Get-Process -Name 'ecosiabrowser' -ErrorAction SilentlyContinue)) {
+      try { $proc.Kill(); $proc.WaitForExit(15000) } catch { }
+  }
+
+  $root = Join-Path $env:ProgramFiles 'EcosiaBrowser\Application'
+  $setup = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+      Sort-Object { [version]$_.Name } -Descending |
+      ForEach-Object { Join-Path $_.FullName 'Installer\setup.exe' } |
+      Where-Object { Test-Path -LiteralPath $_ } |
+      Select-Object -First 1
+
+  if ($setup) {
+      Start-Process -FilePath $setup -ArgumentList '--uninstall', '--system-level', '--force-uninstall' -Wait -ErrorAction SilentlyContinue
+  }
+
+  Remove-Item -LiteralPath (Join-Path $env:ProgramFiles 'EcosiaBrowser') -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\EcosiaBrowser' -Recurse -Force -ErrorAction SilentlyContinue
+
+  if (Test-Path -LiteralPath 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\EcosiaBrowser') { exit 1 }
+  exit 0
+iconFile: ecosiabrowser.png
+id: ecosiabrowser
+displayName: Ecosia Browser
+publisher: Ecosia GmbH
+description: Ecosia Browser is a Chromium-based browser integrated with Ecosia search and privacy features.
+detectionType: registry
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\EcosiaBrowser'
+registryDetectionValueName: DisplayVersion
+registryDetectionValue:
+registryDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

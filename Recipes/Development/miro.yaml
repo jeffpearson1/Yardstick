@@ -1,0 +1,26 @@
+url: https://desktop.miro.com/platforms/win-nsis/Miro-no-updates.msi
+urlRedirects: false
+preDownloadScript: |
+  $manifestUrl = "https://desktop.miro.com/platforms/win-nsis/latest.yml"
+  $manifestResponse = Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing
+  $manifestText = if ($manifestResponse.Content -is [byte[]]) {
+    [Text.Encoding]::UTF8.GetString($manifestResponse.Content)
+  } else {
+    [string]$manifestResponse.Content
+  }
+  $manifest = $manifestText | ConvertFrom-Yaml
+  $version = [string]$manifest.version
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+fileName: Miro-no-updates.msi
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: miro.png
+id: miro
+displayName: Miro
+publisher: Miro
+description: Miro is a collaborative online workspace for innovation, planning, diagramming, and visual teamwork.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

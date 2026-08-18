@@ -1,0 +1,41 @@
+url: https://download.qsrinternational.com/Software/NVivo15/NVivo.x64.exe
+urlRedirects: false
+preDownloadScript: |
+  $fileName = 'NVivo.x64.exe'
+  $stagedInstaller = Join-Path $Temp $fileName
+  Start-BitsTransfer -Source $url -Destination $stagedInstaller
+  $version = [string](Get-Item -LiteralPath $stagedInstaller).VersionInfo.ProductVersion
+  if ([string]::IsNullOrWhiteSpace($version)) {
+    throw 'NVivo installer ProductVersion was empty.'
+  }
+  $version = $version.Split(' ')[0]
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+downloadScript: |
+  Move-Item -LiteralPath (Join-Path $Temp $fileName) -Destination (Join-Path $buildDirectory $fileName)
+fileName: NVivo.x64.exe
+installScript: <filename> /s /v"/qn /norestart"
+powerShellUninstallScript: |
+  $product = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+    Get-ItemProperty -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -eq 'NVivo 15' } |
+    Select-Object -First 1
+  if (-not $product) {
+    exit 0
+  }
+  $productCode = [string]$product.PSChildName
+  $process = Start-Process -FilePath msiexec.exe -ArgumentList "/x $productCode /qn /norestart" -Wait -PassThru
+  exit $process.ExitCode
+iconFile: nvivo.png
+id: nvivo
+displayName: NVivo 15
+publisher: Lumivero
+description: NVivo is qualitative and mixed-methods data analysis software for organizing, coding, querying, and visualizing research data.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\QSR\NVivo 15'
+fileDetectionName: NVivo.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
