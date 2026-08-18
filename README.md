@@ -40,7 +40,9 @@ Install-Module -Name Selenium -AllowPrerelease
 
 ### Configuring Preferences.yaml
 
-Most of this file should be fairly self-explanatory. The TenantID, ClientID, and ClientSecrets are required for Yardstick to operate properly. Defaults do not necessarily have to be set, however recipes that don't contain all the values normally set by the defaults may fail to run correctly.
+Most of this file should be fairly self-explanatory. Defaults do not necessarily have to be set, however recipes that don't contain all the values normally set by the defaults may fail to run correctly.
+
+The TenantID, ClientID and ClientSecret are **not** stored in this file - see [Set the Intune credentials](#set-the-intune-credentials) below. `credentialTarget`, `credentialExpirationWarningDays`, `credentialExpirationEmailIntervalHours` and `adminEmailRecipient` tune where those credentials are stored and who is told when they are about to expire.
 
 Setting the optional `Backup` folder makes Yardstick keep a copy of every `.intunewin` file it uploads, so a bad release can be traced back to the exact package that shipped. Each recipe gets its own subfolder, and each file is named with the version and the time Intune finished publishing it. The newest three are retained (`backupVersionsToKeep`). The copy runs on a background thread while Yardstick carries on with supersedence and assignments, and a backup failure is reported without failing the application update. Leave `Backup` blank to turn this off.
 
@@ -50,9 +52,54 @@ Setting the optional `Backup` folder makes Yardstick keep a copy of every `.intu
 Icons are not included for licensing reasons. Populate the icon cache folder with the icons needed for any application recipes you will be running. Formats can be .jpg or .png, max size is the same as Intune - 512x512 and 750KB. Be sure to double check filename extensions in recipes you are using.
 
 
-### Set credentials in Windows Credential Manager
+### Set the Intune credentials
 
-Create a new Windows credential - ```yourdomainnamehere``` that contains the username and password that will be used to sign into the Intune Graph API, along with any other credential objects that may be required by recipes you are running.
+The app registration credentials Yardstick uses to reach Microsoft Graph are held in
+Windows Credential Manager, encrypted for the account that runs Yardstick, rather than
+in plaintext in `preferences.yaml`. Store them once per machine:
+
+```powershell
+.\Set-YardstickCredential.ps1
+```
+
+You are prompted for the Tenant ID, Client ID and Client Secret (typed as a masked
+SecureString), plus an optional secret expiration date. The script then authenticates
+to Graph to confirm the values work before you rely on them.
+
+Other useful invocations:
+
+```powershell
+.\Set-YardstickCredential.ps1 -Show               # tenant, client and expiry (secret masked)
+.\Set-YardstickCredential.ps1 -RefreshExpiration  # re-read the expiry date from Graph
+.\Set-YardstickCredential.ps1 -Remove             # delete the stored credential
+```
+
+If `preferences.yaml` still carries the legacy `TenantID` / `ClientId` / `ClientSecret`
+keys, the next Yardstick run migrates them into Credential Manager automatically and
+logs a reminder to delete them from the file. Running with `-NoInteractive` never
+prompts: an unattended run with no stored credential fails immediately with an
+instruction to run `Set-YardstickCredential.ps1`.
+
+#### Client secret expiration
+
+At the start of every run Yardstick checks how much life the client secret has left.
+When it is inside `credentialExpirationWarningDays` (default 30), a warning is written
+to the console and log, and an email goes to `adminEmailRecipient` (falling back to
+`emailRecipient`). Repeat emails are throttled to one per
+`credentialExpirationEmailIntervalHours` (default 24) so a nightly schedule does not
+spam the mailbox.
+
+The expiration date is discovered from Graph when the app registration holds
+`Application.Read.All` - Yardstick matches the secret to its `passwordCredential` by
+hint. Without that permission, supply the date yourself when running
+`Set-YardstickCredential.ps1`.
+
+
+### Set recipe credentials in Windows Credential Manager
+
+Some recipes sign in to vendor portals. Create a Windows credential -
+```yourdomainnamehere``` - that contains the username and password used for those
+sign-ins, along with any other credential objects required by the recipes you run.
 
 
 ### Recipe Tips and Tricks

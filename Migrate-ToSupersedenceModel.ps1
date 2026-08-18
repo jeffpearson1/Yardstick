@@ -63,15 +63,16 @@ $ErrorActionPreference = 'Stop'
 Import-Module powershell-yaml -Force
 Import-Module IntuneWin32App -Force
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
 
 # Load preferences (same location Yardstick.ps1 uses)
 $Prefs = Get-Content "$PSScriptRoot\preferences.yaml" | ConvertFrom-Yaml
-$Global:TenantID     = $Prefs.TenantID
-$Global:ClientID     = $Prefs.ClientId
-$Global:ClientSecret = $Prefs.ClientSecret
-$Global:LogLocation = "G:\Intune\YardstickDev"
+$Global:LogLocation = $PSScriptRoot
 $Global:LogFile = "SupersedenceMigration.log"
 $Recipes = $Prefs.Recipes
+
+# Intune credentials come from Windows Credential Manager, not preferences.yaml
+Initialize-YardstickIntuneCredential -Preferences $Prefs | Out-Null
 
 # Auth
 Connect-AutoMSIntuneGraph -Force
