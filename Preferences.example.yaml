@@ -30,9 +30,22 @@ backupVersionsToKeep: 3
 #####################################
 # INTUNE CONNECTION SETTINGS
 #####################################
-TenantID: 
-ClientSecret: 
-ClientId: 
+# TenantID, ClientId and ClientSecret are NOT stored here. They live in Windows
+# Credential Manager, encrypted for the account that runs Yardstick. Populate them
+# with:  .\Set-YardstickCredential.ps1
+# If the legacy TenantID/ClientId/ClientSecret keys are still present below,
+# Yardstick migrates them into Credential Manager on the next run and then asks you
+# to delete them from this file.
+#
+# Credential Manager target name used to store the app registration credentials.
+credentialTarget: "Yardstick:IntuneGraph"
+# Warn (and email the admin) when the client secret expires within this many days.
+credentialExpirationWarningDays: 30
+# Minimum hours between repeat expiration emails, so frequent runs do not spam.
+credentialExpirationEmailIntervalHours: 24
+# Leave unset to follow emailNotificationEnabled; set explicitly to send (or not
+# send) expiration alerts independently of the per-run application report.
+credentialExpirationEmailEnabled:
 
 
 #####################################
@@ -91,6 +104,9 @@ defaultDeploymentGroups:
 #####################################
 emailNotificationEnabled: false
 emailRecipient: "admin@yourorganization.com"
+# Address that receives operational alerts such as client secret expiration.
+# Falls back to emailRecipient when omitted.
+adminEmailRecipient: "admin@yourorganization.com"
 emailSubject: "Yardstick Application Update Report"
 emailSenderName: "Yardstick Automation"
 emailSendFromAddress: "noreply@yourorganization.com"
