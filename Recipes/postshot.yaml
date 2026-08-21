@@ -1,0 +1,63 @@
+url: https://www.jawset.com/public_download/jawset.postshot/win/
+urlRedirects: false
+preDownloadScript: |
+  $fileName = 'Jawset-Postshot-latest.exe'
+  $stagedInstaller = Join-Path $Temp $fileName
+  Start-BitsTransfer -Source $url -Destination $stagedInstaller
+  $version = ([string](Get-Item -LiteralPath $stagedInstaller).VersionInfo.ProductVersion).Trim()
+  if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') {
+    throw "Postshot installer returned an invalid ProductVersion: '$version'."
+  }
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+downloadScript: |
+  Move-Item -LiteralPath (Join-Path $Temp $fileName) -Destination (Join-Path "$BuildSpace\$id\$version" $fileName) -Force
+fileName: Jawset-Postshot-latest.exe
+installScript: <filename> -s -accept-eula
+powerShellUninstallScript: |
+  $product = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+    Get-ItemProperty -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'Jawset Postshot*' } |
+    Select-Object -First 1
+  if (-not $product) {
+    exit 0
+  }
+  $command = [string]$product.UninstallString
+  if ([string]::IsNullOrWhiteSpace($command)) {
+    throw 'Jawset Postshot did not register an uninstall command.'
+  }
+  if ($command -match "\{[0-9A-FA-f]{8}-[0-9A-FA-f]{4}-[0-9A-FA-f]{4}-[0-9A-FA-f]{4}-[0-9A-FA-f]{12}\}") {
+    $productCode = $Matches[0]
+    $process = Start-Process -FilePath msiexec.exe -ArgumentList "/x $productCode /qn /norestart" -Wait -PassThru
+    exit $process.ExitCode
+  }
+  if ($command -match '^\s*"([^"]+)"\s*(.*)$') {
+    $executable = $Matches[1]
+    $arguments = $Matches[2]
+  } else {
+    $parts = $command -split '\s+', 2
+    $executable = $parts[0]
+    $arguments = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+  }
+  if ($arguments -notmatch '(?i)(?:^|\s)-uninstall(?:\s|$)') {
+    $arguments = "$arguments -uninstall".Trim()
+  }
+  if ($arguments -notmatch '(?i)(?:^|\s)-s(?:\s|$)') {
+    $arguments = "$arguments -s".Trim()
+  }
+  $process = Start-Process -FilePath $executable -ArgumentList $arguments -Wait -PassThru
+  exit $process.ExitCode
+iconFile: postshot.png
+id: postshot
+displayName: Jawset Postshot
+publisher: Jawset Visual Computing
+description: Postshot reconstructs photorealistic 3D scenes and objects from images and video using radiance-field technology.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Jawset Postshot\bin'
+fileDetectionName: postshot.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

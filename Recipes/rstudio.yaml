@@ -8,8 +8,8 @@ preDownloadScript: |
   $parts = $($version.split("+")[0]).split(".")
   $filename = ($url -split "/")[-1]
   $fileDetectionVersion = "$($parts[0]).$($parts[1].trimstart('0')).$($parts[2]).0"
-installScript: <filename> /S
-uninstallScript: '"%ProgramFiles%\RStudio\Uninstall.exe" /S'
+installScript: <filename> /allusers /S
+uninstallScript: '"%ProgramFiles%\RStudio\Uninstall.exe" /allusers /S'
 iconFile: rstudio.png
 id: rstudio
 displayName: RStudio
