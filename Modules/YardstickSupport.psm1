@@ -1862,6 +1862,50 @@ function Get-SameAppAllVersions {
 }
 
 
+function Get-NewestComparableVersion {
+    <#
+    .SYNOPSIS
+    Returns the newest displayVersion from a set of existing apps that can actually
+    be compared, or $null if there is none.
+
+    .DESCRIPTION
+    Callers must not reach for $ExistingVersions.displayVersion[0] directly. Two
+    things go wrong with that:
+
+    1. PowerShell unrolls a single-element property projection to a scalar, so when
+       exactly one matching app exists, [0] indexes into the version *string* and
+       returns its first character ("2" instead of "2.10.91.91").
+    2. An app can have a null or empty displayVersion -- for example one renamed to
+       an "Ω DETECT -" anchor, or created by hand -- and feeding that to
+       Compare-AppVersions throws, which fails the entire recipe.
+
+    This takes the already newest-first list from Get-SameAppAllVersions and returns
+    the first entry that carries a usable version.
+
+    .PARAMETER ExistingVersions
+    Applications sorted newest first, as returned by Get-SameAppAllVersions.
+
+    .OUTPUTS
+    String version, or $null when no entry has a usable displayVersion.
+    #>
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        $ExistingVersions
+    )
+
+    if ($null -eq $ExistingVersions) { return $null }
+
+    $newest = @($ExistingVersions) |
+        Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace($_.displayVersion) } |
+        Select-Object -First 1
+
+    if ($null -eq $newest) { return $null }
+    return [string]$newest.displayVersion
+}
+
+
 
 function Invoke-YardstickGraphRequest {
     <#
