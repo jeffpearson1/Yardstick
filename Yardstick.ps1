@@ -108,6 +108,7 @@ $Global:LogFile = "YLog.log"
 
 # Import core modules first (needed for Write-Log and Test-Prerequisites)
 Import-Module ${PSScriptRoot}\Modules\YardstickSupport.psm1 -Scope Global -Force
+Import-Module ${PSScriptRoot}\Modules\YardstickCredential.psm1 -Scope Global -Force
 
 $CustomModuleImports = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
 foreach ($Module in $CustomModuleImports) {
@@ -462,10 +463,10 @@ $Script:Backup = $Prefs.Backup
 $Script:BackupEnabled = -not [string]::IsNullOrWhiteSpace($Script:Backup)
 $Script:BackupVersionsToKeep = if (($Prefs.backupVersionsToKeep -as [int]) -gt 0) { [int]$Prefs.backupVersionsToKeep } else { 3 }
 
-# Import Intune Connection Settings
-$Global:TenantID = $Prefs.TenantID
-$Global:ClientID = $Prefs.ClientID
-$Global:ClientSecret = $Prefs.ClientSecret
+# Import Intune Connection Settings from Windows Credential Manager. Legacy
+# TenantID/ClientId/ClientSecret keys in preferences.yaml are migrated on first
+# run; -NoInteractive runs fail fast rather than blocking on a prompt.
+$Script:IntuneCredential = Initialize-YardstickIntuneCredential -Preferences $Prefs -NoPrompt:$NoInteractive
 $Global:ScriptRoot = $PSScriptRoot
 
 # Validate ApplicationId parameter
@@ -751,6 +752,18 @@ if ($Force) { $RunParametersArray += "-Force" }
 if ($NoDelete) { $RunParametersArray += "-NoDelete" }
 if ($Repair) { $RunParametersArray += "-Repair" }
 $RunParameters = $RunParametersArray -join " "
+
+# Authenticate up front so a bad or expired secret fails before any packaging work,
+# then check how much life the secret has left.
+try {
+    Connect-AutoMSIntuneGraph
+    $Script:IntuneCredential = Update-YardstickSecretExpiration -Credential $Script:IntuneCredential
+} catch {
+    Write-Log "ERROR: Unable to authenticate to Microsoft Graph: $_"
+    Write-Log "If the client secret was rotated, store the new one with .\Set-YardstickCredential.ps1"
+    exit 1
+}
+Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences $Prefs -NoEmail:$NoEmail | Out-Null
 
 # Main processing loop
 foreach ($AppId_Processing in $Applications) {

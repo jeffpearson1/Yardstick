@@ -1,0 +1,25 @@
+url: https://download.sublimetext.com/latest/stable
+urlRedirects: false
+preDownloadScript: |
+  $version = ([string](Invoke-RestMethod -Uri $url)).Trim()
+  if ($version -notmatch '^\d+$') { throw "Unexpected Sublime Text stable build value: $version" }
+  $url = 'https://download.sublimetext.com/latest/stable/windows/x64/exe'
+  $fileName = "sublime_text_build_${version}_x64_setup.exe"
+  $fileDetectionVersion = "4.0.0.$version"
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+uninstallScript: '"%ProgramFiles%\Sublime Text\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: sublimetext.png
+id: sublimetext
+displayName: Sublime Text
+publisher: Sublime HQ Pty Ltd
+description: Sublime Text is a cross-platform text and source-code editor.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Sublime Text'
+fileDetectionName: sublime_text.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

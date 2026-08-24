@@ -1,0 +1,26 @@
+url: https://data.services.jetbrains.com/products/releases?code=TBA&latest=true&type=release
+urlRedirects: false
+preDownloadScript: |
+  # Official JetBrains product-releases API (code TBA = Toolbox App). Never pin a version here.
+  $release = (Invoke-RestMethod -Uri $url).TBA | Select-Object -First 1
+  if (-not $release) { throw 'The JetBrains releases API returned no Toolbox App release.' }
+  $version = [string]$release.build
+  $url = [string]$release.downloads.windows.link
+  if ($version -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "Unexpected JetBrains Toolbox build string '$version'." }
+  if ($url -notmatch '/jetbrains-toolbox-[0-9.]+\.exe$') { throw "The JetBrains releases API did not return a Windows installer: '$url'." }
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+installScript: <filename> /S
+uninstallScript: '"%LocalAppData%\JetBrains\Toolbox\bin\Uninstall.exe" /S'
+iconFile: jetbrainstoolbox.png
+id: jetbrainstoolbox
+displayName: JetBrains Toolbox
+publisher: JetBrains s.r.o.
+description: JetBrains Toolbox installs, updates, and manages JetBrains developer tools.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\JetBrains\Toolbox\bin'
+fileDetectionName: jetbrains-toolbox.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

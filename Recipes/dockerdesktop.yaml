@@ -1,0 +1,32 @@
+url: https://desktop.docker.com/win/main/amd64/appcast.xml
+urlRedirects: false
+preDownloadScript: |
+  # Official Docker Desktop Sparkle appcast. Never pin a version here.
+  $raw = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($raw -is [byte[]]) { $raw = [System.Text.Encoding]::UTF8.GetString($raw) }
+  [xml]$feed = $raw
+  $latest = @($feed.rss.channel.item) | Sort-Object { [int]$_.enclosure.version } -Descending | Select-Object -First 1
+  if (-not $latest) { throw 'No Docker Desktop release was found in the official appcast.' }
+  $version = [string]$latest.enclosure.shortVersionString
+  if ($version -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "Unexpected Docker Desktop version string '$version'." }
+  $url = ([string]$latest.enclosure.GetAttribute('url')) -replace ' ', '%20'
+  $fileName = 'Docker Desktop Installer.exe'
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+installScript: '"<filename>" install --quiet --accept-license'
+uninstallScript: '"%ProgramFiles%\Docker\Docker\Docker Desktop Installer.exe" uninstall --quiet'
+iconFile: dockerdesktop.png
+id: dockerdesktop
+displayName: Docker Desktop
+publisher: Docker Inc.
+description: Docker Desktop provides local container, image, Compose, Kubernetes, and developer tooling on Windows.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Docker\Docker'
+fileDetectionName: Docker Desktop.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_22H2
+maximumInstallationTimeInMinutes: 30

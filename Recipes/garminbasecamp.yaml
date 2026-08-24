@@ -1,0 +1,73 @@
+url: 'https://www8.garmin.com/support/download_details.jsp?id=4435'
+urlRedirects: false
+preDownloadScript: |
+  # Official Garmin download page exposes the current version as a software_version meta element.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  $version = [regex]::Match($html, 'name="software_version"\s+content="(?<ver>[0-9]+(?:\.[0-9]+)+)"').Groups['ver'].Value
+  if (-not $version) { throw 'No Garmin BaseCamp version was found on the official download page.' }
+  $url = [regex]::Match($html, 'https://download\.garmin\.com/software/BaseCamp_[0-9]+\.exe').Value
+  if (-not $url) { throw 'No Garmin BaseCamp Windows installer was found on the official download page.' }
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+installScript: <filename> /quiet /norestart
+powerShellUninstallScript: |
+  # BaseCamp is a Burn bundle. Its cached payload is named BaseCamp.exe rather than the
+  # downloaded BaseCamp_<build>.exe, so the Package Cache path cannot be derived from
+  # <filename>. Read the bundle's own registered UninstallString instead, and run the bundle
+  # before the child MSI because the bundle removes the MSI itself.
+  $roots = @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  $entries = foreach ($root in $roots) {
+      Get-ChildItem -Path $root -ErrorAction SilentlyContinue | ForEach-Object {
+          $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+          if ($props.DisplayName -eq 'Garmin BaseCamp') { $props }
+      }
+  }
+  foreach ($entry in ($entries | Sort-Object { if ($_.UninstallString -match 'MsiExec') { 1 } else { 0 } })) {
+      $command = $entry.UninstallString
+      if (-not $command) { continue }
+      if ($command -match 'MsiExec\.exe\s*/[XI]\s*(?<code>\{[0-9A-Fa-f-]+\})') {
+          Start-Process -FilePath 'msiexec.exe' -ArgumentList '/x', $Matches['code'], '/quiet', '/norestart' -Wait
+      }
+      elseif ($command -match '^"(?<exe>[^"]+)"') {
+          $exe = $Matches['exe']
+          if (Test-Path -LiteralPath $exe) {
+              Start-Process -FilePath $exe -ArgumentList '/uninstall', '/quiet', '/norestart' -Wait
+          }
+      }
+  }
+  exit 0
+iconFile: garminbasecamp.png
+id: garminbasecamp
+displayName: Garmin BaseCamp
+publisher: Garmin Ltd.
+description: Garmin BaseCamp is a desktop application for planning routes and managing maps, waypoints, tracks, and compatible Garmin devices.
+# BaseCamp registers under a bundle GUID rather than a "BaseCamp" key, so the ARP key path is
+# not predictable. Scan the uninstall hives for the bundle's DisplayName instead.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+      foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+          $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+          if ($props.DisplayName -ne 'Garmin BaseCamp') { continue }
+          $found = $null
+          if ([version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+              Write-Output 'Detected'
+              exit 0
+          }
+      }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+is32BitApp: true
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

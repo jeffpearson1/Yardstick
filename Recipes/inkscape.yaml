@@ -1,0 +1,37 @@
+url: https://gitlab.com/api/v4/projects/inkscape%2Finkscape/repository/tags?per_page=100
+urlRedirects: false
+preDownloadScript: |
+  # Stable upstream tags omit RC/beta suffixes; sort them as versions rather than strings.
+  $tags = Invoke-RestMethod -Uri $url
+  $candidates = foreach ($tag in $tags) {
+    if ($tag.name -match '^INKSCAPE_[0-9]+(?:_[0-9]+)+$') {
+      [version]$tag.name.Substring(9).Replace('_', '.')
+    }
+  }
+  $candidates = $candidates | Sort-Object -Descending
+  foreach ($candidate in $candidates) {
+    $candidateVersion = $candidate.ToString()
+    try {
+      $downloadPage = (Invoke-WebRequest -Uri "https://inkscape.org/release/inkscape-$candidateVersion/windows/64-bit/msi/dl/" -UseBasicParsing -TimeoutSec 60).Content
+    } catch { continue }
+    if ($downloadPage -is [byte[]]) { $downloadPage = [System.Text.Encoding]::UTF8.GetString($downloadPage) }
+    $asset = [regex]::Match($downloadPage, 'url=(?<path>/gallery/item/\d+/inkscape-[^"''\s]+\.msi)')
+    if (-not $asset.Success) { continue }
+    $version = $candidateVersion
+    $url = 'https://inkscape.org' + $asset.Groups['path'].Value
+    $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+    break
+  }
+  if (-not $fileName) { throw 'No stable Inkscape x64 MSI was found in the official releases.' }
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: inkscape.png
+id: inkscape
+displayName: Inkscape
+publisher: Inkscape Project
+description: Inkscape is a free and open-source vector graphics editor for SVG illustration and design.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,21 @@
+url: https://cursor.com/api/download?platform=win32-x64&releaseTrack=stable
+urlRedirects: false
+preDownloadScript: |
+  $release = Invoke-RestMethod -Uri $url
+  $version = [string]$release.version
+  $url = [string]$release.downloadUrl
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+fileName:
+installScript: <filename> /VERYSILENT /NORESTART /MERGETASKS=!runcursor
+uninstallScript: '"%ProgramFiles%\Cursor\unins000.exe" /VERYSILENT /NORESTART'
+iconFile: cursor.png
+id: cursor
+displayName: Cursor
+publisher: Anysphere, Inc.
+description: Cursor is an AI-powered code editor for software development.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Cursor'
+fileDetectionName: Cursor.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal

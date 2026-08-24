@@ -1,0 +1,30 @@
+url: https://github.com/klembot/twinejs
+urlRedirects: false
+preDownloadScript: |
+  # Official Twine release repository. Never pin a version here.
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'Twine-[0-9.]+-Windows\.exe$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName) { throw 'No stable Twine Windows installer was found in the official releases.' }
+  if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw "Unexpected Twine version string '$version'." }
+  $fileDetectionVersion = $version
+installScript: <filename> /S
+uninstallScript: '"%LocalAppData%\Programs\twine\Uninstall Twine.exe" /S'
+iconFile: twine.png
+id: twine
+displayName: Twine
+publisher: Chris Klimas
+description: Twine is an open-source tool for writing interactive, nonlinear stories.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\Programs\twine'
+fileDetectionName: Twine.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

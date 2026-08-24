@@ -3415,6 +3415,7 @@ function Test-OutlookAvailability {
     #>
     try {
         $outlook = New-Object -ComObject "Outlook.Application"
+        if ($outlook) { Write-Output "Works" | Out-Null } # This just gets rid of the IDE error since we're actually using the try catch block to test.
         $outlook = $null
         [System.GC]::Collect()
         return $true

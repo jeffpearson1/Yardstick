@@ -1,0 +1,51 @@
+url: https://desktop.miro.com/platforms/win-nsis/Miro-no-updates.msi
+urlRedirects: false
+preDownloadScript: |
+  $manifestUrl = "https://desktop.miro.com/platforms/win-nsis/latest.yml"
+  $manifestResponse = Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing
+  $manifestText = if ($manifestResponse.Content -is [byte[]]) {
+    [Text.Encoding]::UTF8.GetString($manifestResponse.Content)
+  } else {
+    [string]$manifestResponse.Content
+  }
+  $manifest = $manifestText | ConvertFrom-Yaml
+  $version = [string]$manifest.version
+
+fileName: Miro-no-updates.msi
+installScript: msiexec /i <filename> /qn /norestart
+powerShellUninstallScript: |
+  $root = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+  foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+    $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+    if ($props.DisplayName -notlike 'Miro *' -or -not $props.QuietUninstallString) { continue }
+    $command = [Environment]::ExpandEnvironmentVariables([string]$props.QuietUninstallString)
+    if ($command -match '^"(?<exe>[^"]+)"\s*(?<args>.*)$') {
+      $process = Start-Process -FilePath $Matches.exe -ArgumentList $Matches.args -Wait -PassThru
+      exit $process.ExitCode
+    }
+  }
+  Write-Output 'Miro is not installed.'
+  exit 0
+iconFile: miro.png
+id: miro
+displayName: Miro
+publisher: Miro
+description: Miro is a collaborative online workspace for innovation, planning, diagramming, and visual teamwork.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $root = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+  foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+    $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+    $found = $null
+    if ($props.DisplayName -like 'Miro *' -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+      Write-Output 'Detected'
+      exit 0
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

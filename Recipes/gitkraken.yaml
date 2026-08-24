@@ -1,0 +1,53 @@
+url: https://www.gitkraken.com/download
+urlRedirects: false
+preDownloadScript: |
+  $page = Invoke-WebRequest -Uri $url -UseBasicParsing
+  $match = [regex]::Match([string]$page.Content, 'Latest Release:\s*(?<version>[0-9]+(?:\.[0-9]+){2,3})')
+  if (-not $match.Success) { throw 'GitKraken did not publish a parseable latest version.' }
+  $version = $match.Groups['version'].Value
+  $url = "https://api.gitkraken.dev/releases/production/windows/x64/active/GitKrakenSetup.exe"
+  $fileName = 'GitKrakenSetup.exe'
+  $fileDetectionVersion = $version
+downloadScript: |
+  $destination = Join-Path (Get-Location) $fileName
+  $lastError = $null
+  for ($attempt = 1; $attempt -le 6; $attempt++) {
+    try {
+      Remove-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+      Invoke-WebRequest -Uri $url -OutFile $destination -UseBasicParsing
+      if ((Get-Item -LiteralPath $destination).Length -le 0) { throw 'The downloaded installer is empty.' }
+      $lastError = $null
+      break
+    }
+    catch {
+      $lastError = $_
+      if ($attempt -lt 6) { Start-Sleep -Seconds (5 * $attempt) }
+    }
+  }
+  if ($lastError) { throw "GitKraken download failed after 6 attempts: $($lastError.Exception.Message)" }
+installScript: <filename> -s
+powerShellUninstallScript: |
+  $updater = Join-Path $env:LOCALAPPDATA 'gitkraken\Update.exe'
+  if (Test-Path -LiteralPath $updater) {
+    $process = Start-Process -FilePath $updater -ArgumentList '--uninstall', '-s' -Wait -PassThru
+    if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+  }
+  # Squirrel removes the app but leaves its now-empty Start Menu directory.
+  $shortcutDirectory = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\GitKraken'
+  Remove-Item -LiteralPath $shortcutDirectory -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+iconFile: gitkraken.png
+id: gitkraken
+displayName: GitKraken Desktop
+publisher: GitKraken
+description: GitKraken Desktop is a graphical Git client for working with repositories, branches, pull requests, and team workflows.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\gitkraken'
+fileDetectionName: gitkraken.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

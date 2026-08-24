@@ -1,0 +1,30 @@
+url: https://github.com/USEPA/EPANET2.2
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'epanet[0-9.]+_setup\.exe$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName) { throw 'No stable EPA EPANET Windows setup executable was found.' }
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+powerShellUninstallScript: |
+  $uninstaller = Join-Path ${env:ProgramFiles(x86)} 'EPANET 2.2\unins000.exe'
+  if (-not (Test-Path -LiteralPath $uninstaller)) { exit 0 }
+  $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+  exit $process.ExitCode
+iconFile: epanet.png
+id: epanet
+displayName: EPANET
+publisher: U.S. Environmental Protection Agency
+description: EPANET models hydraulic and water-quality behavior in drinking-water distribution systems.
+detectionType: file
+fileDetectionPath: 'C:\Program Files (x86)\EPANET 2.2'
+fileDetectionName: epanet2w.exe
+fileDetectionMethod: exists
+architecture: x64
+is32BitApp: true
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

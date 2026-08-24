@@ -1,0 +1,30 @@
+url: https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe
+urlRedirects: false
+preDownloadScript: |
+  # Valve publishes no version feed for the Steam installer and the Steam Web API has no endpoint for
+  # it. Stage the evergreen bootstrapper once here and read its authoritative file version. Note this
+  # is the SteamSetup.exe bootstrapper version, not the Steam client payload it later downloads.
+  $staged = Join-Path $env:TEMP 'Yardstick-steam-SteamSetup.exe'
+  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+  Invoke-WebRequest -Uri $url -OutFile $staged -UseBasicParsing
+  $info = (Get-Item -LiteralPath $staged).VersionInfo
+  $version = '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
+  if ($version -eq '0.0.0.0') { throw 'The Steam installer reported no file version.' }
+  $fileName = 'SteamSetup.exe'
+downloadScript: |
+  Move-Item -LiteralPath (Join-Path $env:TEMP 'Yardstick-steam-SteamSetup.exe') -Destination (Join-Path $PWD $fileName) -Force
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles(x86)%\Steam\uninstall.exe" /S'
+iconFile: steam.png
+id: steam
+displayName: Steam
+publisher: Valve Corporation
+description: Steam is a desktop platform for installing, updating, and launching games and related software.
+detectionType: file
+fileDetectionPath: '%ProgramFiles(x86)%\Steam'
+fileDetectionName: steam.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

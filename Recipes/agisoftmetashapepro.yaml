@@ -1,0 +1,25 @@
+url: https://www.agisoft.com/downloads/installer/
+urlRedirects: false
+preDownloadScript: |
+  $response = Invoke-WebRequest -Uri $url -UseBasicParsing
+  $page = if ($response.Content -is [byte[]]) {
+    [Text.Encoding]::UTF8.GetString($response.Content)
+  } else {
+    [string]$response.Content
+  }
+  $match = [regex]::Match($page, 'https://download\.agisoft\.com/metashape-pro_(?<version>[0-9_]+)_x64\.msi')
+  if (-not $match.Success) {
+    throw 'Could not find the current Metashape Professional x64 MSI on the official download page.'
+  }
+  $url = $match.Value
+  $version = $match.Groups['version'].Value -replace '_', '.'
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: agisoftmetashapepro.png
+id: agisoftmetashapepro
+displayName: Agisoft Metashape Professional
+publisher: Agisoft LLC
+description: Agisoft Metashape Professional is photogrammetry software for processing digital images into spatial data, 3D models, maps, and measurements.
+detectionType: msi

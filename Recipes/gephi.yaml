@@ -1,0 +1,40 @@
+url: https://github.com/gephi/gephi
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'gephi-.*-windows-x64\.exe$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  $fileDetectionPath = "C:\Program Files\Gephi-$version\bin"
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+uninstallScript: '"%ProgramFiles%\Gephi-<version>\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: gephi.png
+id: gephi
+displayName: Gephi
+publisher: Gephi Consortium
+description: Gephi is an open-source application for exploring, analyzing, and visualizing networks and graphs.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      $found = $null
+      if ($props.DisplayName -like 'Gephi *' -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

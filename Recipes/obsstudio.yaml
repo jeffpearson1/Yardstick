@@ -1,0 +1,28 @@
+url: https://github.com/obsproject/obs-studio
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'OBS-Studio-[0-9.]+-Windows-x64-Installer\.exe$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName) { throw 'No stable OBS Studio Windows x64 installer was found.' }
+  $fileDetectionVersion = $version
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\obs-studio\uninstall.exe" /S'
+iconFile: obsstudio.png
+id: obsstudio
+displayName: OBS Studio
+publisher: OBS Project
+description: OBS Studio is open-source software for video recording and live streaming.
+detectionType: file
+fileDetectionPath: 'C:\Program Files\obs-studio\bin\64bit'
+fileDetectionName: obs64.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

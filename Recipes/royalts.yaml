@@ -1,0 +1,27 @@
+url: https://royalapps.com/ts/win/download
+urlRedirects: false
+preDownloadScript: |
+  # Official, version-neutral Royal TS download page. Never pin a version here.
+  $page = (Invoke-WebRequest -Uri 'https://royalapps.com/ts/win/download' -UseBasicParsing).Content
+  $found = [regex]::Matches($page, 'https://download\.royalapps\.com/royalts/royaltsinstaller_(?<ver>[0-9]+(?:\.[0-9]+){2,3})_x64\.msi')
+  if ($found.Count -eq 0) { throw 'No Royal TS Windows x64 MSI link was found on the official download page.' }
+  $url = [string]$found[0].Value
+  $publishedVersion = [string]$found[0].Groups['ver'].Value
+  # The published file name zero-pads components (7.04.50814.0) while the MSI
+  # ProductVersion does not (7.4.50814.0). Detection must match the MSI.
+  $version = (($publishedVersion -split '\.') | ForEach-Object { [string][int]$_ }) -join '.'
+  if ($version -notmatch '^[0-9]+(\.[0-9]+){2,3}$') { throw "Unexpected Royal TS version string '$version'." }
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: royalts.png
+id: royalts
+displayName: Royal TS
+publisher: Royal Apps GmbH
+description: Royal TS is a remote connection and credential management client for RDP, SSH, VNC, and web-based systems.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

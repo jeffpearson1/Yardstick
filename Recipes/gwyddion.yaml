@@ -1,0 +1,29 @@
+url: https://sourceforge.net/projects/gwyddion/best_release.json
+urlRedirects: false
+preDownloadScript: |
+  # Official SourceForge best-release manifest for the Gwyddion project. Never pin a version here.
+  $release = Invoke-RestMethod -Uri $url
+  $windows = $release.platform_releases.windows
+  if (-not $windows) { throw 'The Gwyddion SourceForge manifest reported no Windows release.' }
+  if ($windows.filename -notmatch '^/gwyddion/(?<ver>[0-9]+(?:\.[0-9]+)+)/(?<file>Gwyddion-[^/]+\.win64\.exe)$') {
+      throw "Unexpected Gwyddion Windows release path '$($windows.filename)'."
+  }
+  $version = $Matches['ver']
+  $fileName = $Matches['file']
+  # Build the stable HTTPS project URL; the manifest's own url is a short-lived HTTP mirror link.
+  $url = 'https://sourceforge.net/projects/gwyddion/files' + $windows.filename + '/download'
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\Gwyddion\uninstall.exe" /S'
+iconFile: gwyddion.png
+id: gwyddion
+displayName: Gwyddion
+publisher: Gwyddion Project
+description: Gwyddion analyzes scanning probe microscopy and other surface-topography data.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Gwyddion\bin'
+fileDetectionName: gwyddion.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

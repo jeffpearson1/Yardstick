@@ -1,0 +1,27 @@
+url: https://github.com/bambulab/BambuStudio
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = 'Bambu_Studio_win-v.*\.exe$'
+  $versionRegex = '[0-9]{2}(\.[0-9]{2}){3}'
+  $Script:downloader = [GithubDownloader]::new($url, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  if ([string]::IsNullOrWhiteSpace($downloader.URL)) {
+    throw 'Could not find the current stable Bambu Studio Windows installer in the official GitHub release.'
+  }
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  $registryDetectionValue = $version
+installScript: <filename> /S
+uninstallScript: '%ProgramFiles%\Bambu Studio\uninstall.exe /S'
+iconFile: bambustudio.png
+id: bambustudio
+displayName: Bambu Studio
+publisher: Shanghai Lunkuo Technology Co., Ltd
+description: Bambu Studio is Bambu Lab's desktop slicing software for preparing and managing 3D-printing projects.
+detectionType: registry
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Uninstall\Bambu Studio'
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual

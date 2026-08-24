@@ -1,0 +1,61 @@
+url: https://github.com/greenshot/greenshot
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'Greenshot-PORTABLE-.*-RELEASE\.zip$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+powerShellInstallScript: |
+  $target = Join-Path $env:ProgramFiles 'Greenshot'
+  $startMenuShortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Greenshot.lnk'
+  $startupShortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup\Greenshot.lnk'
+
+  Get-Process -Name Greenshot -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+  # Remove an existing installer-based deployment before switching to the managed ZIP.
+  $legacyUninstaller = Join-Path $target 'unins000.exe'
+  if (Test-Path -LiteralPath $legacyUninstaller) {
+    $process = Start-Process -FilePath $legacyUninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw "The existing Greenshot uninstaller exited with code $($process.ExitCode)." }
+  }
+
+  Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $target -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $target -Force
+
+  # The ZIP's marker stores settings beside the executable. Remove it so users
+  # get independent, writable configuration under AppData instead of Program Files.
+  Remove-Item -LiteralPath (Join-Path $target 'greenshot.ini') -Force -ErrorAction SilentlyContinue
+
+  $shell = New-Object -ComObject WScript.Shell
+  foreach ($shortcutPath in @($startMenuShortcut, $startupShortcut)) {
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = Join-Path $target 'Greenshot.exe'
+    $shortcut.WorkingDirectory = $target
+    $shortcut.IconLocation = "$(Join-Path $target 'Greenshot.exe'),0"
+    $shortcut.Description = 'Greenshot screenshot tool'
+    $shortcut.Save()
+  }
+powerShellUninstallScript: |
+  Get-Process -Name Greenshot -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $env:ProgramFiles 'Greenshot') -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Greenshot.lnk') -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup\Greenshot.lnk') -Force -ErrorAction SilentlyContinue
+iconFile: greenshot.png
+id: greenshot
+displayName: Greenshot
+publisher: Greenshot
+description: Greenshot is an open-source screenshot tool for capturing and annotating windows, regions, and full screens.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Greenshot'
+fileDetectionName: Greenshot.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -9,7 +9,7 @@
 /Support/*
 
 # Keep any empty directories
-!/Apps/.gitkeep
+!/Published/.gitkeep
 !/BuildSpace/.gitkeep
 !/Icons/.gitkeep
 !/Scripts/.gitkeep
@@ -28,6 +28,7 @@
 /Recipes/Disabled/*
 /Modules/YardstickSupportDev.psm1
 /Recipes/Development/*
+/testResults.xml
 
 # Exclude miscellaneous editor files
 /.vscode

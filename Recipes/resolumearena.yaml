@@ -1,0 +1,29 @@
+url: https://www.resolume.com/download/win
+urlRedirects: false
+preDownloadScript: |
+  # Official Resolume Windows download page. Never pin a version here.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  $installer = [regex]::Match($html, 'file=(?<file>Resolume_Arena_(?<ver>\d+_\d+_\d+)_rev_(?<rev>\d+)_Installer\.exe)')
+  if (-not $installer.Success) { throw 'No Resolume Arena Windows installer was found on the official download page.' }
+  $version = ($installer.Groups['ver'].Value -replace '_', '.') + '.' + $installer.Groups['rev'].Value
+  $fileName = $installer.Groups['file'].Value
+  $url = "https://dd5sgwxv3xok.cloudfront.net/$fileName"
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+uninstallScript: '"%ProgramFiles%\Resolume Arena\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: resolumearena.png
+id: resolumearena
+displayName: Resolume Arena
+publisher: Resolume B.V.
+description: Resolume Arena is live visual and projection-mapping software for performances and installations.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Resolume Arena'
+fileDetectionName: Arena.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

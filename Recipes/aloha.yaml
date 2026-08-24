@@ -1,0 +1,30 @@
+url: https://www.epa.gov/cameo/aloha-software
+urlRedirects: false
+preDownloadScript: |
+  # Official EPA CAMEO page. ALOHA has no version-neutral URL or feed, so the page is the only source.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  $installer = [regex]::Match($html, 'href="(?<path>/sites/[^"]+/aloha\d+installer\.exe)"[^>]*>.*?</a>\s*\(Version\s+(?<ver>\d+(?:\.\d+)+)', 'IgnoreCase,Singleline')
+  if (-not $installer.Success) { throw 'No ALOHA Windows installer and version were found on the official EPA page.' }
+  $version = $installer.Groups['ver'].Value
+  $url = 'https://www.epa.gov' + $installer.Groups['path'].Value
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $registryDetectionValue = $version
+# ALOHA ships an Inno Setup installer, not NSIS, so /S is ignored and the wizard appears.
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+uninstallScript: '"%ProgramFiles(x86)%\ALOHA\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: aloha.png
+id: aloha
+displayName: ALOHA
+publisher: U.S. Environmental Protection Agency
+description: ALOHA models airborne chemical hazards for emergency planning and response.
+detectionType: registry
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\ALOHA_is1'
+registryDetectionValueName: DisplayVersion
+registryDetectionValue:
+registryDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

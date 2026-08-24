@@ -1,0 +1,34 @@
+url: https://github.com/psychopy/psychopy
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'StandalonePsychoPy-[0-9.]+-win64-3\.11\.exe$', '[0-9]{4}\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName) { throw 'No stable PsychoPy Windows x64 Python 3.11 standalone installer was found.' }
+powerShellInstallScript: |
+  # NSIS can return 0xC0000005 after successfully laying down PsychoPy when its
+  # detached child is not included in the wait. Start-Process -Wait follows the
+  # complete process tree; accept that one known code only when the app exists.
+  $process = Start-Process -FilePath '.\<filename>' -ArgumentList '/S' -Wait -PassThru
+  if ($process.ExitCode -eq -1073741819 -and (Test-Path -LiteralPath 'C:\Program Files\PsychoPy\Scripts\psychopy.exe')) {
+    exit 0
+  }
+  exit $process.ExitCode
+uninstallScript: '"%ProgramFiles%\PsychoPy\uninst.exe" /S'
+iconFile: psychopy.png
+id: psychopy
+displayName: PsychoPy
+publisher: Open Science Tools Ltd.
+description: PsychoPy is open-source software for designing and running behavioral experiments.
+detectionType: file
+fileDetectionPath: 'C:\Program Files\PsychoPy\Scripts'
+fileDetectionName: psychopy.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+maximumInstallationTimeInMinutes: 60
+minOSVersion: W10_20H2

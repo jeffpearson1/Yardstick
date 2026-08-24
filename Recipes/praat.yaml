@@ -1,0 +1,30 @@
+url: https://github.com/praat/praat.github.io
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'praat[0-9]+_win-x64v3\.zip$', '[0-9]+\.[0-9]+(?:\.[0-9]+)?')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName) { throw 'No stable Praat Windows x64v3 ZIP was found.' }
+  $fileDetectionPath = "C:\Program Files\Praat\$version"
+powerShellInstallScript: |
+  $target = 'C:\Program Files\Praat\<version>'
+  New-Item -ItemType Directory -Path $target -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $target -Force
+powerShellUninstallScript: |
+  Remove-Item -LiteralPath 'C:\Program Files\Praat\<version>' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: praat.png
+id: praat
+displayName: Praat
+publisher: Paul Boersma and David Weenink
+description: Praat is an application for phonetic analysis and manipulation of speech recordings.
+detectionType: file
+fileDetectionPath:
+fileDetectionName: Praat.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
