@@ -11,7 +11,7 @@ preDownloadScript: |
   if ($feed -notmatch [regex]::Escape("url: $asset")) { throw "The official manifest does not list the Windows x64 asset '$asset'." }
   $url = "https://updates.signal.org/desktop/$asset"
   $fileName = $asset
-  $fileDetectionVersion = $version
+  $fileDetectionVersion = Format-FileDetectionVersion $version
 installScript: <filename> /S
 uninstallScript: '"%LocalAppData%\Programs\signal-desktop\Uninstall Signal.exe" /S'
 iconFile: signaldesktop.png

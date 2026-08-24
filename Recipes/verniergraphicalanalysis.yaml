@@ -9,19 +9,18 @@ preDownloadScript: |
   $filename = Get-ChildItem -Path "$TEMP\VGA_Extracted" -Filter "*.msi" | Select-Object -First 1 | Select-Object -ExpandProperty Name
   # Get the version from the extracted file
   $version = ([string](Get-MsiProperty -Path "$TEMP\VGA_Extracted\$filename" -Property ProductVersion)).Trim()
-  $fileDetectionVerssion = $version
+  $fileDetectionVersion = $version
 downloadScript: |
   # Move the extracted files to the staging area
   Move-Item -Path "$TEMP\VGA_Extracted\*" -Destination "$BUILDSPACE\$id\$version" -Force
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: |
-  "C:\Program Files (x86)\Vernier Graphical Analysis\Uninstall Vernier Graphical Analysis.exe" /S
+  "C:\Program Files (x86)\Vernier Graphical Analysis\Uninstall Vernier Graphical Analysis.exe" /allusers /S
 iconFile: verniergraphicalanalysis.png
 id: verniergraphicalanalysis
 displayName: DEV Vernier Graphical Analysis
 publisher: Vernier
-description: Vernier Graphical Analysis software for data collection and analysis.
-softwareName: "Vernier Graphical Analysis*"
+description: Vernier Graphical Analysis is a cross-platform educational app used by science students to collect, graph, and analyze real-time data from wireless and USB sensors. It supports interactive data sharing, curve fitting, and statistical analysis for physics, chemistry, and biology
 detectionType: file
 fileDetectionPath: 'C:\Program Files (x86)\Vernier Graphical Analysis'
 fileDetectionName: 'Vernier Graphical Analysis.exe'

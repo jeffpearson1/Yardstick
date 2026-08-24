@@ -1,0 +1,27 @@
+url: https://screenpal.com/download
+urlRedirects: false
+preDownloadScript: |
+  $Headers = @{ Referer = 'https://screenpal.com/download' }
+  $DownloadPath = [regex]::Match((Invoke-WebRequest $URL -Headers $Headers -UseBasicParsing).Content, 'href="(/getappdownload\?platform=win[^"]*)"').Groups[1].Value
+  $Response = Invoke-WebRequest ("https://screenpal.com$DownloadPath") -Headers $Headers -UseBasicParsing
+  $url = [string]$Response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+  $url = ($url -split '\?')[0]
+  $filename = [regex]::Match($url, 'InstallScreenPal-[0-9]+(?:\.[0-9]+){1,3}\.exe').Value
+  $version = [regex]::Match($filename, '[0-9]+(?:\.[0-9]+){1,3}').Value
+  $registryDetectionKey = "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\ScreenPal v3"
+  $registryDetectionValue = "v$version"
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\ScreenPal\Uninstall.exe" /AllUsers /S'
+iconFile: screenpal.png
+id: screenpal
+displayName: ScreenPal
+publisher: ScreenPal
+description: User-friendly screen recording and video editing application designed for educators, businesses, and individuals to create and share video content easily.
+detectionType: registry
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: equal
+registryDetectionMethod: string
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2

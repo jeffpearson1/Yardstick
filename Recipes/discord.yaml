@@ -1,19 +1,17 @@
 url: https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64
 urlRedirects: true
+fileName: DiscordSetup.exe
 preDownloadScript: |
-  # Official Discord stable distribution endpoint. Never pin a version here.
-  # Yardstick resolves the 302 first, so $url carries the current build number.
-  if ($url -notmatch '/stable/win/x64/(?<ver>[0-9]+(?:\.[0-9]+)+)/DiscordSetup\.exe$') {
-      throw "The official Discord installer endpoint did not resolve to a versioned x64 build: '$url'."
+  # urlRedirects: true means $url has already been resolved to the final
+  # CDN location by the time this script runs (e.g.
+  # https://stable.dl2.discordapp.net/distro/app/stable/win/x64/1.0.9251/DiscordSetup.exe),
+  # confirmed live via a HEAD/302 check. The version is embedded in that path.
+  if ($url -notmatch '/win/x64/(?<ver>[0-9.]+)/DiscordSetup\.exe$') {
+    throw "Discord: could not parse version from redirected download URL '$url'."
   }
-  $version = $Matches['ver']
-  $fileName = 'DiscordSetup.exe'
-
-  # Discord is a Squirrel app: the launcher lives in a per-version folder
-  # (%LocalAppData%\Discord\app-<version>\Discord.exe) and only the Update.exe
-  # stub sits at the root. fileDetectionPath does not take <version>
-  # substitution, so build the versioned path here instead.
+  $version = $matches['ver']
   $fileDetectionPath = "%LocalAppData%\Discord\app-$version"
+  $fileDetectionVersion = Format-FileDetectionVersion $version
 installScript: <filename> -s
 uninstallScript: '"%LocalAppData%\Discord\Update.exe" --uninstall -s'
 iconFile: discord.png
@@ -22,12 +20,10 @@ displayName: Discord
 publisher: Discord Inc.
 description: Discord is a desktop communication client for text, voice, video, and community collaboration.
 detectionType: file
-fileDetectionPath: '%LocalAppData%\Discord'  # replaced at build time with the app-<version> folder
 fileDetectionName: Discord.exe
 fileDetectionMethod: version
-fileDetectionVersion:
 fileDetectionOperator: greaterThanOrEqual
 architecture: x64
 installExperience: user
 restartBehavior: suppress
-minOSVersion: W10_20H2
+minOSVersion: W11_24H2

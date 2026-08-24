@@ -224,6 +224,76 @@ Import-Module TUN.CredentialManager -Scope Local -ErrorAction SilentlyContinue
 
 
 
+function Clear-RecipeVariableConstraint {
+    <#
+    .SYNOPSIS
+    Removes type constraints left behind in script scope by a previous recipe.
+
+    .DESCRIPTION
+    Recipe scripts run via Invoke-Command -NoNewScope, so they share one variable
+    scope for the entire run. A recipe that writes a left-side cast such as
+    [xml]$manifest = ... attaches a permanent type constraint to that variable.
+    The constraint outlives the recipe, and every later recipe that assigns a
+    non-XML value to $manifest throws for the rest of the process -- which looks
+    like a batch of unrelated recipes failing in a row, then succeeding when run
+    individually in a fresh process.
+
+    Removing the variable clears the constraint along with the value. Only
+    type-constrained variables that recipes themselves introduced are removed,
+    guarded two ways:
+
+    1. The first call snapshots every variable name that already exists and
+       removes nothing. Later calls only consider names absent from that snapshot.
+    2. PowerShell's own preference variables ($ErrorActionPreference,
+       $ProgressPreference, $PSDefaultParameterValues, ...) are type-constrained
+       by design and are never removed. The snapshot alone is not enough here:
+       they are materialised into script scope lazily, so they can be missing
+       from the snapshot and present later, which would delete them and change
+       the runner's behaviour mid-run.
+
+    Accumulators such as $Script:FailedApplications live in the YardstickSupport
+    module's own scope and are not visible here, so they are unaffected.
+    #>
+    $protected = @(
+        # Runner-owned
+        'Applications', 'Prefs', 'Temp', 'BuildSpace', 'Published',
+        'RecipeVariableBaseline',
+        # PowerShell automatic variables that carry a type constraint
+        'OutputEncoding', 'PSDefaultParameterValues', 'ErrorView',
+        'FormatEnumerationLimit', 'MaximumHistoryCount', 'PSEmailServer',
+        'PSSessionOption', 'PSSessionApplicationName', 'PSSessionConfigurationName',
+        'PSModuleAutoLoadingPreference'
+    )
+
+    # First call establishes the baseline: nothing here came from a recipe.
+    if (-not $Script:RecipeVariableBaseline) {
+        $Script:RecipeVariableBaseline = [System.Collections.Generic.HashSet[string]]::new(
+            [string[]]@(Get-Variable -Scope Script | Select-Object -ExpandProperty Name),
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
+        return
+    }
+
+    foreach ($variable in Get-Variable -Scope Script) {
+        if ($variable.Name -in $protected) { continue }
+        # Covers $ErrorActionPreference, $ProgressPreference, $WarningPreference, etc.
+        if ($variable.Name -like '*Preference') { continue }
+        if ($Script:RecipeVariableBaseline.Contains($variable.Name)) { continue }
+        if (-not $variable.Attributes.Count) { continue }
+
+        # ArgumentTypeConverterAttribute is internal to PowerShell, so it cannot be
+        # referenced as a type literal here -- match on the type name instead.
+        $isConstrained = $variable.Attributes | Where-Object {
+            $_.GetType().Name -eq 'ArgumentTypeConverterAttribute'
+        }
+        if (-not $isConstrained) { continue }
+
+        Write-Log "Clearing leaked type constraint on `$$($variable.Name) from a previous recipe."
+        Remove-Variable -Name $variable.Name -Scope Script -Force -ErrorAction SilentlyContinue
+    }
+}
+
+
 function Set-ScriptVariables {
     <#
     .SYNOPSIS
@@ -775,6 +845,11 @@ foreach ($AppId_Processing in $Applications) {
         # Clear stale $matches from prior recipe iterations to prevent cross-contamination
         $null = "reset" -match "reset"
 
+        # Recipe scripts share one scope for the whole run, so a left-side cast in an
+        # earlier recipe leaves a type constraint that breaks every later recipe using
+        # that variable name. Drop any such constraint before this recipe runs.
+        Clear-RecipeVariableConstraint
+
         # Run the pre-download script
         if ($Script:PreDownloadScript) {
             Write-Log "Running pre-download script..."
@@ -792,9 +867,17 @@ foreach ($AppId_Processing in $Applications) {
 
         # Validate the extracted version before proceeding
         $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
-        $existingVersionForCheck = if ($ExistingVersions -and $ExistingVersions.Count -gt 0) { $ExistingVersions.displayVersion[0] } else { $null }
 
-        $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $AppId_Processing -ExistingVersion $existingVersionForCheck
+        # Get-SameAppAllVersions returns newest first, but do not reach for
+        # $ExistingVersions.displayVersion[0]: PowerShell unrolls a single-element
+        # property projection to a scalar, so with exactly one existing app that
+        # indexes into the version *string* and yields its first character. A blank
+        # displayVersion also has to be skipped -- a renamed or manually created app
+        # can have none, and passing that to Compare-AppVersions throws and fails the
+        # whole recipe.
+        $NewestExistingVersion = Get-NewestComparableVersion -ExistingVersions $ExistingVersions
+
+        $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $AppId_Processing -ExistingVersion $NewestExistingVersion
         foreach ($w in $versionValidation.Warnings) {
             Write-Log "WARNING: [Version Check $AppId_Processing] $w"
         }
@@ -818,8 +901,12 @@ foreach ($AppId_Processing in $Applications) {
             Write-Log "No existing versions found for $($Script:DisplayName). Continuing with update."
             $VersionCompareResult = 0
         }
+        elseif (-not $NewestExistingVersion) {
+            Write-Log "No existing version of $($Script:DisplayName) has a usable version number to compare against. Continuing with update."
+            $VersionCompareResult = 0
+        }
         else {
-            $VersionCompareResult = Compare-AppVersions $Script:Version $($ExistingVersions.displayVersion[0])
+            $VersionCompareResult = Compare-AppVersions $Script:Version $NewestExistingVersion
         }
         
         # Check various conditions to determine if we should proceed
@@ -828,13 +915,13 @@ foreach ($AppId_Processing in $Applications) {
         } elseif (Test-VersionExcluded -Version $Script:Version -VersionLock $Script:VersionLock) {
             Write-Log "Version is locked to $($Script:VersionLock). Skipping update."
             continue
-        } elseif ($ExistingVersions.displayVersion -contains $Script:Version) {
+        } elseif (@($ExistingVersions.displayVersion) -contains $Script:Version) {
             Write-Log "$($Script:Id) $($Script:DisplayName) $($Script:Version) is already in the repo. Skipping update."
             continue
         } elseif ($VersionCompareResult -eq 1) {
             Write-Log "$($Script:DisplayName) $($Script:Version) is a newer version. Continuing with update."
         } elseif ($VersionCompareResult -eq -1) {
-            Write-Log "$($Script:DisplayName) $($Script:Version) is older than the currently newest available version $($ExistingVersions.displayVersion[0]). Skipping update."
+            Write-Log "$($Script:DisplayName) $($Script:Version) is older than the currently newest available version $NewestExistingVersion. Skipping update."
             continue
         }
 
@@ -1066,11 +1153,27 @@ foreach ($AppId_Processing in $Applications) {
         #    detect a stale endpoint. The anchor is a permanent supersedence
         #    target: its detection rule matches a very wide version range, so
         #    superseding it is what actually pulls ancient installs forward.
-        $Anchor = $null
+        #
+        #    Recognising an EXISTING anchor is unconditional, and deliberately so.
+        #    Get-SameAppAllVersions returns the anchor by name whether or not this
+        #    recipe is eligible to pin one, so gating the lookup on eligibility let
+        #    the anchor fall through into $OtherApps as an ordinary old version.
+        #    It is always the lowest version, so it sorted to the end of $ToKeep and
+        #    got renamed "<DisplayName> (N-2)" under the default retention of 3 -
+        #    and worse, it could then be pruned, or superseded with 'Replace'
+        #    against its intentionally wide detection rule. That hit every recipe
+        #    whose detection is not version-based (fileDetectionMethod: exists,
+        #    detectionType: script, ...) and every recipe run after
+        #    useDetectAnchor was turned off. Only the act of PINNING a new anchor
+        #    is gated below; an anchor that already exists is always protected.
+        $anchorName = Get-DetectAnchorName -DisplayName $Script:DisplayName
+        $Anchor = $OtherApps | Where-Object DisplayName -eq $anchorName | Select-Object -First 1
         $anchorStatus = $null
-        if ($Script:UseDetectAnchor -and (Test-IsVersionDetection -DetectionType $Script:DetectionType -FileDetectionMethod $Script:FileDetectionMethod -RegistryDetectionMethod $Script:RegistryDetectionMethod)) {
-            $Anchor = Get-DetectAnchor -DisplayName $Script:DisplayName
-            if (-not $Anchor -and $OtherApps.Count -gt 0) {
+        if ($Anchor) {
+            $anchorStatus = "existing ($($Anchor.displayVersion))"
+        }
+        elseif ($Script:UseDetectAnchor -and (Test-IsVersionDetection -DetectionType $Script:DetectionType -FileDetectionMethod $Script:FileDetectionMethod -RegistryDetectionMethod $Script:RegistryDetectionMethod)) {
+            if ($OtherApps.Count -gt 0) {
                 # First run under the new model - pin the oldest surviving version.
                 $AnchorCandidate = $OtherApps | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}} | Select-Object -First 1
                 Set-DetectAnchor -App $AnchorCandidate -DisplayName $Script:DisplayName
@@ -1080,8 +1183,6 @@ foreach ($AppId_Processing in $Applications) {
                 $Anchor = Get-DetectAnchor -DisplayName $Script:DisplayName
                 if (-not $Anchor) { $Anchor = $AnchorCandidate }
                 $anchorStatus = "pinned ($($Anchor.displayVersion))"
-            } elseif ($Anchor) {
-                $anchorStatus = "existing ($($Anchor.displayVersion))"
             } else {
                 $anchorStatus = "n/a (no prior versions)"
             }

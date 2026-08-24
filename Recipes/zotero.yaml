@@ -5,8 +5,8 @@ preDownloadScript: |
   $filename = ($url -split "\/")[-1]
   $version = (($filename -split "-")[1] -split "_")[0]
   $fileDetectionVersion = [VersionPro]::new($version).ToString(4)
-installScript: <filename> -ms
-uninstallScript: '"%ProgramFiles%\Zotero\uninstall\helper.exe" -ms'
+installScript: <filename> /S
+uninstallScript: '"%ProgramFiles%\Zotero\uninstall\helper.exe" /S'
 iconFile: zotero.png
 id: zotero
 displayName: Zotero
