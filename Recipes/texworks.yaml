@@ -1,0 +1,28 @@
+url: https://github.com/TeXworks/texworks
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'TeXworks-win10-setup-[0-9.]+-[0-9]+-git_[a-f0-9]+\.exe$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName) { throw 'No stable TeXworks Windows 10 setup executable was found.' }
+  $fileDetectionVersion = $version
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS
+uninstallScript: '"%ProgramFiles(x86)%\TeXworks\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: texworks.png
+id: texworks
+displayName: TeXworks
+publisher: TeX Users Group
+description: TeXworks is an open-source environment for editing and typesetting TeX documents.
+detectionType: file
+fileDetectionPath: 'C:\Program Files (x86)\TeXworks'
+fileDetectionName: TeXworks.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

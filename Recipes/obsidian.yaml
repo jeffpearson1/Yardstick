@@ -1,0 +1,36 @@
+url: https://api.github.com/repos/obsidianmd/obsidian-releases/releases
+urlRedirects: false
+preDownloadScript: |
+  $releases = Invoke-RestMethod -Uri $url
+  foreach ($release in $releases) {
+    if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v(?<releaseVersion>[0-9]+(?:\.[0-9]+)+)$') { continue }
+    $candidateVersion = $Matches.releaseVersion
+    $asset = $release.assets |
+      Where-Object { $_.name -eq "Obsidian-$candidateVersion.exe" } |
+      Select-Object -First 1
+    if ($asset) {
+      $version = $candidateVersion
+      $url = $asset.browser_download_url
+      $fileName = $asset.name
+      break
+    }
+  }
+  if (-not $fileName) { throw 'No complete stable Obsidian Windows release was found.' }
+  $fileDetectionVersion = $version
+installScript: <filename> /S
+uninstallScript: '"%LocalAppData%\Programs\Obsidian\Uninstall Obsidian.exe" /S'
+iconFile: obsidian.png
+id: obsidian
+displayName: Obsidian
+publisher: Dynalist Inc.
+description: Obsidian is a Markdown-based knowledge-management and note-taking application.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\Programs\Obsidian'
+fileDetectionName: Obsidian.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

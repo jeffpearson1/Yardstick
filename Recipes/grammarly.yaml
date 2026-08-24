@@ -1,0 +1,35 @@
+url: https://download-windows.grammarly.com/GrammarlyInstaller.exe
+urlRedirects: false
+preDownloadScript: |
+  $fileName = 'GrammarlyInstaller.exe'
+  $stagedInstaller = Join-Path $Temp $fileName
+  Start-BitsTransfer -Source $url -Destination $stagedInstaller
+  $version = ([string](Get-Item -LiteralPath $stagedInstaller).VersionInfo.ProductVersion).Trim()
+  if ($version -notmatch '^[0-9]+(?:\.[0-9]+){2,3}$') { throw "Unexpected Grammarly installer version '$version'." }
+downloadScript: |
+  Copy-Item -LiteralPath (Join-Path $Temp $fileName) -Destination (Join-Path (Get-Location) $fileName) -Force
+fileName: GrammarlyInstaller.exe
+installScript: <filename> /S
+uninstallScript: <filename> /S /uninstall
+iconFile: grammarly.png
+id: grammarly
+displayName: Grammarly for Windows
+publisher: Grammarly, Inc.
+description: Grammarly for Windows provides writing suggestions across supported desktop applications and websites.
+fileType: EXE
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $key = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Grammarly Desktop Integrations'
+  $props = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+  $found = $null
+  if ([version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

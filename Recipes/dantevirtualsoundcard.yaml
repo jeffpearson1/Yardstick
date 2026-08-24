@@ -1,0 +1,62 @@
+url: https://www.getdante.com/resources/software-downloads/
+urlRedirects: false
+preDownloadScript: |
+  # Official Audinate software-downloads page. Never pin a version here.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  # Scope the search to the Dante Virtual Soundcard section so other products are not matched.
+  $section = [regex]::Match($html, '(?s)id="dante-virtual-soundcard".*?(?=id="dante-|\z)').Value
+  if (-not $section) { throw 'The Dante Virtual Soundcard section was not found on the official downloads page.' }
+  $installer = [regex]::Match($section, 'https://[^"'']+/DVS-(?<ver>[0-9]+(?:\.[0-9]+)+)_windows\.exe')
+  if (-not $installer.Success) { throw 'No Dante Virtual Soundcard Windows installer was found on the official downloads page.' }
+  $version = $installer.Groups['ver'].Value
+  $url = $installer.Value
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $registryDetectionValue = $version
+installScript: <filename> /quiet /norestart
+powerShellUninstallScript: |
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -ne 'Dante Virtual Soundcard' -or $props.QuietUninstallString -notmatch 'Package Cache') { continue }
+      $command = [Environment]::ExpandEnvironmentVariables([string]$props.QuietUninstallString)
+      if ($command -match '^"(?<exe>[^"]+)"\s*(?<args>.*)$') {
+        $process = Start-Process -FilePath $Matches.exe -ArgumentList $Matches.args, '/norestart' -Wait -PassThru
+        exit $process.ExitCode
+      }
+    }
+  }
+  Write-Output 'Dante Virtual Soundcard is not installed.'
+  exit 0
+iconFile: dantevirtualsoundcard.png
+id: dantevirtualsoundcard
+displayName: Dante Virtual Soundcard
+publisher: Audinate Pty Ltd
+description: Dante Virtual Soundcard connects a Windows computer to a Dante audio network for multichannel recording and playback.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      $found = $null
+      if ($props.DisplayName -eq 'Dante Virtual Soundcard' -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

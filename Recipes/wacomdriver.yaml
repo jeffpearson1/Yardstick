@@ -1,0 +1,30 @@
+url: https://www.wacom.com/en-us/support/product-support/drivers
+urlRedirects: false
+preDownloadScript: |
+  $Content = Invoke-WebRequest -Uri $URL -UseBasicParsing
+  $DriverMatch = [regex]::Match($Content.Content, 'https://cdn\.wacom\.com/u/productsupport/drivers/win/professional/WacomTablet_([0-9\.-]+)\.exe')
+  $url = $DriverMatch.Value
+  $filename = ($url -split "/")[-1]
+  $version = $DriverMatch.Groups[1].Value
+  $fileDetectionVersion = $version
+powerShellInstallScript: |
+  $process = Start-Process -FilePath '.\<filename>' -ArgumentList '/s' -Wait -PassThru
+  # Wacom documents code 2 as success with a reboot required. This recipe suppresses
+  # restarts, so report a successful install and let device management schedule it.
+  if ($process.ExitCode -eq 2 -and (Test-Path 'C:\Program Files\Tablet\Wacom\Wacom_Tablet.exe')) { exit 0 }
+  exit $process.ExitCode
+uninstallScript: <filename> /u /s
+iconFile: wacom.png
+id: wacomdriver
+displayName: DEV Wacom Tablet Drivers
+publisher: Wacom
+description: Driver for Wacom Tablets
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Tablet\Wacom'
+fileDetectionName: Wacom_Tablet.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2

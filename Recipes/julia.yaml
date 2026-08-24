@@ -1,0 +1,34 @@
+url: https://julialang-s3.julialang.org/bin/versions.json
+urlRedirects: false
+preDownloadScript: |
+  $manifest = Invoke-RestMethod -Uri $url
+  $release = $manifest.PSObject.Properties |
+    Where-Object { $_.Value.stable -eq $true } |
+    Sort-Object { [version]$_.Name } -Descending |
+    Select-Object -First 1
+  $version = [string]$release.Name
+  $asset = @($release.Value.files) |
+    Where-Object { $_.os -eq 'winnt' -and $_.arch -eq 'x86_64' -and $_.kind -eq 'installer' } |
+    Select-Object -First 1
+  if (-not $asset) { throw "No stable Julia x64 Windows installer was found for $version." }
+  $url = [string]$asset.url
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  $fileDetectionPath = "C:\Program Files (x86)\Julia-$version\bin"
+  $fileDetectionVersion = $version
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS
+uninstallScript: '"C:\Program Files (x86)\Julia-<version>\uninstall\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: julia.png
+id: julia
+displayName: Julia
+publisher: JuliaLang
+description: Julia is a high-performance programming language for technical and scientific computing.
+detectionType: file
+fileDetectionPath:
+fileDetectionName: julia.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

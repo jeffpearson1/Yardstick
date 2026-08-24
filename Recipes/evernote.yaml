@@ -1,0 +1,50 @@
+url: https://win.desktop.evernote.com/builds/Evernote-latest.exe
+urlRedirects: false
+preDownloadScript: |
+  $releaseNotes = Invoke-WebRequest -Uri 'https://evernote.com/release-notes' -UseBasicParsing
+  if ([string]$releaseNotes.Content -notmatch 'Version\s+([0-9]+(?:\.[0-9]+){2})\s*-\s*Latest') {
+    throw 'Unable to parse the current Evernote version from the official release notes.'
+  }
+  $version = $matches[1]
+fileName: Evernote-latest.exe
+installScript: '"<filename>" /AllUsers /S'
+powerShellUninstallScript: |
+  # This recipe runs in system context. The all-users Evernote uninstaller is a
+  # machine operation and silently no-ops when launched from an unelevated token.
+  $installRoot = Join-Path ${env:ProgramFiles(x86)} 'Evernote'
+  $uninstaller = Join-Path $installRoot 'Uninstall Evernote.exe'
+  if (-not (Test-Path -LiteralPath $uninstaller)) {
+    Write-Output 'Evernote is not installed.'
+    exit 0
+  }
+  $process = Start-Process -FilePath $uninstaller -ArgumentList '/AllUsers', '/S', "_?=$installRoot" -Wait -PassThru
+  exit $process.ExitCode
+iconFile: evernote.png
+id: evernote
+displayName: Evernote
+publisher: Bending Spoons US Inc.
+description: Evernote is a note-taking and task-management application for capturing, organizing, and finding information across devices.
+fileType: EXE
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      $found = $null
+      if ($props.DisplayName -like 'Evernote *' -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
