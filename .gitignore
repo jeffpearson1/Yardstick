@@ -27,6 +27,8 @@
 /Yardstick_backup.ps1
 /Recipes/Disabled/*
 /Modules/YardstickSupportDev.psm1
+/Recipes/Development/*
+/testResults.xml
 
 # Exclude miscellaneous editor files
 /.vscode
