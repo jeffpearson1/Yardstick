@@ -558,6 +558,25 @@ Describe "Clear-YardstickAppLink" {
         $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-3)' }) -RetryDelaySeconds 0)
         $surviving | Should -Contain 'dependencies (could not be read back)'
     }
+
+    It "detaches the parent named by targetType on a real Graph relationship" {
+        # Graph reports the link from the child's side as sourceId=<child>,
+        # targetId=<parent>, targetType='parent'. The parent id is the one that is
+        # not the app being deleted.
+        $Global:MockSupersedenceCleared = $false
+        Mock -ModuleName YardstickSupport Remove-SupersedenceReference { $Global:MockSupersedenceCleared = $true }
+        Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship {
+            if ($Global:MockSupersedenceCleared) { return @() }
+            @([PSCustomObject]@{ sourceId = 'doomed'; targetId = 'newest'; targetType = 'parent'; supersedenceType = 'update' })
+        }
+        $surviving = @(Clear-YardstickAppLink -App ([PSCustomObject]@{ id = 'doomed'; DisplayName = 'App (N-2)' }) -RetryDelaySeconds 0)
+        $surviving | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName YardstickSupport Remove-SupersedenceReference -Times 1 -Exactly -ParameterFilter {
+            $ParentId -eq 'newest' -and $TargetId -eq 'doomed'
+        }
+        Should -Invoke -ModuleName YardstickSupport Remove-IntuneWin32AppSupersedence -Times 0 -Exactly
+        Remove-Variable -Name MockSupersedenceCleared -Scope Global -ErrorAction SilentlyContinue
+    }
 }
 
 Describe "Remove-DependencyReference" {
@@ -683,6 +702,27 @@ Describe "Get-YardstickSupersedenceRelationship" {
         $reverse = Get-YardstickSupersedenceRelationship -Id 'me' -Direction Reverse
         $reverse.Count | Should -Be 1
         $reverse[0].sourceId | Should -Be 'parent'
+    }
+
+    It "reads direction off targetType, not sourceId" {
+        # What Graph actually returns: the collection is reported from the queried
+        # app's perspective, so sourceId is 'me' on BOTH links and only targetType
+        # says which way each one points. Keying off sourceId called them both
+        # forward, so a superseded app was never detached from its parent and its
+        # deletion failed with "supersedes <parent id>".
+        Mock -ModuleName YardstickSupport Invoke-YardstickGraphRequest {
+            @(
+                [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.mobileAppSupersedence'; sourceId = 'me'; targetId = 'newest'; targetType = 'parent' },
+                [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.mobileAppSupersedence'; sourceId = 'me'; targetId = 'older';  targetType = 'child' }
+            )
+        }
+        $forward = @(Get-YardstickSupersedenceRelationship -Id 'me' -Direction Forward)
+        $forward.Count | Should -Be 1
+        $forward[0].targetId | Should -Be 'older'
+
+        $reverse = @(Get-YardstickSupersedenceRelationship -Id 'me' -Direction Reverse)
+        $reverse.Count | Should -Be 1
+        $reverse[0].targetId | Should -Be 'newest'
     }
 
     It "returns an empty array when Graph fails" {
@@ -1017,6 +1057,31 @@ Describe "Move-AssignmentsAndDependencies child dependencies" {
     }
 }
 
+Describe "Get-YardstickAppAssignment" {
+    It "drops the all-null assignment the cmdlet invents for an app with none" {
+        # Get-IntuneWin32AppAssignment projects the empty OData envelope into one
+        # assignment object with every property null, because a bare PSCustomObject
+        # reports .Count 1 under PowerShell 7.
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = $null; AppName = $null; FilterID = $null; FilterType = $null
+                GroupID = $null; GroupName = $null; Intent = $null; GroupMode = $null
+                Notifications = $null; RestartSettings = $null; InstallTimeSettings = $null
+            })
+        }
+        @(Get-YardstickAppAssignment -Id 'empty-app').Count | Should -Be 0
+    }
+
+    It "passes real assignments through untouched" {
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{ Type = '#microsoft.graph.groupAssignmentTarget'; GroupID = 'g1'; Intent = 'available' })
+        }
+        $result = @(Get-YardstickAppAssignment -Id 'real-app')
+        $result.Count | Should -Be 1
+        $result[0].GroupID | Should -Be 'g1'
+    }
+}
+
 Describe "Move-AssignmentsAndDependencies assignment targets" {
     BeforeEach {
         Mock Get-IntuneWin32AppDependency -ModuleName YardstickSupport { @() }
@@ -1107,6 +1172,23 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
         $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -IntentFilter 'required' -ProtectedSourceIds $protected
+        $protected.Count | Should -Be 0
+    }
+
+    It "does not protect the source when the cmdlet invents an assignment for an app that has none" {
+        # The phantom used to fall through to the "unsupported target type" branch
+        # and protect the source forever, so apps with no assignments at all could
+        # never be pruned and piled up as (N-2)/(N-3) versions.
+        Mock Get-IntuneWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = $null; GroupID = $null; GroupMode = $null; Intent = $null
+                FilterType = $null; FilterID = $null; Notifications = $null
+            })
+        }
+        $protected = [System.Collections.Generic.HashSet[string]]::new()
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-2)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -ProtectedSourceIds $protected
         $protected.Count | Should -Be 0
     }
 

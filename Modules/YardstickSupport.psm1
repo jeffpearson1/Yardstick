@@ -133,10 +133,16 @@ function Test-Prerequisites {
     }
 
     # External tools
-    $curlPath = Join-Path $ToolsPath "curl.exe"
-    if (-not (Test-Path $curlPath)) {
-        $warnings.Add("curl.exe not found at '$curlPath'. Some download scripts may fail.")
+    if (-not (Get-Command "curl" -ErrorAction SilentlyContinue)) {
+        $curlPath = Join-Path $ToolsPath "curl.exe"
+        if (-not (Test-Path $curlPath)) {
+            $warnings.Add("curl.exe not found at '$curlPath'. Some download scripts may fail.")
+        }
     }
+    else {
+        $curlPath = (Get-Command "curl").Source
+    }
+
 
     # .NET types
     try {
@@ -1041,6 +1047,39 @@ function Wait-YardstickBackup {
 
 
 
+function Get-YardstickAppAssignment {
+    <#
+    .SYNOPSIS
+    Get-IntuneWin32AppAssignment with the phantom assignment it invents for apps
+    that have none stripped out.
+
+    .DESCRIPTION
+    Get-IntuneWin32AppAssignment guards its Graph response with
+    `$response.Count -gt 0`. Invoke-MSGraphOperation hands back the raw OData
+    envelope - `{ '@odata.context', value = [] }` - when an app has no
+    assignments, and PowerShell 7 gives a bare PSCustomObject a synthetic .Count
+    of 1, so the guard passes and the cmdlet projects the envelope itself into one
+    assignment object with every property null.
+
+    Callers cannot tell that phantom apart from a real assignment whose target
+    type Yardstick does not handle, and Move-AssignmentsAndDependencies treats the
+    latter as grounds to protect the source app from deletion. That is why apps
+    with no assignments at all became permanently un-prunable and piled up as
+    (N-2)/(N-3) versions, logging "Skipping assignment with no GroupID and
+    unsupported target type ''" on every run.
+
+    A real assignment always carries a target type, and Graph always reports an
+    intent, so an entry with neither - and no group - is the artifact.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Id
+    )
+
+    return @(Get-IntuneWin32AppAssignment -Id $Id | Where-Object { $_.Type -or $_.GroupID -or $_.Intent })
+}
+
+
 function Test-YardstickAssignmentPresent {
     <#
     .SYNOPSIS
@@ -1247,7 +1286,12 @@ function Move-AssignmentsAndDependencies {
     # read-back in Test-YardstickAssignmentPresent goes through Graph directly
     # anyway, because a false negative there decides whether a source assignment
     # is preserved or deleted.
-    $FromAssignments = Get-IntuneWin32AppAssignment -Id $From.id
+    #
+    # Get-YardstickAppAssignment also drops the all-null assignment the cmdlet
+    # invents for an app that has NO assignments - see that function. Left in, it
+    # fell through to the "unsupported target type" branch below and protected the
+    # source app from deletion forever.
+    $FromAssignments = Get-YardstickAppAssignment -Id $From.id
     $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
     # Kept as DateTime, not a formatted string: rebuilding a date by formatting
     # to "MM/dd/yyyy" and parsing it back with Get-Date makes the result depend
@@ -2059,11 +2103,12 @@ function Get-YardstickSupersedenceRelationship {
 
     .DESCRIPTION
     The beta `mobileApps/{id}/relationships` collection contains an entry for every
-    supersedence edge the app participates in. Entries where `sourceId` equals the
-    app id are forward links (this app supersedes `targetId`); entries where
-    `targetId` equals the app id are reverse links (`sourceId` supersedes this app).
-    Reverse links must be cleared from the *parent* before Intune will allow the
-    child to be deleted.
+    supersedence edge the app participates in, reported from the perspective of the
+    app being queried: `sourceId` is always the queried app and `targetId` the app
+    at the other end, in BOTH directions. `targetType` is what names the direction -
+    'child' means this app supersedes the target, 'parent' means the target
+    supersedes this app. Reverse links must be cleared from the *parent* before
+    Intune will allow the child to be deleted.
 
     .PARAMETER Id
     The Win32 app id to inspect.
@@ -2100,11 +2145,27 @@ function Get-YardstickSupersedenceRelationship {
     # synthetic .Count under Windows PowerShell 5.1 - but every caller already
     # wraps the call in @(), which normalizes 0, 1 and many correctly. Keep it
     # that way: call this as @(Get-YardstickSupersedenceRelationship ...).
+    #
+    # Direction comes off targetType, NOT sourceId. Graph reports this collection
+    # from the perspective of the app being queried, so sourceId equals $Id for
+    # forward and reverse links alike - querying a superseded child returns
+    # sourceId=<child>, targetId=<parent>, targetType='parent'. Keying off sourceId
+    # therefore classified every link as Forward and left Reverse permanently
+    # empty, so Clear-YardstickAppLink never detached a superseded app from its
+    # parent; it cleared the child's own (empty) forward set instead, the read-back
+    # still saw the link, and the prune failed with "supersedes <parent id>".
+    # That is what left stale (N-2) versions behind.
+    #
+    # Payloads built locally and not yet read back from Graph carry no targetType,
+    # so fall back to the sourceId comparison for those.
+    $isForward = {
+        param($relationship)
+        if ($relationship.targetType) { return ($relationship.targetType -eq 'child') }
+        return ((-not $relationship.sourceId) -or ($relationship.sourceId -eq $Id))
+    }
     switch ($Direction) {
-        # sourceId is only null on freshly-submitted payloads; Graph backfills it
-        # with the parent id, so treat null as "this app is the parent".
-        'Forward' { return @($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $Id) }) }
-        'Reverse' { return @($relationships | Where-Object { $_.sourceId -and ($_.sourceId -ne $Id) -and ($_.targetId -eq $Id) }) }
+        'Forward' { return @($relationships | Where-Object { & $isForward $_ }) }
+        'Reverse' { return @($relationships | Where-Object { -not (& $isForward $_) }) }
         default   { return $relationships }
     }
 }
@@ -2655,12 +2716,31 @@ function Clear-YardstickAppLink {
         }
     }
 
-    # 4/5. Supersedence, both directions.
+    # 4/5. Supersedence, both directions. Graph reports this collection from the
+    #      queried app's perspective - sourceId is $appId on forward AND reverse
+    #      links alike, and targetType names the direction - so the app at the
+    #      other end is whichever id is not $appId.
+    $isReverseLink = {
+        param($relationship)
+        if ($relationship.targetType) { return ($relationship.targetType -eq 'parent') }
+        return ($relationship.sourceId -and ($relationship.sourceId -ne $appId))
+    }
+    $otherEnd = {
+        param($relationship)
+        if ($relationship.sourceId -and ($relationship.sourceId -ne $appId)) {
+            $relationship.sourceId
+        } else {
+            $relationship.targetId
+        }
+    }
+
     $relationships = @((& $readLinks "supersedence" $supersedenceQuery).Items)
 
     $supersedingIds = @($relationships |
-        Where-Object { $_.sourceId -and ($_.sourceId -ne $appId) -and ($_.targetId -eq $appId) } |
-        Select-Object -ExpandProperty sourceId -Unique)
+        Where-Object { & $isReverseLink $_ } |
+        ForEach-Object { & $otherEnd $_ } |
+        Where-Object { $_ } |
+        Select-Object -Unique)
     foreach ($supersedingId in $supersedingIds) {
         $currentSupersedingId = $supersedingId
         Invoke-WithRetry -Label "Detach $label from superseding app $currentSupersedingId" `
@@ -2670,7 +2750,7 @@ function Clear-YardstickAppLink {
             } | Out-Null
     }
 
-    $hasForwardLinks = @($relationships | Where-Object { (-not $_.sourceId) -or ($_.sourceId -eq $appId) }).Count -gt 0
+    $hasForwardLinks = @($relationships | Where-Object { -not (& $isReverseLink $_) }).Count -gt 0
     if ($hasForwardLinks) {
         Invoke-WithRetry -Label "Strip supersedence from $label" `
             -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
@@ -2704,8 +2784,8 @@ function Clear-YardstickAppLink {
         $surviving.Add("supersedence (could not be read back)")
     }
     foreach ($relationship in $supersedenceResult.Items) {
-        if ($relationship.sourceId -and ($relationship.sourceId -ne $appId)) {
-            $surviving.Add("superseded by $($relationship.sourceId)")
+        if (& $isReverseLink $relationship) {
+            $surviving.Add("superseded by $(& $otherEnd $relationship)")
         } else {
             $surviving.Add("supersedes $($relationship.targetId)")
         }
