@@ -669,6 +669,54 @@ function Invoke-YardstickAppMaintenance {
 }
 
 
+function Invoke-YardstickSkip {
+    <#
+    .SYNOPSIS
+    Handles a recipe that will publish nothing this run.
+
+    .DESCRIPTION
+    Logs why, and under -Repair reconciles the versions already in Intune anyway.
+    Nothing to publish is not the same as nothing to do: retention, naming,
+    assignments and supersedence are independent of whether the vendor shipped a
+    new build, but that state used to be reachable only through the upload path,
+    so a version that failed to prune waited for the next release to be retried -
+    which for a slow-moving app can be never.
+
+    Declared at script scope for the same reason as Invoke-YardstickAppMaintenance:
+    it reads the caller's per-recipe state ($Repair, $AppId_Processing,
+    $CurrentDisplayName, $DependentUpdateStatus) directly.
+
+    .PARAMETER Reason
+    Sentence explaining why nothing is being published, ending in a period.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reason
+    )
+
+    if (-not $Repair) {
+        Write-Log "$Reason Skipping update."
+        return
+    }
+
+    Write-Log "$Reason Running maintenance sweep."
+    try {
+        $Sweep = Invoke-YardstickAppMaintenance
+        if ($Sweep -and $Sweep.ChangedSomething) {
+            $sweepParts = @()
+            if ($Sweep.PrunedCount -gt 0)     { $sweepParts += "pruned $($Sweep.PrunedCount)" }
+            if ($Sweep.RenamedCount -gt 0)    { $sweepParts += "renamed $($Sweep.RenamedCount)" }
+            if ($Sweep.SupersededCount -gt 0) { $sweepParts += "supersedes $($Sweep.SupersededCount)" }
+            if ($Sweep.AnchorStatus)          { $sweepParts += "anchor: $($Sweep.AnchorStatus)" }
+            Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName `
+                -Version $Sweep.CurrentApp.displayVersion -Action "Maintained" `
+                -Dependents $DependentUpdateStatus -AutoUpdateStatus ($sweepParts -join ', ')
+        }
+    } catch {
+        Write-Log "ERROR: Maintenance sweep failed for $($Script:DisplayName): $_"
+    }
+}
+
+
 function Set-ScriptVariables {
     <#
     .SYNOPSIS
@@ -707,6 +755,11 @@ function Set-ScriptVariables {
     $Script:UninstallScript = $Parameters.uninstallScript
     $Script:PowerShellInstallScript = $Parameters.powerShellInstallScript
     $Script:PowerShellUninstallScript = $Parameters.powerShellUninstallScript
+
+    # Manual-drop recipes take their payload from the software dropbox instead of
+    # a URL or download script. See Get-YardstickDropboxPayload.
+    $Script:ManualDownload = if ($null -ne $Parameters.manualDownload) { [bool]$Parameters.manualDownload } else { $false }
+    $Script:ManualDownloadFolder = if ($Parameters.manualDownloadFolder) { $Parameters.manualDownloadFolder } else { $Parameters.id }
     
     # Use parameters or fall back to preferences
     $Script:ScopeTags = if ($null -ne $Parameters.scopeTags) { $Parameters.scopeTags } else { $Preferences.defaultScopeTags }
@@ -830,6 +883,8 @@ $Script:Recipes = $Prefs.Recipes
 $Script:Icons = $Prefs.Icons
 $Script:Tools = $Prefs.Tools
 $Script:Secrets = $Prefs.Secrets
+$Script:SoftwareDropbox = $Prefs.SoftwareDropbox
+$Script:SoftwareArchive = $Prefs.SoftwareArchive
 
 # Backup of uploaded .intunewin files is optional - a blank or absent Backup key
 # turns it off. A present-but-empty YAML key comes through as "", so this checks
@@ -1225,6 +1280,28 @@ foreach ($AppId_Processing in $Applications) {
         # that variable name. Drop any such constraint before this recipe runs.
         Clear-RecipeVariableConstraint
 
+        # Manual-drop recipes package whatever an operator staged in the dropbox.
+        # This has to resolve before the pre-download script, because that script is
+        # where the recipe reads $dropboxPath to work out $version and $fileName.
+        $dropboxPath = $null
+        $dropboxFiles = @()
+        if ($Script:ManualDownload) {
+            try {
+                $DropboxPayload = Get-YardstickDropboxPayload -DropboxRoot $Script:SoftwareDropbox -Folder $Script:ManualDownloadFolder
+            } catch {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage "$_" -FailureStage "Manual Drop"
+                Write-Error "$_"
+                continue
+            }
+            if (-not $DropboxPayload) {
+                Invoke-YardstickSkip -Reason "Nothing staged in the software dropbox for $($Script:Id)."
+                continue
+            }
+            $dropboxPath = $DropboxPayload.Path
+            $dropboxFiles = $DropboxPayload.Files
+            Write-Log "Found $($dropboxFiles.Count) staged file(s) in $dropboxPath"
+        }
+
         # Run the pre-download script
         if ($Script:PreDownloadScript) {
             Write-Log "Running pre-download script..."
@@ -1299,31 +1376,7 @@ foreach ($AppId_Processing in $Applications) {
         }
 
         if ($SkipReason) {
-            # Nothing to publish, but the retention/naming/supersedence state of the
-            # versions already in Intune is independent of whether the vendor shipped
-            # anything. Under -Repair, reconcile it anyway: a version that failed to
-            # prune otherwise waits for the next release to be retried, which for a
-            # slow-moving app can be never.
-            if ($Repair) {
-                Write-Log "$SkipReason Running maintenance sweep."
-                try {
-                    $Sweep = Invoke-YardstickAppMaintenance
-                    if ($Sweep -and $Sweep.ChangedSomething) {
-                        $sweepParts = @()
-                        if ($Sweep.PrunedCount -gt 0)     { $sweepParts += "pruned $($Sweep.PrunedCount)" }
-                        if ($Sweep.RenamedCount -gt 0)    { $sweepParts += "renamed $($Sweep.RenamedCount)" }
-                        if ($Sweep.SupersededCount -gt 0) { $sweepParts += "supersedes $($Sweep.SupersededCount)" }
-                        if ($Sweep.AnchorStatus)          { $sweepParts += "anchor: $($Sweep.AnchorStatus)" }
-                        Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName `
-                            -Version $Sweep.CurrentApp.displayVersion -Action "Maintained" `
-                            -Dependents $DependentUpdateStatus -AutoUpdateStatus ($sweepParts -join ', ')
-                    }
-                } catch {
-                    Write-Log "ERROR: Maintenance sweep failed for $($Script:DisplayName): $_"
-                }
-            } else {
-                Write-Log "$SkipReason Skipping update."
-            }
+            Invoke-YardstickSkip -Reason $SkipReason
             continue
         }
 
@@ -1355,13 +1408,22 @@ foreach ($AppId_Processing in $Applications) {
         if ($Script:Url) {
             Write-Log "URL: $($Script:Url)"
         }
-        if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript))) {
+        if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript)) -and (-not ($Script:ManualDownload))) {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "URL is empty - cannot continue" -FailureStage "Download"
             Write-Error "URL is empty - cannot continue."
             continue
         }
         
-        if ($Script:DownloadScript) {
+        if ($Script:ManualDownload) {
+            Write-Log "Copying staged payload from $dropboxPath"
+            try {
+                Copy-Item -Path (Join-Path $dropboxPath '*') -Destination . -Recurse -Force
+            } catch {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error copying staged payload from $dropboxPath : $_" -FailureStage "Download"
+                Write-Error "Error copying staged payload from $dropboxPath : $_"
+                continue
+            }
+        } elseif ($Script:DownloadScript) {
             Push-Location $BuildSpace\$Script:Id\$Script:Version
             try {
                 Invoke-Command -ScriptBlock $Script:DownloadScript -NoNewScope
@@ -1507,6 +1569,19 @@ foreach ($AppId_Processing in $Applications) {
                 Write-Log "Queued backup of $BackupFileName to $Script:Backup"
             } catch {
                 Write-Log "WARNING: Could not queue backup for $($Script:Id): $_"
+            }
+        }
+
+        # The payload is published, so retire it out of the dropbox. Leaving the
+        # dropbox empty is what makes the next run skip this recipe rather than
+        # republishing the same build. A failure here must not fail the app - the
+        # operator just has to clear the folder by hand.
+        if ($Script:ManualDownload) {
+            try {
+                Complete-YardstickDropbox -DropboxPath $dropboxPath -ArchiveRoot $Script:SoftwareArchive `
+                    -Folder $Script:ManualDownloadFolder -Version $Script:Version
+            } catch {
+                Write-Log "WARNING: Could not archive the manual drop for $($Script:Id): $_"
             }
         }
 

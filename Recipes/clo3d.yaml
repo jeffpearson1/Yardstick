@@ -1,0 +1,53 @@
+# CLO's installer is behind a signed-in, licensed download (the version list at
+# /api/v1/softwares/<product>/all is public, but /api/v1/softwares/download 401s
+# without an entitled account), so this is a manual-drop recipe: an operator puts
+# the installer in <SoftwareDropbox>\clo3d and Yardstick packages whatever is there.
+manualDownload: true
+preDownloadScript: |
+  $installer = @($dropboxFiles | Where-Object Extension -eq '.exe' | Sort-Object LastWriteTime -Descending)[0]
+  if (-not $installer) { throw "No .exe staged in $dropboxPath" }
+  $fileName = $installer.Name
+  # CLO names the download with the full four-part build, e.g.
+  # CLO_Windows_NetworkOnlineAuth_x64_2026.1.188.58419.exe.
+  if ($fileName -match '(\d+\.\d+\.\d+\.\d+)') {
+    $version = $matches[1]
+  } else {
+    $version = $installer.VersionInfo.ProductVersion
+  }
+  if (-not $version) { throw "Could not determine a version for $fileName" }
+postDownloadScript: |
+  # The installed binary's version resource, not the download's build number, is
+  # what the detection rule has to match.
+  $installedVersion = (Get-Item $fileName).VersionInfo.FileVersion
+  $fileDetectionVersion = if ($installedVersion) { Format-FileDetectionVersion $installedVersion } else { Format-FileDetectionVersion $version }
+installScript: <filename> /S
+powerShellUninstallScript: |
+  $keys = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+  )
+  $entry = Get-ItemProperty -Path $keys -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'CLO*' -and $_.UninstallString } |
+    Select-Object -First 1
+  if (-not $entry) { exit 0 }
+  $uninstaller = $entry.UninstallString.Trim('"')
+  Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait
+uninstallScript: '%SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy bypass -file .\uninstall.ps1'
+version:
+fileName:
+iconFile: clo3d.png
+id: clo3d
+displayName: CLO 3D
+publisher: CLO Virtual Fashion
+description: CLO is 3D garment design software that creates true-to-life virtual garments with cutting-edge simulation technology, letting designers pattern, drape, fit and render apparel without producing a physical sample.
+fileType: exe
+detectionType: file
+fileDetectionPath: C:\Program Files\CLO Network OnlineAuth
+fileDetectionName: CLO_Network_OnlineAuth_x64.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+fileDetectionVersion:
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 120
