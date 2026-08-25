@@ -1,0 +1,158 @@
+url: https://epson.com/Support/Scanners/Perfection-Series/Epson-Perfection-V600-Photo/s/SPT_B11B198011?review-filter=Windows+11
+urlRedirects: false
+preDownloadScript: |
+  # Epson publishes no machine-readable version feed, no `latest` redirector and no
+  # directory listing (ftp.epson.com returns 403 on the folder). The US support page is
+  # the only authoritative source, and it renders the driver table server-side once an
+  # OS filter is supplied via ?review-filter= - so no JavaScript execution is required.
+  # Never pin a version or a versioned URL here.
+  # Recipe scripts run with -NoNewScope, so every local name here is deliberately
+  # prefixed to avoid clobbering Yardstick's or the lab harness's own variables.
+  $epsonPage = Invoke-WebRequest -Uri $url -UseBasicParsing
+  $epsonHtml = $epsonPage.Content
+  if ($epsonHtml -is [byte[]]) { $epsonHtml = [System.Text.Encoding]::UTF8.GetString($epsonHtml) }
+  $epsonHtml = $epsonHtml -replace '\s+', ' '
+
+  # Anchor on the exact product string so the newer "Scanner Driver and Epson Scan 2
+  # Utility" entry on the same page can never be selected by mistake.
+  $epsonPattern = 'data-dl_name="(?<file>EPSONScan_PerV600_[^"]+\.exe)"\s*data-dl_title="Scanner Driver and EPSON Scan Utility(?:&nbsp;|\s)*v(?<ver>\d+(?:\.\d+){1,3})"[^>]*?href="(?<url>https://ftp\.epson\.com/drivers/[^"]+\.exe)"'
+  $epsonHits = [regex]::Matches($epsonHtml, $epsonPattern)
+  if ($epsonHits.Count -eq 0) {
+      throw 'Could not locate the "Scanner Driver and EPSON Scan Utility" entry on the Epson Perfection V600 support page. The page layout or the OS filter parameter has changed.'
+  }
+
+  $epsonCandidates = $epsonHits | ForEach-Object {
+      [pscustomobject]@{
+          File    = $_.Groups['file'].Value
+          Version = $_.Groups['ver'].Value
+          Url     = $_.Groups['url'].Value
+      }
+  } | Sort-Object File, Version, Url -Unique
+
+  if ($epsonCandidates.Count -ne 1) {
+      throw "Expected exactly one EPSON Scan driver entry, found $($epsonCandidates.Count): $(($epsonCandidates | ForEach-Object { "$($_.File) v$($_.Version)" }) -join '; ')."
+  }
+
+  # Corroborate the download URL against the page's schema.org SoftwareApplication
+  # block, which is generated independently of the driver table.
+  $epsonLd = [regex]::Match($epsonHtml, '"@type":"SoftwareApplication","name":"Scanner Driver and EPSON Scan Utility","downloadUrl":"(?<url>[^"]+)"')
+  if (-not $epsonLd.Success) {
+      throw 'The Epson support page no longer publishes the JSON-LD SoftwareApplication entry used to corroborate the download URL.'
+  }
+  if ($epsonLd.Groups['url'].Value -ne $epsonCandidates[0].Url) {
+      throw "Epson's driver table and JSON-LD metadata disagree on the installer URL ('$($epsonCandidates[0].Url)' vs '$($epsonLd.Groups['url'].Value)')."
+  }
+
+  $version  = $epsonCandidates[0].Version
+  $fileName = $epsonCandidates[0].File
+  $url      = $epsonCandidates[0].Url
+postDownloadScript: |
+  # The download is a WinZip Self-Extractor 3.1 wrapper around Setup.exe.
+  # We extract it here instead of at runtime.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $epsonSfx = Join-Path $PWD $fileName
+  if (-not (Test-Path -LiteralPath $epsonSfx)) { throw "Downloaded installer '$fileName' was not found." }
+
+  $epsonStage = Join-Path $PWD '_sfx'
+  Remove-Item -LiteralPath $epsonStage -Recurse -Force -ErrorAction SilentlyContinue
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($epsonSfx, $epsonStage)
+
+  $epsonSetupIni = Get-ChildItem -LiteralPath $epsonStage -Recurse -Filter 'Setup.ini' -File | Select-Object -First 1
+  if (-not $epsonSetupIni) { throw 'Setup.ini was not found inside the Epson self-extracting installer.' }
+  Get-ChildItem -LiteralPath $epsonSetupIni.Directory.FullName -Force | Move-Item -Destination $PWD -Force
+  Remove-Item -LiteralPath $epsonStage -Recurse -Force
+
+  # Verify that the downloaded version matches what was advertised.
+  $epsonCab = Join-Path $PWD 'EsCore.cab'
+  if (-not (Test-Path -LiteralPath $epsonCab)) { throw 'EsCore.cab was not found in the extracted Epson payload.' }
+  $epsonProbe = Join-Path $PWD '_versionprobe'
+  New-Item -ItemType Directory -Path $epsonProbe -Force | Out-Null
+  & expand.exe $epsonCab '-F:Version.dat' $epsonProbe | Out-Null
+  $epsonDat = Join-Path $epsonProbe 'Version.dat'
+  if (-not (Test-Path -LiteralPath $epsonDat)) { throw 'Version.dat was not found inside EsCore.cab.' }
+  $epsonPayloadVersion = (Get-Content -LiteralPath $epsonDat -Raw).Trim()
+  Remove-Item -LiteralPath $epsonProbe -Recurse -Force
+  if ($epsonPayloadVersion -ne $version) {
+      throw "Epson advertises EPSON Scan $version but the payload reports $epsonPayloadVersion. Detection would silently never match."
+  }
+
+  Remove-Item -LiteralPath $epsonSfx -Force
+  $fileName = 'Setup.exe'
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+  $setup = Join-Path $root 'Setup.exe'
+  if (-not (Test-Path -LiteralPath $setup)) { throw 'Setup.exe was not found in the package.' }
+  # /SI runs Epson's setup engine silently, /NODISP suppresses its progress UI.
+  $process = Start-Process -FilePath $setup -ArgumentList '/SI', '/NODISP' -WorkingDirectory $root -Wait -PassThru
+  exit $process.ExitCode
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'Stop'
+  # Epson registers its uninstaller as "<ProgramFiles>\epson\escndv\setup\setup.exe /r".
+  # Read the recorded UninstallString rather than assuming the path, then add the silent
+  # switches, which Epson's ARP entry does not include.
+  $entry = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -eq 'EPSON Scan' -and $_.UninstallString } |
+      Select-Object -First 1
+
+  $setup = $null
+  $setupArgs = @()
+  if ($entry) {
+      if ($entry.UninstallString -match '^\s*"(?<exe>[^"]+)"\s*(?<rest>.*)$' -or
+          $entry.UninstallString -match '^\s*(?<exe>\S+\.exe)\s*(?<rest>.*)$') {
+          $setup = $Matches['exe']
+          $setupArgs = @($Matches['rest'] -split '\s+' | Where-Object { $_ })
+      }
+  }
+
+  if (-not $setup -or -not (Test-Path -LiteralPath $setup)) {
+      $setupArgs = @()
+      foreach ($base in ${env:ProgramFiles(x86)}, $env:ProgramFiles) {
+          if (-not $base) { continue }
+          $candidate = Join-Path $base 'epson\escndv\setup\setup.exe'
+          if (Test-Path -LiteralPath $candidate) { $setup = $candidate; break }
+          $setup = $null
+      }
+  }
+
+  # Nothing installed: uninstall is a no-op, not a failure.
+  if (-not $setup) { exit 0 }
+
+  if ($setupArgs -notcontains '/r' -and $setupArgs -notcontains '/R') { $setupArgs += '/r' }
+  $setupArgs += '/SI'
+  $setupArgs += '/NODISP'
+  $process = Start-Process -FilePath $setup -ArgumentList $setupArgs -Wait -PassThru
+  exit $process.ExitCode
+iconFile: epsonscanperfectionv600.png
+id: epsonscanperfectionv600
+displayName: EPSON Scan (Epson Perfection V600 Photo)
+publisher: Seiko Epson Corporation
+description: Scanner driver and EPSON Scan utility for the Epson Perfection V600 Photo flatbed photo scanner, providing TWAIN and WIA scanning support.
+detectionType: script
+detectionScript: |
+  # Epson stamps the released version only into Version.dat. No installed binary, and no
+  # registry value, carries 3.9.x - Escndv.exe reports 5.1.1.5 and the SOFTWARE\EPSON key
+  # holds an unrelated DWORD - so this file is the only reliable version source.
+  $expected = '<version>'
+  $scanRoot = Join-Path $env:WINDIR 'twain_32\escndv'
+  $dat = Join-Path $scanRoot 'es00a1\Version.dat'
+  if (-not (Test-Path -LiteralPath $dat)) {
+      $found = Get-ChildItem -LiteralPath $scanRoot -Recurse -Filter 'Version.dat' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($found) { $dat = $found.FullName } else { $dat = $null }
+  }
+  if ($dat) {
+      $installed = (Get-Content -LiteralPath $dat -Raw).Trim()
+      $installedVersion = $installed -as [version]
+      $expectedVersion = $expected -as [version]
+      if ($installedVersion -and $expectedVersion) {
+          if ($installedVersion -ge $expectedVersion) { Write-Output 'Detected'; exit 0 }
+      }
+      elseif ($installed -eq $expected) { Write-Output 'Detected'; exit 0 }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: none
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
