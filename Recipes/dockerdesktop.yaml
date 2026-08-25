@@ -4,7 +4,7 @@ preDownloadScript: |
   # Official Docker Desktop Sparkle appcast. Never pin a version here.
   $raw = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
   if ($raw -is [byte[]]) { $raw = [System.Text.Encoding]::UTF8.GetString($raw) }
-  [xml]$feed = $raw
+  $feed = [xml]$raw
   $latest = @($feed.rss.channel.item) | Sort-Object { [int]$_.enclosure.version } -Descending | Select-Object -First 1
   if (-not $latest) { throw 'No Docker Desktop release was found in the official appcast.' }
   $version = [string]$latest.enclosure.shortVersionString

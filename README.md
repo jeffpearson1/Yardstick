@@ -146,11 +146,18 @@ Existing tenants can be migrated onto this model in one pass:
 .\Migrate-ToSupersedenceModel.ps1 -WhatIf
 ```
 
-#### Known issue: apps with exactly one assignment
+#### Known issue: `Get-IntuneWin32AppAssignment` miscounts empty and single-item results
 
-`Get-IntuneWin32AppAssignment` (IntuneWin32App 1.5.0) returns `$null` for any app that has **exactly one** assignment, so assignment migration silently does nothing for those apps. The cmdlet guards its Graph response with `$response.Count -gt 0`; a single-element response is unrolled to a bare `[PSCustomObject]`, which has no synthetic `.Count`, so the guard fails and the cmdlet reports "No assignments found". Apps with two or more assignments are unaffected.
+`Get-IntuneWin32AppAssignment` (IntuneWin32App 1.5.0) guards its Graph response with `$response.Count -gt 0`, which misbehaves at both ends of the range:
 
-Auto-update is *not* affected, because `Set-AssignmentAutoUpdate` reads assignments directly from Graph rather than through the cmdlet. Fixing the migration path requires the same Graph-direct approach.
+- **Zero assignments** — `Invoke-MSGraphOperation` returns the raw OData envelope (`{ '@odata.context', value = [] }`). Under PowerShell 7 a bare `[PSCustomObject]` reports a synthetic `.Count` of 1, so the guard passes and the cmdlet projects the envelope itself into one assignment object with every property `$null`. Yardstick used to read that phantom as an assignment with an unsupported target type and protect the app from deletion, which is what left stale `(N-2)`/`(N-3)` versions behind and filled the log with `Skipping assignment with no GroupID and unsupported target type ''`.
+- **Exactly one assignment** — under Windows PowerShell 5.1 the single-element response unrolls to a bare `[PSCustomObject]`, which has no synthetic `.Count`, so the guard fails and the cmdlet reports "No assignments found". Yardstick requires PowerShell 7, where this does not bite.
+
+`Get-YardstickAppAssignment` wraps the cmdlet and drops the phantom; call it instead of the cmdlet directly. Auto-update and assignment verification are unaffected either way, because `Set-AssignmentAutoUpdate` and `Test-YardstickAssignmentPresent` read assignments straight from Graph.
+
+#### Known issue: supersedence direction is not carried by `sourceId`
+
+The beta `mobileApps/{id}/relationships` collection is reported from the perspective of the app being queried: `sourceId` is the queried app on **both** forward and reverse links, and `targetId` is always the app at the other end. Direction lives in `targetType` — `child` means the queried app supersedes the target, `parent` means the target supersedes the queried app. Classifying by `sourceId` marks every link as forward, so a superseded app is never detached from its parent and its deletion fails with `supersedes <parent id>`. `Get-YardstickSupersedenceRelationship` keys off `targetType`.
 
 #### Known issue: un-targeting a group requires editing the anchor too
 
@@ -161,11 +168,23 @@ The practical consequence: removing an available assignment from the current ver
 #### Other Parameters
 
 * ```-Force``` will overwrite the latest version of any targeted applications if they are the same as the new version, and run normally if a new version is available.
-* ```-Repair``` will fix any name discrepancies of (N-X) for any target applications (i.e. if multiple applications are named N-1 - although this is normally fixed after an update anyway).
+* ```-Repair``` runs the full maintenance sweep — (N-x) renaming, assignment migration, retention pruning, supersedence and auto-update — on applications that have **no update available**, which a normal run skips entirely. See [Maintenance sweeps](#maintenance-sweeps) below.
 * ```-NoDelete``` will stop the script from automatically deleting old versions when it is done. 
 * ```-NoInteractive``` will skip any recipes that are located in the "Interactive" folder in Recipes.
 * ```-Group``` will parse RecipeGroups.yaml and run any applications corresponding to the group provided
 
+#### Maintenance sweeps
+
+Retention, naming and supersedence are desired state, but they used to be reconciled only on the code path that publishes a new version. A run where the vendor shipped nothing simply stopped at the version check. Anything that failed to prune — blocked by a dependent app, refused by Intune, or stranded by a bug — therefore got exactly one retry: the next release. For an application that updates rarely that can be never, which is how tenants accumulate `(N-2)`/`(N-3)` versions and supersedence graphs that hit Intune's 9-target limit.
+
+`-Repair` now runs that same reconciliation against the newest version already in Intune:
+
+```powershell
+.\Yardstick.ps1 -All -Repair            # update what has a new version, reconcile everything else
+.\Yardstick.ps1 -All -Repair -NoDelete  # reconcile everything except deletions
+```
+
+Every step is idempotent — renames are no-ops when the name is already right, assignment migration re-reads both ends, and supersedence is replaced as a whole set — so a sweep over a clean application changes nothing and is not reported. Applications where the sweep pruned, renamed or pinned an anchor appear in the email report with the action **Maintained**.
 
 ## License
 

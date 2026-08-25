@@ -190,7 +190,7 @@ foreach ($file in $recipeFiles) {
         foreach ($old in $availableSources) {
             # KNOWN ISSUE: this count is 0 for any app with exactly one
             # assignment - see the note in Move-AssignmentsAndDependencies.
-            $availCount = @(Get-IntuneWin32AppAssignment -Id $old.id | Where-Object Intent -eq 'available').Count
+            $availCount = @(Get-YardstickAppAssignment -Id $old.id | Where-Object Intent -eq 'available').Count
             if ($availCount -eq 0) { continue }
 
             if ($PSCmdlet.ShouldProcess($old.DisplayName, "$verb $availCount available assignment(s) to newest")) {
@@ -231,7 +231,7 @@ foreach ($file in $recipeFiles) {
             # from a merged list, so migrating it would resurrect stale entries on
             # the newest app on every run.
             $isAnchor = $anchor -and ($old.id -eq $anchor.id)
-            $reqCount = @(Get-IntuneWin32AppAssignment -Id $old.id | Where-Object Intent -eq 'required').Count
+            $reqCount = @(Get-YardstickAppAssignment -Id $old.id | Where-Object Intent -eq 'required').Count
             $action = if ($isAnchor) {
                 "move $reqCount required assignment(s) to newest (dependencies left on the anchor)"
             } else {
