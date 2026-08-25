@@ -1,7 +1,7 @@
 url: https://desktop.figma.com/win/Figma-0.0.0.msi
 urlRedirects: false
 preDownloadScript: |
-  [xml]$feed = (Invoke-WebRequest -Uri 'https://desktop.figma.com/win/releases.xml' -UseBasicParsing).Content
+  $feed = [xml]((Invoke-WebRequest -Uri 'https://desktop.figma.com/win/releases.xml' -UseBasicParsing).Content)
   $latest = @($feed.rss.channel.item)[0]
   $version = ([string]$latest.title -replace '^Figma\s+', '').Trim()
   $url = [string]$latest.link

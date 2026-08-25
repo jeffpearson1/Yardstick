@@ -132,17 +132,15 @@ function Test-Prerequisites {
         }
     }
 
-    # External tools
+    # External tools. A curl on PATH (Windows ships one in System32) serves the
+    # download scripts just as well as the bundled copy, so only warn when neither
+    # is available.
     if (-not (Get-Command "curl" -ErrorAction SilentlyContinue)) {
         $curlPath = Join-Path $ToolsPath "curl.exe"
         if (-not (Test-Path $curlPath)) {
-            $warnings.Add("curl.exe not found at '$curlPath'. Some download scripts may fail.")
+            $warnings.Add("curl.exe not found at '$curlPath' or on PATH. Some download scripts may fail.")
         }
     }
-    else {
-        $curlPath = (Get-Command "curl").Source
-    }
-
 
     # .NET types
     try {

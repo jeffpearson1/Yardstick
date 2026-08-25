@@ -7,10 +7,13 @@ BeforeAll {
 
 Describe "Test-Prerequisites" {
     BeforeEach {
+        # Recreated per test: TestDrive persists across It blocks, so the dummy
+        # curl.exe one test drops would otherwise satisfy the next one.
         $script:toolsPath = Join-Path $TestDrive "Tools"
-        if (-not (Test-Path $script:toolsPath)) {
-            New-Item -Path $script:toolsPath -ItemType Directory | Out-Null
+        if (Test-Path $script:toolsPath) {
+            Remove-Item $script:toolsPath -Recurse -Force
         }
+        New-Item -Path $script:toolsPath -ItemType Directory | Out-Null
     }
 
     It "Returns a result object with expected properties" {
@@ -21,13 +24,22 @@ Describe "Test-Prerequisites" {
     }
 
     It "Warns when curl.exe is not found" {
+        # Windows ships curl.exe in System32, so the PATH lookup has to be mocked
+        # away for this to test the bundled-copy check at all.
+        Mock -ModuleName YardstickSupport Get-Command { $null } -ParameterFilter { $Name -eq 'curl' }
         $result = Test-Prerequisites -ToolsPath $script:toolsPath
         $result.Warnings | Where-Object { $_ -match "curl.exe" } | Should -Not -BeNullOrEmpty
     }
 
     It "Does not warn about curl.exe when it exists" {
+        Mock -ModuleName YardstickSupport Get-Command { $null } -ParameterFilter { $Name -eq 'curl' }
         # Create a dummy curl.exe
         New-Item -Path (Join-Path $script:toolsPath "curl.exe") -ItemType File -Force | Out-Null
+        $result = Test-Prerequisites -ToolsPath $script:toolsPath
+        $result.Warnings | Where-Object { $_ -match "curl.exe" } | Should -BeNullOrEmpty
+    }
+
+    It "Does not warn when curl is only on PATH" {
         $result = Test-Prerequisites -ToolsPath $script:toolsPath
         $result.Warnings | Where-Object { $_ -match "curl.exe" } | Should -BeNullOrEmpty
     }

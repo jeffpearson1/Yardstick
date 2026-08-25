@@ -1070,7 +1070,7 @@ function New-DetectionRule {
         }
         "script" {
             if (!(Test-Path $Script:Scripts\$Script:Id)) {
-                $item = New-Item -Name $Script:Id -ItemType Directory -Path $Script:Scripts | Out-Null
+                New-Item -Name $Script:Id -ItemType Directory -Path $Script:Scripts | Out-Null
             }
             $ScriptLocation = "$($Script:Scripts)\$($Script:Id)\$($Script:Version).$($Script:DetectionScriptFileExtension)"
             Set-Content -Path $ScriptLocation -Value $Script:DetectionScript -Force
