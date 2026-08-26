@@ -1,0 +1,36 @@
+url: https://dashboard.barn.owllabs.com/products/DESKTOPAPP/download/latest/exe
+urlRedirects: false
+preDownloadScript: |
+  $versionPattern = '\d+\.\d+\.\d+\(\d+\)|\d+(?:\.\d+){1,3}'
+  $download = Invoke-WebRequest $URL -UseBasicParsing
+  $downloadUri = $download.BaseResponse.RequestMessage.RequestUri
+  $url = [string]$downloadUri.AbsoluteUri
+  $filename = ($downloadUri.AbsolutePath -split '/')[-1]
+  $version = ([regex]::Match($filename, $versionPattern).Value).Replace('(', '.').Replace(')', '')
+downloadScript: |
+  Invoke-WebRequest -Uri $url -OutFile (Join-Path "$BuildSpace\$id\$version" $fileName) -UseBasicParsing
+powerShellInstallScript: |
+  Start-Process -FilePath '<filename>' -ArgumentList '/ALLUSERS /VERYSILENT /NORESTART'
+  $deadline = (Get-Date).AddSeconds(60)
+  do {
+    Start-Sleep -MilliSeconds 200
+    $owl = Get-Process -Name 'Meeting Owl' -ErrorAction SilentlyContinue
+  } until ($owl -or (Get-Date) -ge $deadline)
+  if ($owl) {
+    Stop-Process -Name 'Meeting Owl' -Force -ErrorAction SilentlyContinue
+  }
+uninstallScript: '"%ProgramFiles(x86)%\Meeting Owl\unins000.exe" /VERYSILENT'
+iconFile: meetingowl.png
+id: meetingowl
+displayName: Meeting Owl
+publisher: Owl Labs
+description: Control and configure Meeting Owl devices from desktop, including registration, updates, and in-room collaboration settings.
+detectionType: file
+fileDetectionPath: '%ProgramFiles(x86)%\Meeting Owl'
+fileDetectionName: Meeting Owl.exe
+fileDetectionMethod: version
+fileDetectionOperator: equal
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
+numVersionsToKeep: 2
