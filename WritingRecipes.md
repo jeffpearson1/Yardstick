@@ -116,6 +116,30 @@ Use for:
 **Must do:**
 - Perform the actual file download (the default BITS transfer is skipped when this script is present)
 
+### `manualDownload` (software dropbox)
+
+Some vendors gate their installer behind a signed-in, licensed download that cannot be automated at all. Set `manualDownload: true` and an operator stages the payload in `<SoftwareDropbox>\<id>` instead; Yardstick copies the whole folder into the buildspace in place of a URL or `downloadScript`.
+
+```yaml
+manualDownload: true
+preDownloadScript: |
+  $installer = @($dropboxFiles | Where-Object Extension -eq '.exe' | Sort-Object LastWriteTime -Descending)[0]
+  if (-not $installer) { throw "No .exe staged in $dropboxPath" }
+  $fileName = $installer.Name
+  $version  = $installer.VersionInfo.ProductVersion
+```
+
+`SoftwareDropbox` and `SoftwareArchive` are configured in `preferences.yaml`, never in the recipe. Set `manualDownloadFolder` only when the dropbox subfolder is not the recipe `id`.
+
+Two extra variables are available to the script blocks:
+
+| Variable | Description |
+|----------|-------------|
+| `$dropboxPath` | The staging folder, `<SoftwareDropbox>\<id>` |
+| `$dropboxFiles` | `FileInfo`/`DirectoryInfo` objects for everything staged there |
+
+After Intune accepts the upload, Yardstick moves the payload to `<SoftwareArchive>\<id>\<version>`. That empties the dropbox, which is what makes the next run skip the recipe rather than republishing the same build - so an empty dropbox is the normal steady state, not an error. Under `-Repair` an empty dropbox still gets the usual maintenance sweep.
+
 ### `postDownloadScript`
 
 Executes after download completes. The working directory is set to `$BuildSpace\$id\$version` before execution.

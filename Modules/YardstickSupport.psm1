@@ -2839,6 +2839,103 @@ function Remove-YardstickApp {
 
 
 
+function Get-YardstickDropboxPayload {
+    <#
+    .SYNOPSIS
+    Returns the installer files an operator has staged for a manual-drop recipe.
+
+    .DESCRIPTION
+    Some vendors put their installer behind a signed-in, licensed download that
+    Yardstick cannot automate (CLO, and anything else gated on an entitlement
+    rather than a session cookie). Those recipes set `manualDownload: true`, and
+    an operator drops the payload into <DropboxRoot>\<Folder>.
+
+    An absent or empty folder is the normal steady state - Complete-YardstickDropbox
+    empties it after every successful upload - so it returns $null rather than
+    throwing. Only a missing dropbox configuration is an error.
+
+    .PARAMETER DropboxRoot
+    The SoftwareDropbox root from preferences.yaml.
+
+    .PARAMETER Folder
+    Per-recipe subfolder, normally the recipe id.
+
+    .OUTPUTS
+    PSCustomObject with Path and Files, or $null when nothing is staged.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$DropboxRoot,
+        [Parameter(Mandatory)][string]$Folder
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DropboxRoot)) {
+        throw "Recipe sets manualDownload but no SoftwareDropbox path is configured in preferences.yaml."
+    }
+
+    $path = Join-Path $DropboxRoot $Folder
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+
+    $files = @(Get-ChildItem -LiteralPath $path -Force | Where-Object Name -ne '.gitkeep')
+    if ($files.Count -eq 0) { return $null }
+
+    return [PSCustomObject]@{
+        Path  = $path
+        Files = $files
+    }
+}
+
+
+function Complete-YardstickDropbox {
+    <#
+    .SYNOPSIS
+    Archives a manual-drop payload after a successful upload, emptying the dropbox.
+
+    .DESCRIPTION
+    Moves everything in the dropbox folder to <ArchiveRoot>\<Folder>\<Version>.
+    Emptying the dropbox is what makes the next run a no-op: a manual-drop recipe
+    only packages when an operator has staged something new. This runs only after
+    Intune has accepted the upload, so a failed run leaves the payload in place to
+    be retried.
+
+    .PARAMETER DropboxPath
+    The folder returned by Get-YardstickDropboxPayload.
+
+    .PARAMETER ArchiveRoot
+    The SoftwareArchive root from preferences.yaml.
+
+    .PARAMETER Folder
+    Per-recipe subfolder, normally the recipe id.
+
+    .PARAMETER Version
+    The version that was published, used as the archive subfolder name.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$DropboxPath,
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$ArchiveRoot,
+        [Parameter(Mandatory)][string]$Folder,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ArchiveRoot)) {
+        Write-Log "WARNING: No SoftwareArchive path configured - leaving the payload in $DropboxPath."
+        return
+    }
+
+    $destination = Join-Path (Join-Path $ArchiveRoot $Folder) $Version
+    if (Test-Path -LiteralPath $destination) {
+        # Same version staged twice - a -Force run, or a corrected payload. Keep
+        # both rather than failing the move.
+        $destination = "$destination-$(Get-Date -Format 'yyyyMMddHHmmss')"
+    }
+    New-Item -ItemType Directory -Path $destination -Force | Out-Null
+
+    foreach ($item in @(Get-ChildItem -LiteralPath $DropboxPath -Force)) {
+        Move-Item -LiteralPath $item.FullName -Destination $destination -Force
+    }
+    Write-Log "Archived manual drop to $destination"
+}
+
+
 function Merge-RecipeWithBase {
     <#
     .SYNOPSIS
@@ -3015,6 +3112,7 @@ function Test-RecipeSchema {
         'detectionScriptFileExtension', 'detectionScriptRunAs32Bit',
         'detectionScriptEnforceSignatureCheck', 'iconFile', 'description', 'publisher',
         'versionLock', 'numVersionsToKeep', 'fileType', 'softwareName',
+        'manualDownload', 'manualDownloadFolder',
         'dependentApplicationBlacklist', 'dependentLinkUpdateEnabled',
         'dependentLinkUpdateRetryCount', 'dependentLinkUpdateRetryDelaySeconds',
         'dependentLinkUpdateTimeoutSeconds',

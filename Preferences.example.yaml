@@ -16,6 +16,15 @@ Tools: <REPLACE_WITH_YARDSTICK_ROOT>\Tools
 Temp: <REPLACE_WITH_YARDSTICK_ROOT>\Temp
 Secrets: <REPLACE_WITH_YARDSTICK_ROOT>\Secrets
 Modules: <REPLACE_WITH_YARDSTICK_ROOT>\Modules
+# Manual-drop recipes (`manualDownload: true`) package whatever an operator has
+# staged in SoftwareDropbox\<recipe id>. Vendors that gate their installer behind
+# a signed-in, licensed download cannot be automated, so a human fetches the file
+# once and drops it here. After a successful upload Yardstick moves the payload to
+# SoftwareArchive\<recipe id>\<version>, which leaves the dropbox empty - that is
+# what makes the next run skip the recipe instead of republishing the same build.
+# Leave both blank if you have no manual-drop recipes.
+SoftwareDropbox:
+SoftwareArchive:
 # Optional. When set, every .intunewin file Yardstick uploads is copied here on a
 # background thread, into a subfolder named after the recipe id, under a file name
 # carrying the version and the time Intune finished publishing it. Leave blank or
