@@ -10,28 +10,23 @@ A simple, robust, easy-to-use and configure application autopackager for Microso
 
 Yardstick strives to measure up to (and beyond) the  autopackagers that already exist for MDMs without all the unnecessary complexity. 
 If you don't enjoy editing XML, babysitting scripts, long days of installing applications by hand, etc. and you use Microsoft Intune - Yardstick may be for you!
-We have included a variety of recipes for you to either use directly or modify, and if you find that there is functionality missing from what you would expect (especially if it is something already present in IntuneWin32App) please submit a feature request so we can look into getting it added.
+Yardstick includes a variety of recipes to use directly or adapt. Its Microsoft Graph and Intune Win32 app integration is maintained in this repository; please open a feature request when a workflow is missing.
 
 ## Getting Started
 
 ### Dependencies
 
-Yardstick depends on (and we are extremely grateful for) a handful of PowerShell Modules:
-* [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml)
-* [Selenium-Powershell](https://github.com/adamdriscoll/selenium-powershell)
-* [IntuneWin32App](https://github.com/MSEndpointMgr/IntuneWin32App)
-* [PowerShell_Credential_Manager](https://github.com/echalone/PowerShell_Credential_Manager)
-* [MSAL.PS](https://github.com/AzureAD/MSAL.PS)
+The only required PowerShell Gallery module is [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml). Selenium-Powershell and TUN.CredentialManager remain optional for recipes that use browser automation or stored vendor credentials. Yardstick calls Microsoft Graph directly and has no IntuneWin32App or MSAL.PS dependency.
+
+The official Microsoft Win32 Content Prep Tool is downloaded on first use from a commit-pinned Microsoft release and verified with SHA-256 before execution.
 
 
 ### Installing
 
-* Before starting, install all necessary PowerShell Modules
-    * Install the latest version of our modified IntuneWin32App module from [this repo](https://github.com/jeffpearson1/IntuneWin32App)
-    * The remaining modules can be installed from the PowerShell Gallery:
-
 ```powershell
-Install-Module -Name Powershell-Yaml, TUN.CredentialManager, MSAL.PS
+Install-Module -Name Powershell-Yaml
+# Optional, for recipes that use these integrations:
+Install-Module -Name TUN.CredentialManager
 Install-Module -Name Selenium -AllowPrerelease
 ```
 
@@ -146,14 +141,9 @@ Existing tenants can be migrated onto this model in one pass:
 .\Migrate-ToSupersedenceModel.ps1 -WhatIf
 ```
 
-#### Known issue: `Get-IntuneWin32AppAssignment` miscounts empty and single-item results
+#### Native Graph integration
 
-`Get-IntuneWin32AppAssignment` (IntuneWin32App 1.5.0) guards its Graph response with `$response.Count -gt 0`, which misbehaves at both ends of the range:
-
-- **Zero assignments** — `Invoke-MSGraphOperation` returns the raw OData envelope (`{ '@odata.context', value = [] }`). Under PowerShell 7 a bare `[PSCustomObject]` reports a synthetic `.Count` of 1, so the guard passes and the cmdlet projects the envelope itself into one assignment object with every property `$null`. Yardstick used to read that phantom as an assignment with an unsupported target type and protect the app from deletion, which is what left stale `(N-2)`/`(N-3)` versions behind and filled the log with `Skipping assignment with no GroupID and unsupported target type ''`.
-- **Exactly one assignment** — under Windows PowerShell 5.1 the single-element response unrolls to a bare `[PSCustomObject]`, which has no synthetic `.Count`, so the guard fails and the cmdlet reports "No assignments found". Yardstick requires PowerShell 7, where this does not bite.
-
-`Get-YardstickAppAssignment` wraps the cmdlet and drops the phantom; call it instead of the cmdlet directly. Auto-update and assignment verification are unaffected either way, because `Set-AssignmentAutoUpdate` and `Test-YardstickAssignmentPresent` read assignments straight from Graph.
+`Modules/YardstickGraph.psm1` handles OAuth client credentials, token refresh, transient retries, and OData paging. `Modules/YardstickIntune.psm1` owns Win32 app packaging, upload, CRUD, assignments, dependencies, and supersedence. Assignment collections are normalized correctly for zero, one, or many results.
 
 #### Known issue: supersedence direction is not carried by `sourceId`
 

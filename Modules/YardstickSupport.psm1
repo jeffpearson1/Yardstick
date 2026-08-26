@@ -1,5 +1,8 @@
 using module .\VersionPro.psm1
 
+Import-Module $PSScriptRoot\YardstickGraph.psm1 -Scope Global -Force
+Import-Module $PSScriptRoot\YardstickIntune.psm1 -Scope Global -Force
+
 function Write-Log {
     <#
     .SYNOPSIS
@@ -117,7 +120,7 @@ function Test-Prerequisites {
     $warnings = [System.Collections.Generic.List[string]]::new()
 
     # Required PowerShell modules (fatal if missing)
-    $requiredModules = @('powershell-yaml', 'IntuneWin32App')
+    $requiredModules = @('powershell-yaml')
     foreach ($mod in $requiredModules) {
         if (-not (Get-Module -ListAvailable -Name $mod)) {
             $errors.Add("Required PowerShell module '$mod' is not installed. Install with: Install-Module $mod")
@@ -345,78 +348,7 @@ function Get-MsiProperty {
 
 
 
-function Connect-AutoMSIntuneGraph {
-    <#
-    .SYNOPSIS
-    Automatically manages Microsoft Intune Graph API connection with token refresh.
-    
-    .DESCRIPTION
-    This function manages the connection to Microsoft Intune Graph API, automatically
-    refreshing tokens when they expire or are close to expiring. It uses global
-    variables for tenant configuration.
 
-    .PARAMETER Force
-    Switch to force token refresh regardless of current token state.
-    #>
-    [CmdletBinding()]
-    param(
-        [switch]$Force
-    )
-    
-    if (-not $Global:TenantID -or -not $Global:ClientID -or -not $Global:ClientSecret) {
-        throw "Required global variables not set: TENANT_ID, CLIENT_ID, CLIENT_SECRET"
-    }
-    
-    # If Force is specified, bypass all checks and refresh immediately
-    if ($Force) {
-        Write-Log "Force flag specified - Refreshing token..."
-        try {
-            Clear-MsalTokenCache
-            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
-            Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
-        } catch {
-            Write-Error "Failed to refresh token: $_"
-            throw
-        }
-        return
-    }
-
-    # Check if the current token is invalid
-    if (-not $Global:Token.ExpiresOn) {
-        Write-Log "Getting an Intune Graph Client API token..."
-        try {
-            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
-        } catch {
-            Write-Error "Failed to get initial token: $_"
-            throw
-        }
-    } elseif ($Global:Token.ExpiresOn.ToLocalTime() -lt (Get-Date)) {
-        # If not, get a new token
-        Write-Log "Token is expired. Refreshing token..."
-        try {
-            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
-            Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
-        } catch {
-            Write-Error "Failed to refresh expired token: $_"
-            throw
-        }
-    } elseif ($Global:Token.ExpiresOn.AddMinutes(-30).ToLocalTime() -lt (Get-Date)) {
-        # For whatever reason, this API stops working 10 minutes before a token refresh
-        # Set at 30 minutes in case we are uploading large files. 
-        Write-Log "Token expires soon - Refreshing token..."
-        try {
-            # Required to force a refresh
-            Clear-MsalTokenCache
-            $Global:Token = Connect-MSIntuneGraph -TenantID $Global:TenantID -ClientID $Global:ClientID -ClientSecret $Global:ClientSecret
-            Write-Log "Token refreshed. New Token Expires at: $($Global:Token.ExpiresOn.ToLocalTime())"
-        } catch {
-            Write-Error "Failed to refresh token: $_"
-            throw
-        }
-    } else {
-        Write-Log "Token is still valid. Skipping token refresh."
-    } 
-}
 
 
 
@@ -1048,33 +980,14 @@ function Wait-YardstickBackup {
 function Get-YardstickAppAssignment {
     <#
     .SYNOPSIS
-    Get-IntuneWin32AppAssignment with the phantom assignment it invents for apps
-    that have none stripped out.
-
-    .DESCRIPTION
-    Get-IntuneWin32AppAssignment guards its Graph response with
-    `$response.Count -gt 0`. Invoke-MSGraphOperation hands back the raw OData
-    envelope - `{ '@odata.context', value = [] }` - when an app has no
-    assignments, and PowerShell 7 gives a bare PSCustomObject a synthetic .Count
-    of 1, so the guard passes and the cmdlet projects the envelope itself into one
-    assignment object with every property null.
-
-    Callers cannot tell that phantom apart from a real assignment whose target
-    type Yardstick does not handle, and Move-AssignmentsAndDependencies treats the
-    latter as grounds to protect the source app from deletion. That is why apps
-    with no assignments at all became permanently un-prunable and piled up as
-    (N-2)/(N-3) versions, logging "Skipping assignment with no GroupID and
-    unsupported target type ''" on every run.
-
-    A real assignment always carries a target type, and Graph always reports an
-    intent, so an entry with neither - and no group - is the artifact.
+    Returns the native Yardstick assignment projection as an array.
     #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$Id
     )
 
-    return @(Get-IntuneWin32AppAssignment -Id $Id | Where-Object { $_.Type -or $_.GroupID -or $_.Intent })
+    return @(Get-YardstickWin32AppAssignment -Id $Id | Where-Object { $_.Type -or $_.GroupID -or $_.Intent })
 }
 
 
@@ -1084,7 +997,7 @@ function Test-YardstickAssignmentPresent {
     Returns $true when the given app already carries an assignment for a target.
 
     .DESCRIPTION
-    The Add-IntuneWin32AppAssignment* cmdlets downgrade Graph failures and
+    The Add-YardstickWin32AppAssignment* cmdlets downgrade Graph failures and
     duplicate-target conflicts to warnings and emit nothing on the success
     stream, so the fact that one of them returned proves nothing. Reading the
     assignment back off the target app is the only authoritative signal, and it
@@ -1092,7 +1005,7 @@ function Test-YardstickAssignmentPresent {
     Assignment already exists" means the assignment we wanted is there, which is
     a success rather than something to retry.
 
-    Reads through Graph directly rather than Get-IntuneWin32AppAssignment. Under
+    Reads through Graph directly rather than Get-YardstickWin32AppAssignment. Under
     Windows PowerShell 5.1 that cmdlet returns $null for an app holding exactly
     one assignment (see the note in Move-AssignmentsAndDependencies), which would
     turn this check into a false negative - and a false negative here is what
@@ -1196,8 +1109,8 @@ function Move-AssignmentsAndDependencies {
 
     .NOTES
     All Devices and All Users assignments that use an assignment filter are not
-    migrated. Add-IntuneWin32AppAssignmentAllDevices/AllUsers accept a filter by
-    name only, while Get-IntuneWin32AppAssignment reports the filter id, so the
+    migrated. Add-YardstickWin32AppAssignmentAllDevices/AllUsers accept a filter by
+    name only, while Get-YardstickWin32AppAssignment reports the filter id, so the
     filter cannot be carried across - and migrating without it would widen the
     assignment to every device or user. Those assignments are logged and left on
     $From, and $From is added to $ProtectedSourceIds so retention will not delete
@@ -1207,7 +1120,7 @@ function Move-AssignmentsAndDependencies {
     hand.
 
     Removal matches on the target alone (a group id, or the virtual target type)
-    because the IntuneWin32App module cannot delete an individual assignment. If
+    because the Yardstick Intune module cannot delete an individual assignment. If
     $From holds more than one assignment for the same target, migrating one of
     them removes them all; this is logged when it happens.
     #>
@@ -1236,11 +1149,11 @@ function Move-AssignmentsAndDependencies {
     if ($From -is [String]) {
         if ($From -match "^[0-9a-fA-F\-]{36}$") {
             # Looks like a GUID
-            $From = Get-IntuneWin32App -Id $From
+            $From = Get-YardstickWin32App -Id $From
         }
         else {
             # Only return exact matches
-            $Apps = Get-IntuneWin32App -DisplayName $From | Where-Object DisplayName -eq $From
+            $Apps = Get-YardstickWin32App -DisplayName $From | Where-Object DisplayName -eq $From
             if ($Apps.Count -eq 1) {
                 $From = $Apps[0]
             } elseif ($Apps.Count -gt 1) {
@@ -1253,11 +1166,11 @@ function Move-AssignmentsAndDependencies {
     if ($To -is [String]) {
         if ($To -match "[0-9a-fA-F\-]{36}$") {
             # Looks like a GUID
-            $To = Get-IntuneWin32App -Id $To
+            $To = Get-YardstickWin32App -Id $To
         }
         else {
             # Only return exact matches
-            $Apps = Get-IntuneWin32App -DisplayName $To | Where-Object DisplayName -eq $To
+            $Apps = Get-YardstickWin32App -DisplayName $To | Where-Object DisplayName -eq $To
             if ($Apps.Count -eq 1) {
                 $To = $Apps[0]
             } elseif ($Apps.Count -gt 1) {
@@ -1268,29 +1181,9 @@ function Move-AssignmentsAndDependencies {
         }
     }
     Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
-    # KNOWN ISSUE (IntuneWin32App 1.5.0 under Windows PowerShell 5.1):
-    # Get-IntuneWin32AppAssignment returns $null for any app that has EXACTLY ONE
-    # assignment, so the migration below silently does nothing for those apps.
-    # Get-IntuneWin32AppAssignment.ps1:124 reads the assignments with
-    # Invoke-MSGraphOperation, which unrolls a single-element response to a bare
-    # [PSCustomObject]; the guard on the next line then tests `$response.Count
-    # -gt 0`, and under 5.1 PSCustomObject has no synthetic .Count (unlike other
-    # scalars in PS 3.0+), so it evaluates $null -gt 0 = $false and the cmdlet
-    # reports "No assignments found". Two or more assignments come back as an
-    # Object[] and work fine. Wrapping the call in @() does not help - the data is
-    # already discarded inside the cmdlet.
-    # PowerShell 7 gives PSCustomObject a synthetic .Count of 1, so this does not
-    # bite when Yardstick runs on its required host (Yardstick.psd1 pins 7.0). The
-    # read-back in Test-YardstickAssignmentPresent goes through Graph directly
-    # anyway, because a false negative there decides whether a source assignment
-    # is preserved or deleted.
-    #
-    # Get-YardstickAppAssignment also drops the all-null assignment the cmdlet
-    # invents for an app that has NO assignments - see that function. Left in, it
-    # fell through to the "unsupported target type" branch below and protected the
-    # source app from deletion forever.
+    # The native projection preserves zero, one, and many assignment results.
     $FromAssignments = Get-YardstickAppAssignment -Id $From.id
-    $FromDependencies = Get-IntuneWin32AppDependency -Id $From.id
+    $FromDependencies = Get-YardstickWin32AppDependency -Id $From.id
     # Kept as DateTime, not a formatted string: rebuilding a date by formatting
     # to "MM/dd/yyyy" and parsing it back with Get-Date makes the result depend
     # on the host's culture, so on a dd/MM/yyyy host 08/04 silently becomes
@@ -1388,8 +1281,8 @@ function Move-AssignmentsAndDependencies {
                 Write-Log "Skipping assignment for $assignmentLabel - intent $($Assignment.Intent) does not match filter $IntentFilter"
                 continue
             }
-            # Add-IntuneWin32AppAssignmentAllDevices/AllUsers take a filter by
-            # name only, and Get-IntuneWin32AppAssignment reports the filter id,
+            # Add-YardstickWin32AppAssignmentAllDevices/AllUsers take a filter by
+            # name only, and Get-YardstickWin32AppAssignment reports the filter id,
             # so the filter cannot be carried across. Dropping it would widen the
             # assignment to every device or user, so refuse to migrate instead -
             # and protect $From from deletion, because pruning it would destroy
@@ -1431,7 +1324,7 @@ function Move-AssignmentsAndDependencies {
                     $deadlineDateTime = $DeadlineDate.AddHours($sourceDeadline.Hour).AddMinutes($sourceDeadline.Minute)
                 }
 
-                # Add-IntuneWin32AppAssignmentGroup rejects a deadline that is
+                # Add-YardstickWin32AppAssignmentGroup rejects a deadline that is
                 # already in the past unless an available time accompanies it -
                 # and it rejects it with `break`, which escapes our try/catch and
                 # kills the foreach, silently abandoning every assignment still
@@ -1487,7 +1380,7 @@ function Move-AssignmentsAndDependencies {
                 $addReturned = $false
                 $conflicted = $false
                 try {
-                    # The IntuneWin32App cmdlets bail out of their Begin block
+                    # The Yardstick Intune cmdlets bail out of their Begin block
                     # with `break` (past deadline, expired token). A bare `break`
                     # from a called function is not catchable and unwinds to the
                     # caller's nearest enclosing loop - without this single-pass
@@ -1496,13 +1389,13 @@ function Move-AssignmentsAndDependencies {
                     # leaves $addReturned false and is retried and logged.
                     foreach ($breakGuard in 1) {
                         if ($targetType -eq $allDevicesTarget) {
-                            $addResult = Add-IntuneWin32AppAssignmentAllDevices @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
+                            $addResult = Add-YardstickWin32AppAssignmentAllDevices @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
                         }
                         elseif ($targetType -eq $allUsersTarget) {
-                            $addResult = Add-IntuneWin32AppAssignmentAllUsers @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
+                            $addResult = Add-YardstickWin32AppAssignmentAllUsers @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
                         }
                         else {
-                            $addResult = Add-IntuneWin32AppAssignmentGroup @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
+                            $addResult = Add-YardstickWin32AppAssignmentGroup @assignmentParams -WarningAction SilentlyContinue -WarningVariable addWarnings
                         }
                         $addReturned = $true
                     }
@@ -1581,13 +1474,13 @@ function Move-AssignmentsAndDependencies {
                         $removeReturned = $false
                         foreach ($breakGuard in 1) {
                             if ($targetType -eq $allDevicesTarget) {
-                                Remove-IntuneWin32AppAssignmentAllDevices -ID $From.id | Out-Null
+                                Remove-YardstickWin32AppAssignmentAllDevices -ID $From.id | Out-Null
                             }
                             elseif ($targetType -eq $allUsersTarget) {
-                                Remove-IntuneWin32AppAssignmentAllUsers -ID $From.id | Out-Null
+                                Remove-YardstickWin32AppAssignmentAllUsers -ID $From.id | Out-Null
                             }
                             else {
-                                Remove-IntuneWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID | Out-Null
+                                Remove-YardstickWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID | Out-Null
                             }
                             $removeReturned = $true
                         }
@@ -1627,7 +1520,7 @@ function Move-AssignmentsAndDependencies {
         return
     }
     # Child dependencies are the apps that $From depends on; $To needs to depend
-    # on the same apps. Add-IntuneWin32AppDependency REPLACES an app's entire
+    # on the same apps. Add-YardstickWin32AppDependency REPLACES an app's entire
     # dependency set (it only preserves supersedence), so the complete desired
     # list has to be submitted in one call - adding them one at a time drops
     # every dependency configured by the previous call.
@@ -1644,7 +1537,7 @@ function Move-AssignmentsAndDependencies {
         # targetId -> dependencyType. Seed with what $To already depends on so
         # existing dependencies survive the replace.
         $desiredDependencies = [ordered]@{}
-        foreach ($existing in (Get-IntuneWin32AppDependency -ID $To.id)) {
+        foreach ($existing in (Get-YardstickWin32AppDependency -ID $To.id)) {
             if (($existing.PSObject.Properties.Name -contains "targetType") -and ($existing.targetType -eq "parent")) {
                 continue
             }
@@ -1680,7 +1573,7 @@ function Move-AssignmentsAndDependencies {
                     $dependencyObjects = @()
                     foreach ($targetId in $desiredDependencies.Keys) {
                         # Returns $null and warns if the target app no longer exists.
-                        $dependencyObject = New-IntuneWin32AppDependency -ID $targetId -DependencyType $desiredDependencies[$targetId]
+                        $dependencyObject = New-YardstickWin32AppDependency -ID $targetId -DependencyType $desiredDependencies[$targetId]
                         if ($dependencyObject) {
                             $dependencyObjects += $dependencyObject
                         }
@@ -1693,12 +1586,12 @@ function Move-AssignmentsAndDependencies {
                         break
                     }
 
-                    Add-IntuneWin32AppDependency -ID $To.id -Dependency $dependencyObjects | Out-Null
+                    Add-YardstickWin32AppDependency -ID $To.id -Dependency $dependencyObjects | Out-Null
 
-                    # Add-IntuneWin32AppDependency warns instead of throwing when
+                    # Add-YardstickWin32AppDependency warns instead of throwing when
                     # Graph rejects the update, so read the result back rather
                     # than assuming the call succeeded.
-                    $assignedTargets = @(Get-IntuneWin32AppDependency -ID $To.id |
+                    $assignedTargets = @(Get-YardstickWin32AppDependency -ID $To.id |
                         Where-Object { $_.targetType -ne "parent" } |
                         ForEach-Object { $_.targetId })
                     $missingTargets = @($dependencyObjects.targetId | Where-Object { $assignedTargets -notcontains $_ })
@@ -1754,7 +1647,7 @@ function Move-AssignmentsAndDependencies {
             $parentDisplayName = $parentGroup.Group[0].targetDisplayName
             if (-not $parentDisplayName) {
                 try {
-                    $parentApp = Get-IntuneWin32App -Id $parentId
+                    $parentApp = Get-YardstickWin32App -Id $parentId
                     $parentDisplayName = $parentApp.DisplayName
                 } catch {
                     Write-Log "Unable to retrieve metadata for dependent app $($parentId): $_"
@@ -1787,7 +1680,7 @@ function Move-AssignmentsAndDependencies {
                 $updatedDependencies = @()
                 $dependenciesCleared = $false
                 try {
-                    $parentDependencyList = Get-IntuneWin32AppDependency -ID $parentId
+                    $parentDependencyList = Get-YardstickWin32AppDependency -ID $parentId
                     $childItems = $parentDependencyList | Where-Object { ($_.targetType -eq "child") -or (-not $_.targetType) }
                     if (-not $childItems) {
                         $statusMessage = "No dependencies to update"
@@ -1799,12 +1692,12 @@ function Move-AssignmentsAndDependencies {
                     foreach ($entry in $childItems) {
                         $targetAppId = $entry.targetId
                         $normalizedTypeValue = ConvertTo-DependencyType $entry.dependencyType
-                        $originalDependencies += New-IntuneWin32AppDependency -ID $targetAppId -DependencyType $normalizedTypeValue
+                        $originalDependencies += New-YardstickWin32AppDependency -ID $targetAppId -DependencyType $normalizedTypeValue
                         if ($targetAppId -eq $From.id) {
                             $hasLinkToSource = $true
                             $targetAppId = $To.id
                         }
-                        $updatedDependencies += New-IntuneWin32AppDependency -ID $targetAppId -DependencyType $normalizedTypeValue
+                        $updatedDependencies += New-YardstickWin32AppDependency -ID $targetAppId -DependencyType $normalizedTypeValue
                     }
 
                     if (-not $hasLinkToSource) {
@@ -1813,9 +1706,9 @@ function Move-AssignmentsAndDependencies {
                         break
                     }
 
-                    Remove-IntuneWin32AppDependency -ID $parentId | Out-Null
+                    Remove-YardstickWin32AppDependency -ID $parentId | Out-Null
                     $dependenciesCleared = $true
-                    Add-IntuneWin32AppDependency -ID $parentId -Dependency $updatedDependencies | Out-Null
+                    Add-YardstickWin32AppDependency -ID $parentId -Dependency $updatedDependencies | Out-Null
                     $updateSucceeded = $true
                     $newTargetName = if ($To.DisplayName) { $To.DisplayName } else { $To.id }
                     Write-Log "Updated dependent app $parentDisplayName to reference $newTargetName."
@@ -1825,7 +1718,7 @@ function Move-AssignmentsAndDependencies {
                     Write-Log "Failed to update dependent app $parentDisplayName on attempt $($attempt + 1): $lastError"
                     if ($dependenciesCleared -and $originalDependencies.Count -gt 0) {
                         try {
-                            Add-IntuneWin32AppDependency -ID $parentId -Dependency $originalDependencies | Out-Null
+                            Add-YardstickWin32AppDependency -ID $parentId -Dependency $originalDependencies | Out-Null
                         } catch {
                             Write-Log "Unable to restore original dependencies for $parentDisplayName after failure."
                         }
@@ -1879,7 +1772,7 @@ function Get-SameAppAllVersions {
 
     # Attempt to retrieve applications with retry logic
     $AllSimilarApps = Invoke-WithRetry -Label "Retrieve applications for $DisplayName" -MaxRetries 3 -DelaySeconds 5 -ScriptBlock {
-        Get-IntuneWin32App -DisplayName "$DisplayName" -ErrorAction Stop
+        Get-YardstickWin32App -DisplayName "$DisplayName" -ErrorAction Stop
     } -OnFailure {
         Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
         exit 1001
@@ -1949,77 +1842,7 @@ function Get-NewestComparableVersion {
 
 
 
-function Invoke-YardstickGraphRequest {
-    <#
-    .SYNOPSIS
-    Minimal Microsoft Graph wrapper for the handful of calls that IntuneWin32App
-    does not expose (assignment-level auto-update settings, relationship
-    direction). Reuses the authentication header maintained by
-    Connect-AutoMSIntuneGraph / Connect-MSIntuneGraph.
 
-    .PARAMETER Resource
-    Graph resource path relative to the API version root, e.g.
-    "deviceAppManagement/mobileApps/<id>/assignments".
-
-    .PARAMETER Method
-    HTTP method. Defaults to Get.
-
-    .PARAMETER Body
-    Object to serialize as the JSON request body.
-
-    .PARAMETER ApiVersion
-    "beta" (default) or "v1.0". The auto-update assignment settings and the
-    per-app relationships collection are only exposed on beta.
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Resource,
-
-        [ValidateSet('Get', 'Post', 'Patch', 'Put', 'Delete')]
-        [string]$Method = 'Get',
-
-        $Body,
-
-        [ValidateSet('beta', 'v1.0')]
-        [string]$ApiVersion = 'beta'
-    )
-
-    if (-not $Global:AuthenticationHeader -or -not $Global:AuthenticationHeader.Authorization) {
-        throw "Graph authentication header is missing. Call Connect-AutoMSIntuneGraph before using Invoke-YardstickGraphRequest."
-    }
-
-    $headers = @{
-        Authorization  = $Global:AuthenticationHeader.Authorization
-        'Content-Type' = 'application/json'
-    }
-
-    $uri = "https://graph.microsoft.com/$ApiVersion/$($Resource.TrimStart('/'))"
-    $params = @{
-        Uri         = $uri
-        Headers     = $headers
-        Method      = $Method
-        ErrorAction = 'Stop'
-    }
-    if ($null -ne $Body) {
-        $params['Body'] = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 10 }
-    }
-
-    $response = Invoke-RestMethod @params
-
-    # Unwrap OData collections and follow paging so callers always get a flat array.
-    if ($null -ne $response -and $response.PSObject.Properties['value']) {
-        $results = [System.Collections.Generic.List[object]]::new()
-        foreach ($item in $response.value) { $results.Add($item) | Out-Null }
-        $next = $response.'@odata.nextLink'
-        while ($next) {
-            $page = Invoke-RestMethod -Uri $next -Headers $headers -Method Get -ErrorAction Stop
-            foreach ($item in $page.value) { $results.Add($item) | Out-Null }
-            $next = $page.'@odata.nextLink'
-        }
-        return $results.ToArray()
-    }
-    return $response
-}
 
 
 function Test-IsVersionDetection {
@@ -2052,7 +1875,7 @@ function Get-DetectAnchor {
         [string]$DisplayName
     )
     $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
-    $candidates = Get-IntuneWin32App -DisplayName $anchorName -ErrorAction SilentlyContinue
+    $candidates = Get-YardstickWin32App -DisplayName $anchorName -ErrorAction SilentlyContinue
     if (-not $candidates) { return $null }
     return ($candidates | Where-Object DisplayName -eq $anchorName | Select-Object -First 1)
 }
@@ -2089,7 +1912,7 @@ function Set-DetectAnchor {
         return
     }
     Write-Log "Pinning $($App.DisplayName) ($($App.Id)) as Ω DETECT - anchor for $DisplayName"
-    Set-IntuneWin32App -Id $App.Id -DisplayName $anchorName | Out-Null
+    Set-YardstickWin32App -Id $App.Id -DisplayName $anchorName | Out-Null
 }
 
 
@@ -2196,7 +2019,7 @@ function Remove-SupersedenceReference {
     $remaining = @($forward | Where-Object targetId -ne $TargetId)
     if ($remaining.Count -eq 0) {
         Write-Log "Clearing supersedence on $ParentId (was its only target: $TargetId)"
-        Remove-IntuneWin32AppSupersedence -ID $ParentId | Out-Null
+        Remove-YardstickWin32AppSupersedence -ID $ParentId | Out-Null
         return
     }
 
@@ -2206,7 +2029,7 @@ function Remove-SupersedenceReference {
         return
     }
     Write-Log "Rebuilding supersedence on $ParentId without target $TargetId ($($rebuilt.Count) remaining)"
-    Add-IntuneWin32AppSupersedence -ID $ParentId -Supersedence $rebuilt | Out-Null
+    Add-YardstickWin32AppSupersedence -ID $ParentId -Supersedence $rebuilt | Out-Null
 }
 
 
@@ -2214,7 +2037,7 @@ function ConvertTo-DependencyType {
     <#
     .SYNOPSIS
     Maps a dependencyType off a Graph relationship onto the casing
-    New-IntuneWin32AppDependency validates.
+    New-YardstickWin32AppDependency validates.
 
     .DESCRIPTION
     Graph hands the type back lowercase ("autoinstall"), and the cmdlet's
@@ -2244,7 +2067,7 @@ function Remove-DependencyReference {
 
     .DESCRIPTION
     The dependency mirror of Remove-SupersedenceReference. Intune has no "delete
-    one relationship" operation for Win32 apps - Add-IntuneWin32AppDependency
+    one relationship" operation for Win32 apps - Add-YardstickWin32AppDependency
     replaces the whole dependency set (preserving supersedence) - so this rebuilds
     the parent's child dependency list without $TargetId and re-submits it.
 
@@ -2261,7 +2084,7 @@ function Remove-DependencyReference {
 
     # A parent's own dependency list is its child entries; entries flagged
     # "parent" describe apps that depend on it and are not ours to rewrite.
-    $children = @(Get-IntuneWin32AppDependency -ID $ParentId |
+    $children = @(Get-YardstickWin32AppDependency -ID $ParentId |
         Where-Object { ($_.targetType -eq "child") -or (-not $_.targetType) })
     if (-not ($children | Where-Object targetId -eq $TargetId)) {
         return
@@ -2270,13 +2093,13 @@ function Remove-DependencyReference {
     $remaining = @($children | Where-Object targetId -ne $TargetId)
     if ($remaining.Count -eq 0) {
         Write-Log "Clearing dependencies on $ParentId (was its only target: $TargetId)"
-        Remove-IntuneWin32AppDependency -ID $ParentId | Out-Null
+        Remove-YardstickWin32AppDependency -ID $ParentId | Out-Null
         return
     }
 
     $rebuilt = @()
     foreach ($entry in $remaining) {
-        $dependencyObject = New-IntuneWin32AppDependency -ID $entry.targetId `
+        $dependencyObject = New-YardstickWin32AppDependency -ID $entry.targetId `
             -DependencyType (ConvertTo-DependencyType $entry.dependencyType)
         if ($dependencyObject) {
             $rebuilt += $dependencyObject
@@ -2291,25 +2114,25 @@ function Remove-DependencyReference {
         # the caller needs $TargetId detached and the leftovers point at apps
         # Intune can no longer find.
         Write-Log "Clearing dependencies on $ParentId - none of the $($remaining.Count) remaining target(s) could be rebuilt"
-        Remove-IntuneWin32AppDependency -ID $ParentId | Out-Null
+        Remove-YardstickWin32AppDependency -ID $ParentId | Out-Null
         return
     }
 
     Write-Log "Rebuilding dependencies on $ParentId without target $TargetId ($($rebuilt.Count) remaining)"
-    Add-IntuneWin32AppDependency -ID $ParentId -Dependency $rebuilt | Out-Null
+    Add-YardstickWin32AppDependency -ID $ParentId -Dependency $rebuilt | Out-Null
 }
 
 
 function New-SupersedenceObject {
     <#
     .SYNOPSIS
-    Builds the OrderedDictionary array that Add-IntuneWin32AppSupersedence expects.
+    Builds the OrderedDictionary array that Add-YardstickWin32AppSupersedence expects.
 
     .DESCRIPTION
     Accepts either existing relationship objects (which carry targetId +
     supersedenceType) or an explicit target id / type pair. Any entry that cannot
     be resolved is dropped rather than passed through as $null, because
-    Add-IntuneWin32AppSupersedence declares [OrderedDictionary[]] with
+    Add-YardstickWin32AppSupersedence declares [OrderedDictionary[]] with
     ValidateNotNullOrEmpty and would otherwise fail the whole batch.
     #>
     [CmdletBinding(DefaultParameterSetName = 'Relationships')]
@@ -2330,7 +2153,7 @@ function New-SupersedenceObject {
 
     $pairs = if ($PSCmdlet.ParameterSetName -eq 'Relationships') {
         foreach ($relationship in $Relationships) {
-            # supersedenceType comes back lowercase from Graph; New-IntuneWin32AppSupersedence validates Update/Replace.
+            # supersedenceType comes back lowercase from Graph; New-YardstickWin32AppSupersedence validates Update/Replace.
             $resolved = if ($relationship.supersedenceType -eq 'replace') { 'Replace' } else { 'Update' }
             [PSCustomObject]@{ TargetId = $relationship.targetId; Type = $resolved }
         }
@@ -2343,7 +2166,7 @@ function New-SupersedenceObject {
     $built = [System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]]::new()
     foreach ($pair in $pairs) {
         if (-not $pair.TargetId) { continue }
-        $object = New-IntuneWin32AppSupersedence -ID $pair.TargetId -SupersedenceType $pair.Type
+        $object = New-YardstickWin32AppSupersedence -ID $pair.TargetId -SupersedenceType $pair.Type
         if ($object) {
             $built.Add([System.Collections.Specialized.OrderedDictionary]$object) | Out-Null
         } else {
@@ -2395,7 +2218,7 @@ function Set-YardstickSupersedence {
     if ($targets.Count -eq 0) {
         Write-Log "No supersedence targets for $($NewApp.DisplayName) - clearing any stale links"
         if (@(Get-YardstickSupersedenceRelationship -Id $NewApp.id -Direction Forward).Count -gt 0) {
-            Remove-IntuneWin32AppSupersedence -ID $NewApp.id | Out-Null
+            Remove-YardstickWin32AppSupersedence -ID $NewApp.id | Out-Null
         }
         return 0
     }
@@ -2422,7 +2245,7 @@ function Set-YardstickSupersedence {
         try {
             if (@(Get-YardstickSupersedenceRelationship -Id $target.id -Direction Forward).Count -gt 0) {
                 Write-Log "Clearing stale supersedence on $($target.DisplayName) ($($target.id))"
-                Remove-IntuneWin32AppSupersedence -ID $target.id | Out-Null
+                Remove-YardstickWin32AppSupersedence -ID $target.id | Out-Null
             }
         } catch {
             Write-Log "WARNING: Failed to clear existing supersedence on $($target.DisplayName) ($($target.id)): $_"
@@ -2442,9 +2265,9 @@ function Set-YardstickSupersedence {
     }
 
     Write-Log "Attaching supersedence ($Type) from $($NewApp.DisplayName) to $($supersedence.Count) target(s)"
-    # Add-IntuneWin32AppSupersedence replaces the parent's whole supersedence set,
+    # Add-YardstickWin32AppSupersedence replaces the parent's whole supersedence set,
     # so there is no need to clear it first.
-    Add-IntuneWin32AppSupersedence -ID $NewApp.id -Supersedence $supersedence.ToArray() | Out-Null
+    Add-YardstickWin32AppSupersedence -ID $NewApp.id -Supersedence $supersedence.ToArray() | Out-Null
 
     # The cmdlet downgrades Graph failures to warnings, so read the graph back and
     # report what Intune actually stored rather than what we asked for.
@@ -2469,7 +2292,7 @@ function Set-AssignmentAutoUpdate {
     filter is 'available' and required assignments are left alone.
 
     Assignments are read straight from Graph rather than via
-    Get-IntuneWin32AppAssignment because that cmdlet does not surface the assignment
+    Get-YardstickWin32AppAssignment because that cmdlet does not surface the assignment
     id, which is required to PATCH an individual assignment.
 
     .PARAMETER SkipGroupIds
@@ -2564,7 +2387,7 @@ function Clear-YardstickAppLink {
 
     .DESCRIPTION
     Intune refuses to delete an app that still participates in a relationship, and
-    Remove-IntuneWin32App downgrades that refusal to a warning - so a prune used to
+    Remove-YardstickWin32App downgrades that refusal to a warning - so a prune used to
     fail with no indication of which link was responsible. This strips all of them,
     in the order that leaves the app least exposed if a later step fails:
 
@@ -2576,13 +2399,13 @@ function Clear-YardstickAppLink {
       5. Supersedence, forward      - apps this one supersedes
 
     Individual assignments are deleted through Graph by assignment id. The
-    IntuneWin32App module can only remove assignments by target, which takes out
+    Yardstick Intune module can only remove assignments by target, which takes out
     every assignment sharing that target - see the note in
     Move-AssignmentsAndDependencies. They are all going anyway, but by-id keeps the
     log honest about what was actually removed.
 
     Assignments are read straight from Graph rather than via
-    Get-IntuneWin32AppAssignment, which returns $null for an app holding exactly one
+    Get-YardstickWin32AppAssignment, which returns $null for an app holding exactly one
     assignment under Windows PowerShell 5.1 (see the note in
     Move-AssignmentsAndDependencies) and does not surface the assignment id anyway.
 
@@ -2613,7 +2436,7 @@ function Clear-YardstickAppLink {
     $appId = $App.id
     $label = if ($App.DisplayName) { "$($App.DisplayName) ($appId)" } else { $appId }
 
-    # Every IntuneWin32App cmdlet can bail out of its Begin block with a bare
+    # Every YardstickWin32App cmdlet can bail out of its Begin block with a bare
     # `break` (expired token, most often) rather than throwing. A bare break is not
     # catchable and unwinds to the caller's nearest enclosing loop - see the long
     # note in Move-AssignmentsAndDependencies. One escaping from here would skip
@@ -2645,12 +2468,12 @@ function Clear-YardstickAppLink {
         Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$appId/assignments"
     }
     $dependentQuery = {
-        Get-IntuneWin32AppDependency -ID $appId |
+        Get-YardstickWin32AppDependency -ID $appId |
             Where-Object targetType -eq "parent" |
             Select-Object -ExpandProperty targetId -Unique
     }
     $dependencyQuery = {
-        Get-IntuneWin32AppDependency -ID $appId |
+        Get-YardstickWin32AppDependency -ID $appId |
             Where-Object { ($_.targetType -eq "child") -or (-not $_.targetType) } |
             Select-Object -ExpandProperty targetId -Unique
     }
@@ -2690,7 +2513,7 @@ function Clear-YardstickAppLink {
                 Remove-DependencyReference -ParentId $currentDependentId -TargetId $appId
                 $true
             } -VerifyBlock {
-                -not @(Get-IntuneWin32AppDependency -ID $currentDependentId |
+                -not @(Get-YardstickWin32AppDependency -ID $currentDependentId |
                     Where-Object { (($_.targetType -eq "child") -or (-not $_.targetType)) -and ($_.targetId -eq $appId) })
             }
         if ($detached) {
@@ -2703,7 +2526,7 @@ function Clear-YardstickAppLink {
     if ($dependencyIds.Count -gt 0) {
         $cleared = Invoke-WithRetry -Label "Clear $($dependencyIds.Count) dependency(ies) from $label" `
             -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
-                Remove-IntuneWin32AppDependency -ID $appId | Out-Null
+                Remove-YardstickWin32AppDependency -ID $appId | Out-Null
                 $true
             } -VerifyBlock {
                 $recheck = & $readLinks "dependencies" $dependencyQuery
@@ -2752,7 +2575,7 @@ function Clear-YardstickAppLink {
     if ($hasForwardLinks) {
         Invoke-WithRetry -Label "Strip supersedence from $label" `
             -MaxRetries 3 -DelaySeconds $RetryDelaySeconds -ScriptBlock {
-                Remove-IntuneWin32AppSupersedence -ID $appId | Out-Null
+                Remove-YardstickWin32AppSupersedence -ID $appId | Out-Null
                 $true
             } | Out-Null
     }
@@ -2821,14 +2644,14 @@ function Remove-YardstickApp {
     }
 
     Write-Log "Removing app $($App.DisplayName) ($($App.id))"
-    Remove-IntuneWin32App -Id $App.id
+    Remove-YardstickWin32App -Id $App.id
 
-    # Remove-IntuneWin32App downgrades Graph failures (including Intune's refusal
+    # Remove-YardstickWin32App downgrades Graph failures (including Intune's refusal
     # to delete an app that is still in a relationship) to a warning, so confirm
     # the app is really gone. Callers rely on this throwing to know a prune failed.
     $stillPresent = $null
     try {
-        $stillPresent = Get-IntuneWin32App -Id $App.id -ErrorAction SilentlyContinue
+        $stillPresent = Get-YardstickWin32App -Id $App.id -ErrorAction SilentlyContinue
     } catch {
         $stillPresent = $null
     }
