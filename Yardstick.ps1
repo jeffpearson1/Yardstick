@@ -114,7 +114,9 @@ $ErrorActionPreference = 'Stop'
 $Global:LogLocation = "$PSScriptRoot"
 $Global:LogFile = "YLog.log"
 
-# Import core modules first (needed for Write-Log and Test-Prerequisites)
+# Import Yardstick's Graph and Intune layers before the support functions that consume them
+Import-Module ${PSScriptRoot}\Modules\YardstickGraph.psm1 -Scope Global -Force
+Import-Module ${PSScriptRoot}\Modules\YardstickIntune.psm1 -Scope Global -Force
 Import-Module ${PSScriptRoot}\Modules\YardstickSupport.psm1 -Scope Global -Force
 Import-Module ${PSScriptRoot}\Modules\YardstickCredential.psm1 -Scope Global -Force
 
@@ -226,7 +228,6 @@ public enum SeBySelect {
 
 # Import external modules (after Selenium compat types are in the AppDomain)
 Import-Module powershell-yaml -Scope Local
-Import-Module IntuneWin32App -Scope Local
 Import-Module Selenium -Scope Global -ErrorAction SilentlyContinue
 Import-Module TUN.CredentialManager -Scope Local -ErrorAction SilentlyContinue
 
@@ -339,7 +340,7 @@ function Invoke-YardstickAppMaintenance {
     )
 
     # Refresh the version list from Intune (retry in case a new upload has not
-    # yet propagated to Get-IntuneWin32App list results).
+    # yet propagated to Get-YardstickWin32App list results).
     Write-Log "Updating local application manifest..."
     if ($NewAppId) { Start-Sleep -Seconds 4 }
     try {
@@ -355,7 +356,7 @@ function Invoke-YardstickAppMaintenance {
             # uploaded app with no assignments and no supersedence, and the next
             # run would consider the version already published and skip it.
             Write-Log "Newly created app still missing from the list. Fetching it directly by id."
-            $DirectApp = Get-IntuneWin32App -Id $NewAppId -ErrorAction Stop
+            $DirectApp = Get-YardstickWin32App -Id $NewAppId -ErrorAction Stop
             if (-not $DirectApp) {
                 throw "Intune returned no application for id $NewAppId"
             }
@@ -488,7 +489,7 @@ function Invoke-YardstickAppMaintenance {
         $targetName = "$($Script:DisplayName) (N-$($i + 1))"
         if ($ToKeep[$i].DisplayName -ne $targetName) {
             try {
-                Set-IntuneWin32App -Id $ToKeep[$i].Id -DisplayName $targetName | Out-Null
+                Set-YardstickWin32App -Id $ToKeep[$i].Id -DisplayName $targetName | Out-Null
                 Write-Log "Renamed $($ToKeep[$i].DisplayName) -> $targetName"
                 $renamedCount++
             } catch {
@@ -537,13 +538,13 @@ function Invoke-YardstickAppMaintenance {
     #    no deletion to unblock - the anchor is never pruned, so a dependent app
     #    pointing at it is not holding anything hostage. And its child dependency
     #    set is frozen at whatever the recipe declared when it was pinned;
-    #    Add-IntuneWin32AppDependency replaces the target's whole set from a merged
+    #    Add-YardstickWin32AppDependency replaces the target's whole set from a merged
     #    list, so migrating it would re-merge that stale set onto the current app on
     #    every run, resurrecting dependencies the recipe has since dropped.
     $allOlder = @($ToKeep) + @($ToPrune)
     # $Anchor can be the raw pre-rename candidate (see step 1) when Intune's lookup
     # is still stale. Only .id and .DisplayName are read, and both objects come from
-    # Get-IntuneWin32App, so the shapes are interchangeable. The id guard is cheap
+    # Get-YardstickWin32App, so the shapes are interchangeable. The id guard is cheap
     # insurance: From -eq To would add the assignment, read it back as present, then
     # delete it off the app it was just confirmed on.
     if ($Anchor -and ($Anchor.id -ne $CurrentApp.id)) { $allOlder += $Anchor }
@@ -592,7 +593,7 @@ function Invoke-YardstickAppMaintenance {
         foreach ($DeploymentGroupID in $Script:DefaultDeploymentGroups) {
             if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
                 Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
-                Add-IntuneWin32AppAssignmentGroup -Include -ID $ID -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
+                Add-YardstickWin32AppAssignmentGroup -Include -ID $ID -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
             }
         }
     }
@@ -1029,42 +1030,42 @@ function New-DetectionRule {
         "file" {
             switch ($Script:FileDetectionMethod) {
                 "exists" {
-                    return New-IntuneWin32AppDetectionRuleFile -Existence -DetectionType "exists" -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName
+                    return New-YardstickWin32AppDetectionRuleFile -Existence -DetectionType "exists" -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName
                 }
                 "modified" {
-                    return New-IntuneWin32AppDetectionRuleFile -DateModified -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -DateTimeValue $Script:FileDetectionDateTime
+                    return New-YardstickWin32AppDetectionRuleFile -DateModified -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -DateTimeValue $Script:FileDetectionDateTime
                 }
                 "created" {
-                    return New-IntuneWin32AppDetectionRuleFile -DateCreated -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -DateTimeValue (Get-Date $Script:FileDetectionDateTime)
+                    return New-YardstickWin32AppDetectionRuleFile -DateCreated -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -DateTimeValue (Get-Date $Script:FileDetectionDateTime)
                 }
                 "version" {
-                    return New-IntuneWin32AppDetectionRuleFile -Version -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -VersionValue $Script:FileDetectionVersion
+                    return New-YardstickWin32AppDetectionRuleFile -Version -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -VersionValue $Script:FileDetectionVersion
                 }
                 "size" {
-                    return New-IntuneWin32AppDetectionRuleFile -Size -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -SizeinMBValue $Script:FileDetectionValue
+                    return New-YardstickWin32AppDetectionRuleFile -Size -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -SizeinMBValue $Script:FileDetectionValue
                 }
             }
         }
         "msi" {
-            return New-IntuneWin32AppDetectionRuleMsi -ProductCode $ProductCode -ProductVersion $Script:FileDetectionVersion
+            return New-YardstickWin32AppDetectionRuleMsi -ProductCode $ProductCode -ProductVersion $Script:FileDetectionVersion
         }
         "registry" {
             switch ($Script:RegistryDetectionMethod) {
                 "exists" {
                     if ($Script:RegistryDetectionValue) {
-                        return New-IntuneWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -DetectionType "exists"
+                        return New-YardstickWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -DetectionType "exists"
                     } else {
-                        return New-IntuneWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:RegistryDetectionKey -DetectionType "exists"
+                        return New-YardstickWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:RegistryDetectionKey -DetectionType "exists"
                     }
                 }
                 "version" {
-                    return New-IntuneWin32AppDetectionRuleRegistry -VersionComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -VersionComparisonOperator $Script:RegistryDetectionOperator -VersionComparisonValue $Script:RegistryDetectionValue
+                    return New-YardstickWin32AppDetectionRuleRegistry -VersionComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -VersionComparisonOperator $Script:RegistryDetectionOperator -VersionComparisonValue $Script:RegistryDetectionValue
                 }
                 "integer" {
-                    return New-IntuneWin32AppDetectionRuleRegistry -IntegerComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -IntegerComparisonOperator $Script:RegistryDetectionOperator -IntegerComparisonValue $Script:RegistryDetectionValue
+                    return New-YardstickWin32AppDetectionRuleRegistry -IntegerComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -IntegerComparisonOperator $Script:RegistryDetectionOperator -IntegerComparisonValue $Script:RegistryDetectionValue
                 }
                 "string" {
-                    return New-IntuneWin32AppDetectionRuleRegistry -StringComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -StringComparisonOperator $Script:RegistryDetectionOperator -StringComparisonValue $Script:RegistryDetectionValue
+                    return New-YardstickWin32AppDetectionRuleRegistry -StringComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -StringComparisonOperator $Script:RegistryDetectionOperator -StringComparisonValue $Script:RegistryDetectionValue
                 }
             }
         }
@@ -1074,7 +1075,7 @@ function New-DetectionRule {
             }
             $ScriptLocation = "$($Script:Scripts)\$($Script:Id)\$($Script:Version).$($Script:DetectionScriptFileExtension)"
             Set-Content -Path $ScriptLocation -Value $Script:DetectionScript -Force
-            $DetRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $Script:DetectionScriptEnforceSignatureCheck -RunAs32Bit $Script:DetectionScriptRunAs32Bit
+            $DetRule = New-YardstickWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $Script:DetectionScriptEnforceSignatureCheck -RunAs32Bit $Script:DetectionScriptRunAs32Bit
             return $DetRule
         }
     }
@@ -1131,7 +1132,7 @@ $RunParameters = $RunParametersArray -join " "
 # Authenticate up front so a bad or expired secret fails before any packaging work,
 # then check how much life the secret has left.
 try {
-    Connect-AutoMSIntuneGraph
+    Connect-YardstickGraph
     $Script:IntuneCredential = Update-YardstickSecretExpiration -Credential $Script:IntuneCredential
 } catch {
     Write-Log "ERROR: Unable to authenticate to Microsoft Graph: $_"
@@ -1150,7 +1151,7 @@ foreach ($AppId_Processing in $Applications) {
     
     try {
         # Refresh token if necessary
-        Connect-AutoMSIntuneGraph
+        Connect-YardstickGraph
         
         # Clear the temp file
         Write-Log "Clearing the temp directory..."
@@ -1211,7 +1212,7 @@ foreach ($AppId_Processing in $Applications) {
             for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
                 if ($CurrentApps[$i].DisplayName -ne "$($Script:DisplayName) (N-$i)") {
                     Write-Log "Setting name for $($Script:DisplayName) (N-$i)"
-                    Set-IntuneWin32App -Id $CurrentApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)"
+                    Set-YardstickWin32App -Id $CurrentApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)"
                 }
             }
         }
@@ -1436,7 +1437,7 @@ foreach ($AppId_Processing in $Applications) {
         # Generate the .intunewin file
         Set-Location $PSScriptRoot
         Write-Log "Generating .intunewin file..."
-        $App = New-IntuneWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force
+        $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force
 
         # Upload .intunewin file to Intune
         # Detection Types
@@ -1445,7 +1446,7 @@ foreach ($AppId_Processing in $Applications) {
             Write-Error "Icon file $($Script:IconFile) not found in Icons folder."
             continue
         }
-        $Icon = New-IntuneWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
+        $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
         if (-not $Script:FileDetectionVersion) {
             $Script:FileDetectionVersion = $Script:Version
         }
@@ -1453,23 +1454,23 @@ foreach ($AppId_Processing in $Applications) {
         $DetectionRule = New-DetectionRule -DetectionType $Script:DetectionType -ProductCode $ProductCode
 
         # Generate the min OS requirement rule
-        $RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $Script:Architecture -MinimumSupportedWindowsRelease $Script:MinOSVersion
+        $RequirementRule = New-YardstickWin32AppRequirementRule -Architecture $Script:Architecture -MinimumSupportedWindowsRelease $Script:MinOSVersion
 
         # Create the Intune App
         Write-Log "Uploading $Script:DisplayName to Intune..."
-        Connect-AutoMSIntuneGraph
+        Connect-YardstickGraph
         try {
             if ($Script:AllowUserUninstall) {
-                $Win32App = Add-IntuneWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes -AllowAvailableUninstall
+                $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes -AllowAvailableUninstall
             } else {
-                $Win32App = Add-IntuneWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
+                $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
             }
             Write-Log "Successfully uploaded $Script:DisplayName to Intune"
             Write-Log "Waiting for Intune to process the uploaded application..."
             $PublishTimeout = (Get-Date).AddMinutes(30)
             do {
                 Start-Sleep -Seconds 15
-                $LiveWin32App = Get-IntuneWin32App -Id $Win32App.id
+                $LiveWin32App = Get-YardstickWin32App -Id $Win32App.id
                 if ((Get-Date) -gt $PublishTimeout) {
                     throw "Timed out waiting for Intune to publish $Script:DisplayName after 30 minutes (state: $($LiveWin32App.publishingState))"
                 }
@@ -1484,7 +1485,7 @@ foreach ($AppId_Processing in $Applications) {
         # Hand the .intunewin off to a background thread that copies it to the
         # backup share and then deletes the local copy. Staging it out of
         # $Published first is what stops the next app's
-        # New-IntuneWin32AppPackage -Force (which names its output from the setup
+        # New-YardstickWin32AppPackage -Force (which names its output from the setup
         # file, so two recipes can collide) from clobbering a file the thread is
         # still reading. Nothing in here may throw - a bad backup share must not
         # turn a successful upload into a failed application.

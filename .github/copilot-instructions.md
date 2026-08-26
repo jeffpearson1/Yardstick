@@ -1,12 +1,11 @@
 # Yardstick Copilot Instructions
 
 ## Architecture & Flow
-- Primary orchestration lives in [Yardstick.ps1](Yardstick.ps1); it imports IntuneWin32App, Selenium, and local support modules, builds an application list via `-ApplicationId`, `-Group`, or `-All`, and loops each recipe through download → packaging → Intune upload.
-- `Connect-AutoMSIntuneGraph` in [Modules/YardstickSupport.psm1](Modules/YardstickSupport.psm1) auto-refreshes Graph tokens; call it before any Intune cmdlets instead of duplicating auth logic.
+- Primary orchestration lives in [Yardstick.ps1](Yardstick.ps1); it imports the local Graph, Intune, credential, and support modules, builds an application list via `-ApplicationId`, `-Group`, or `-All`, and loops each recipe through download → packaging → Intune upload.
+- [Modules/YardstickGraph.psm1](Modules/YardstickGraph.psm1) owns OAuth client-credential tokens, refresh, retries, and OData paging. Call `Connect-YardstickGraph` before Intune operations.
 - Intune app-registration credentials live in Windows Credential Manager, not `preferences.yaml`. [Modules/YardstickCredential.psm1](Modules/YardstickCredential.psm1) owns storage (advapi32 P/Invoke, no external module), interactive setup, and client-secret expiration checks; call `Initialize-YardstickIntuneCredential -Preferences $Prefs` to populate `$Global:TenantID/ClientID/ClientSecret` rather than reading prefs directly. [Set-YardstickCredential.ps1](Set-YardstickCredential.ps1) is the operator-facing entry point.
 - Global folders (`BuildSpace`, `Scripts`, `Published`, `Temp`, etc.) are injected from [preferences.yaml](preferences.yaml); never hardcode paths because CI users relocate the repo.
 - Interactive recipes are isolated under `Recipes/Interactive`; respect the `-NoInteractive` flag so unattended runs stay headless.
-- This project uses a custom fork of [IntuneWin32App](https://github.com/jeffpearson1/IntuneWin32App) with a number of improvements including expanded Windows 11 version support, fixing "none" architecture handling and replacing errant uses of Write-Warning with Write-Error among other things.
 
 ## Configuration & Recipes
 - Copy [Preferences.example.yaml](Preferences.example.yaml) to `preferences.yaml` and fill folder roots; defaults (scope tags, deployment groups, install behavior) are merged by `Set-ScriptVariables`. Tenant/Client credentials do **not** go in this file.

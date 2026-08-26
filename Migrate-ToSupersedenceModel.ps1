@@ -61,7 +61,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 Import-Module powershell-yaml -Force
-Import-Module IntuneWin32App -Force
+Import-Module "$PSScriptRoot\Modules\YardstickGraph.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickIntune.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
 
@@ -75,7 +76,7 @@ $Recipes = $Prefs.Recipes
 Initialize-YardstickIntuneCredential -Preferences $Prefs | Out-Null
 
 # Auth
-Connect-AutoMSIntuneGraph -Force
+Connect-YardstickGraph -Force
 
 # Enumerate recipes
 $recipeFiles = Get-ChildItem $Recipes -Recurse -File -Include *.yaml,*.yml |
@@ -227,7 +228,7 @@ foreach ($file in $recipeFiles) {
         foreach ($old in $requiredSources) {
             # Dependencies are skipped for the anchor: it is never deleted, so no
             # dependent link needs unblocking, and its child set is frozen at pin
-            # time - Add-IntuneWin32AppDependency replaces the target's whole set
+            # time - Add-YardstickWin32AppDependency replaces the target's whole set
             # from a merged list, so migrating it would resurrect stale entries on
             # the newest app on every run.
             $isAnchor = $anchor -and ($old.id -eq $anchor.id)
