@@ -11,7 +11,7 @@ preDownloadScript: |
   $version = $version.Split(' ')[0]
   $fileDetectionVersion = Format-FileDetectionVersion $version
 downloadScript: |
-  Move-Item -LiteralPath (Join-Path $Temp $fileName) -Destination (Join-Path $buildDirectory $fileName)
+  Move-Item -LiteralPath (Join-Path $Temp $fileName) -Destination (Join-Path "$BuildSpace\$id\$version" $fileName)
 fileName: NVivo.x64.exe
 installScript: <filename> /s /v"/qn /norestart"
 powerShellUninstallScript: |

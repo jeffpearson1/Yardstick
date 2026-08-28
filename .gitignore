@@ -43,3 +43,9 @@
 
 # Exclude the notification sound
 /notificationSound.wav
+
+
+# Exclude any dev files
+node_modules
+.codex*
+.codex-triage/*
