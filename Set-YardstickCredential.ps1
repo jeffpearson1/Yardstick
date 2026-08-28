@@ -56,6 +56,8 @@ $Global:LogLocation = $PSScriptRoot
 $Global:LogFile = 'YLog.log'
 
 Import-Module powershell-yaml -ErrorAction Stop
+Import-Module "$PSScriptRoot\Modules\YardstickGraph.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickIntune.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
 
@@ -92,8 +94,7 @@ switch ($PSCmdlet.ParameterSetName) {
 
     'Refresh' {
         $credential = Initialize-YardstickIntuneCredential -Preferences $Prefs
-        Import-Module IntuneWin32App -ErrorAction Stop
-        Connect-AutoMSIntuneGraph -Force
+        Connect-YardstickGraph -Force
         $credential = Update-YardstickSecretExpiration -Credential $credential
         Test-YardstickSecretExpiration -Credential $credential -Preferences $Prefs -NoEmail | Format-List
     }
@@ -102,11 +103,10 @@ switch ($PSCmdlet.ParameterSetName) {
         $credential = Register-YardstickIntuneCredential -Target $Target
         Write-Host "Credentials stored. Validating against Microsoft Graph..." -ForegroundColor Cyan
         try {
-            Import-Module IntuneWin32App -ErrorAction Stop
-            $Global:TenantID = $credential.TenantID
+                $Global:TenantID = $credential.TenantID
             $Global:ClientID = $credential.ClientID
             $Global:ClientSecret = $credential.ClientSecret
-            Connect-AutoMSIntuneGraph -Force
+            Connect-YardstickGraph -Force
             Write-Host "Authentication succeeded." -ForegroundColor Green
             $credential = Update-YardstickSecretExpiration -Credential $credential
             Test-YardstickSecretExpiration -Credential $credential -Preferences $Prefs -NoEmail | Out-Null
