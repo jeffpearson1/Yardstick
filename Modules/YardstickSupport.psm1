@@ -3,6 +3,13 @@ using module .\VersionPro.psm1
 Import-Module $PSScriptRoot\YardstickGraph.psm1 -Scope Global -Force
 Import-Module $PSScriptRoot\YardstickIntune.psm1 -Scope Global -Force
 
+function Write-YardstickHost {
+    # A console that a child process left in a bad state makes Write-Host throw a
+    # HostException. Losing the echo is acceptable; losing the run is not.
+    param([string]$Message)
+    try { Write-Host $Message } catch { }
+}
+
 function Write-Log {
     <#
     .SYNOPSIS
@@ -24,9 +31,9 @@ function Write-Log {
     )
     
     if (-not $LogLocation -or -not $LogFile) {
-        Write-Warning "LogLocation or LogFile variables are not set. Cannot write to log."
+        Write-YardstickHost "WARNING: LogLocation or LogFile variables are not set. Cannot write to log."
         if ($Content) {
-            Write-Host "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
+            Write-YardstickHost "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
         return
     }
@@ -44,12 +51,12 @@ function Write-Log {
         if ($Content) {
             $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
             Write-Output $Content | Out-File $LogFile -Append
-            Write-Host $Content
+            Write-YardstickHost $Content
         }
     } catch {
-        Write-Warning "Failed to write to log file: $_"
+        Write-YardstickHost "WARNING: Failed to write to log file: $_"
         if ($Content) {
-            Write-Host "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
+            Write-YardstickHost "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
         }
     } finally {
         Pop-Location -ErrorAction SilentlyContinue
@@ -192,14 +199,17 @@ function Get-RedirectedUrl {
     
     $userAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::Chrome
     $httpClient = $null
+    $Response = $null
     
     try {
         $httpClient = [System.Net.Http.HttpClient]::new()
         $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($userAgent)
 
-        # Get the redirected url object
-        $Response = $httpClient.GetAsync($URL).GetAwaiter().GetResult()
-        if ($Response.StatusCode -eq "OK") {
+        # ResponseHeadersRead stops once the final response headers arrive. Without it
+        # HttpClient buffers the entire installer body just to read the resolved URI,
+        # which blows past the 100 second timeout on large downloads.
+        $Response = $httpClient.GetAsync($URL, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        if ($Response.IsSuccessStatusCode) {
             $RedirectedURL = $Response.RequestMessage.RequestUri.AbsoluteUri
         } else {
             throw "HTTP request failed with status: $($Response.StatusCode)"
@@ -209,6 +219,9 @@ function Get-RedirectedUrl {
         Write-Error "Error getting redirected URL for '$URL': $_"
         throw 
     } finally {
+        if ($Response) {
+            $Response.Dispose()
+        }
         if ($httpClient) {
             $httpClient.Dispose()
         }

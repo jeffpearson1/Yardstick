@@ -547,7 +547,9 @@ function New-YardstickWin32AppPackage {
         return [pscustomobject]@{ Name = [io.path]::GetFileName($packagePath); Path = $packagePath }
     }
     $arguments = @('-c', ('"{0}"' -f $SourceFolder), '-s', ('"{0}"' -f $SetupFile), '-o', ('"{0}"' -f $OutputFolder), '-q')
-    $process = Start-Process -FilePath $IntuneWinAppUtilPath -ArgumentList $arguments -Wait -PassThru -NoNewWindow
+    # Give the tool its own console. Shared via -NoNewWindow, its progress-bar cursor
+    # writes can leave our console handle unusable and every later Write-Host throws.
+    $process = Start-Process -FilePath $IntuneWinAppUtilPath -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) { throw "IntuneWinAppUtil.exe exited with code $($process.ExitCode)." }
     if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw "IntuneWinAppUtil.exe did not create the expected package: $packagePath" }
     return [pscustomobject]@{ Name = [io.path]::GetFileName($packagePath); Path = $packagePath }
