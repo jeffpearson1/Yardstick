@@ -1201,8 +1201,12 @@ function Move-AssignmentsAndDependencies {
     # to "MM/dd/yyyy" and parsing it back with Get-Date makes the result depend
     # on the host's culture, so on a dd/MM/yyyy host 08/04 silently becomes
     # 8 April and a day past the 12th throws outright.
-    $AvailableDate = (Get-Date).AddDays($AvailableDateOffset).Date
-    $DeadlineDate = (Get-Date).AddDays($DeadlineDateOffset).Date
+    #
+    # Kind Unspecified, not Local: these dates carry an install time's wall
+    # clock, and a Local kind invites a later ToUniversalTime() to shift it by
+    # the build host's offset.
+    $AvailableDate = [datetime]::SpecifyKind((Get-Date).AddDays($AvailableDateOffset).Date, [System.DateTimeKind]::Unspecified)
+    $DeadlineDate = [datetime]::SpecifyKind((Get-Date).AddDays($DeadlineDateOffset).Date, [System.DateTimeKind]::Unspecified)
     $childDependencies = @()
     $parentDependencies = @()
     if ($FromDependencies) {
@@ -1326,29 +1330,37 @@ function Move-AssignmentsAndDependencies {
                 $sourceStart = $Assignment.InstallTimeSettings.startDateTime
                 $sourceDeadline = $Assignment.InstallTimeSettings.deadlineDateTime
                 # Rebase onto the offset date, keeping the source time of day.
-                # Cast defensively: Graph hands these back as DateTime, but a
-                # string would make .Hour/.Minute silently unavailable.
+                # ConvertTo-YardstickWallClock reads the stored wall clock
+                # without shifting it: Graph hands these back as Kind Utc under
+                # PowerShell 7 and as a string under 5.1, and a bare [datetime]
+                # cast of the string moves it into the host's timezone, so the
+                # two disagree about what .Hour means.
                 if ($null -ne $sourceStart) {
-                    $sourceStart = [datetime]$sourceStart
+                    $sourceStart = ConvertTo-YardstickWallClock $sourceStart
                     $startDateTime = $AvailableDate.AddHours($sourceStart.Hour).AddMinutes($sourceStart.Minute)
                 }
                 if ($null -ne $sourceDeadline) {
-                    $sourceDeadline = [datetime]$sourceDeadline
+                    $sourceDeadline = ConvertTo-YardstickWallClock $sourceDeadline
                     $deadlineDateTime = $DeadlineDate.AddHours($sourceDeadline.Hour).AddMinutes($sourceDeadline.Minute)
                 }
 
-                # Add-YardstickWin32AppAssignmentGroup rejects a deadline that is
-                # already in the past unless an available time accompanies it -
-                # and it rejects it with `break`, which escapes our try/catch and
-                # kills the foreach, silently abandoning every assignment still
-                # to be migrated. Rebasing onto today (offset 0) puts any
-                # morning deadline in the past for an afternoon run, so nudge it
-                # forward. Intune treats a just-passed deadline the same way:
-                # install at the next check-in.
-                if (($null -ne $deadlineDateTime) -and ($null -eq $startDateTime) -and ($deadlineDateTime -lt (Get-Date))) {
-                    $adjustedDeadline = (Get-Date).AddMinutes(5)
-                    Write-Log "WARNING: Rebased deadline $deadlineDateTime for $assignmentLabel is in the past; moving it to $adjustedDeadline so the assignment is still accepted."
-                    $deadlineDateTime = $adjustedDeadline
+                # Intune rejects a deadline that is already in the past unless
+                # an available time accompanies it. Rebasing onto today (offset
+                # 0) puts any morning deadline in the past for an afternoon run,
+                # so nudge it forward. Intune treats a just-passed deadline the
+                # same way: install at the next check-in.
+                #
+                # Compare against the clock the value is written in, not always
+                # the local one: with useLocalTime false the wall clock is UTC,
+                # and measuring it against local time misjudges "past" by the
+                # host's offset in whichever direction the host sits.
+                if (($null -ne $deadlineDateTime) -and ($null -eq $startDateTime)) {
+                    $nowInDeadlineClock = if ($useLocalTime) { Get-Date } else { [datetime]::UtcNow }
+                    if ($deadlineDateTime -lt $nowInDeadlineClock) {
+                        $adjustedDeadline = [datetime]::SpecifyKind($nowInDeadlineClock.AddMinutes(5), [System.DateTimeKind]::Unspecified)
+                        Write-Log "WARNING: Rebased deadline $deadlineDateTime for $assignmentLabel is in the past; moving it to $adjustedDeadline so the assignment is still accepted."
+                        $deadlineDateTime = $adjustedDeadline
+                    }
                 }
 
                 Write-Log "Install time settings - UseLocalTime: $useLocalTime, StartDateTime: $startDateTime, DeadlineDateTime: $deadlineDateTime"
