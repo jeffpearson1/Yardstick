@@ -1411,6 +1411,65 @@ Describe "Move-AssignmentsAndDependencies install time settings" {
             $DeadlineTime -eq $expectedDeadline
         }
     }
+
+    It "keeps the source time of day when Graph reports it in UTC" {
+        # The other cases here build install times with [datetime]'...', which
+        # yields Kind Unspecified. Graph does not: under PowerShell 7 these come
+        # back from ConvertFrom-Json as Kind Utc, and grafting that hour onto a
+        # Local-kind date made a later ToUniversalTime() shift the deployment by
+        # the build host's offset - an 11:00 PM install moved 14 days forward
+        # arrived as 4:00 AM the next day on a UTC-5 host.
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-timed'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                InstallTimeSettings = ('{"useLocalTime":true,"startDateTime":"2026-08-25T23:00:00.0000000Z","deadlineDateTime":"2026-08-25T23:00:00.0000000Z"}' | ConvertFrom-Json)
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -AvailableDateOffset 14 -DeadlineDateOffset 14 -SkipDependencies
+        $expectedDate = (Get-Date).Date.AddDays(14)
+        Should -Invoke Add-YardstickWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            # 11:00 PM stays 11:00 PM, and the 14 days land on the date alone.
+            ($AvailableTime.Hour -eq 23) -and ($AvailableTime.Minute -eq 0) -and
+            ($AvailableTime.Date -eq $expectedDate) -and
+            ($DeadlineTime.Hour -eq 23) -and ($DeadlineTime.Date -eq $expectedDate) -and
+            # Kind must not be Local, or the write path converts it away again.
+            ($AvailableTime.Kind -eq [System.DateTimeKind]::Unspecified) -and
+            ($UseLocalTime -eq $true)
+        }
+    }
+
+    It "nudges a past deadline in the clock the deadline is written in" {
+        # useLocalTime false means the stored wall clock is UTC, so both the
+        # "has it passed?" test and the nudge that follows have to be in UTC.
+        # Nudging to local now + 5 minutes writes a UTC deadline holding a local
+        # wall clock, which on a UTC-5 host is five hours in the past - the
+        # assignment is then due the instant it lands.
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-timed'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                InstallTimeSettings = [PSCustomObject]@{
+                    useLocalTime = $false
+                    startDateTime = $null
+                    # Rebased onto today this is in the past on either clock, so
+                    # the nudge always fires and only its clock is under test.
+                    deadlineDateTime = [datetime]::SpecifyKind([datetime]'2020-03-05 00:01', [System.DateTimeKind]::Utc)
+                }
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -DeadlineDateOffset 0 -SkipDependencies
+        Should -Invoke Add-YardstickWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            # The value is written as UTC, so it has to be ahead of UTC now.
+            $DeadlineTime -gt [datetime]::UtcNow
+        }
+    }
 }
 
 Describe "Test-YardstickAssignmentPresent" {

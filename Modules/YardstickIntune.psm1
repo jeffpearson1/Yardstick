@@ -13,8 +13,68 @@ function Get-YardstickPropertyValue {
 }
 
 function ConvertTo-YardstickGraphDate {
-    param([Parameter(Mandatory)][datetime]$InputObject)
-    return $InputObject.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [cultureinfo]::InvariantCulture)
+    <#
+    .SYNOPSIS
+    Formats a DateTime for Graph, optionally converting it to UTC first.
+
+    .DESCRIPTION
+    Graph carries two different kinds of date in this module and they must not
+    be serialized the same way.
+
+    Detection rule dates (createdDate/modifiedDate) name a real instant, so the
+    host's offset is meaningful and -AsUtc converts before formatting.
+
+    Install time settings do not. Intune stores the literal wall clock an admin
+    typed into the portal and tacks a cosmetic Z onto it; when useLocalTime is
+    true the client reads it back in its own timezone, and when useLocalTime is
+    false it is already UTC. Either way the number is the answer and converting
+    it shifts the deployment by the build host's offset - which is how an
+    11:00 PM deployment moved 14 days forward came back as 4:00 AM the next day
+    on a UTC-5 host. Those callers leave -AsUtc off.
+
+    .PARAMETER AsUtc
+    Convert to UTC before formatting. For values that denote an instant rather
+    than a wall clock.
+    #>
+    param(
+        [Parameter(Mandatory)][datetime]$InputObject,
+        [switch]$AsUtc
+    )
+    $value = if ($AsUtc) { $InputObject.ToUniversalTime() } else { $InputObject }
+    return $value.ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [cultureinfo]::InvariantCulture)
+}
+
+function ConvertTo-YardstickWallClock {
+    <#
+    .SYNOPSIS
+    Reads a Graph date as the wall clock it displays, with no timezone shift.
+
+    .DESCRIPTION
+    The same install time setting reaches us as three different types, and left
+    alone each reports a different .Hour for one stored value of "23:00:00Z":
+
+      - PowerShell 7 ConvertFrom-Json yields a DateTime of Kind Utc, hour 23.
+      - A [datetime] cast of the raw string reinterprets it into the host's
+        timezone, hour 18 on a UTC-5 host.
+      - A DateTimeOffset carries the offset separately.
+
+    Returning Kind Unspecified in every case keeps the displayed wall clock and
+    stops anything downstream from converting it again.
+    #>
+    param([Parameter(Mandatory)]$InputObject)
+    $value = if ($InputObject -is [datetime]) {
+        $InputObject
+    }
+    elseif ($InputObject -is [datetimeoffset]) {
+        $InputObject.DateTime
+    }
+    else {
+        # RoundtripKind honours the trailing Z as "this is already the value"
+        # instead of treating it as an instant to be moved into local time.
+        [datetime]::Parse([string]$InputObject, [cultureinfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::RoundtripKind)
+    }
+    return [datetime]::SpecifyKind($value, [System.DateTimeKind]::Unspecified)
 }
 
 function New-YardstickWin32AppDetectionRuleFile {
@@ -52,8 +112,8 @@ function New-YardstickWin32AppDetectionRuleFile {
         detectionType          = $DetectionType
     }
     switch ($PSCmdlet.ParameterSetName) {
-        'DateModified' { $rule.detectionType = 'modifiedDate'; $rule.detectionValue = ConvertTo-YardstickGraphDate $DateTimeValue }
-        'DateCreated'  { $rule.detectionType = 'createdDate';  $rule.detectionValue = ConvertTo-YardstickGraphDate $DateTimeValue }
+        'DateModified' { $rule.detectionType = 'modifiedDate'; $rule.detectionValue = ConvertTo-YardstickGraphDate $DateTimeValue -AsUtc }
+        'DateCreated'  { $rule.detectionType = 'createdDate';  $rule.detectionValue = ConvertTo-YardstickGraphDate $DateTimeValue -AsUtc }
         'Version'      { $rule.detectionType = 'version';      $rule.detectionValue = $VersionValue }
         'Size'         { $rule.detectionType = 'sizeInMB';     $rule.detectionValue = $SizeInMBValue }
     }
@@ -286,6 +346,8 @@ function New-YardstickAssignmentBody {
             installTimeSettings           = $null
         }
         if ($PSBoundParameters.ContainsKey('AvailableTime') -or $PSBoundParameters.ContainsKey('DeadlineTime')) {
+            # No -AsUtc: Intune stores these as the wall clock the admin sees,
+            # not as an instant. See ConvertTo-YardstickGraphDate.
             $body.settings.installTimeSettings = [ordered]@{
                 useLocalTime     = $UseLocalTime
                 startDateTime    = if ($PSBoundParameters.ContainsKey('AvailableTime')) { ConvertTo-YardstickGraphDate $AvailableTime } else { $null }
@@ -851,6 +913,8 @@ function Add-YardstickWin32App {
 }
 
 Export-ModuleMember -Function @(
+    # Exported for YardstickSupport, which rebases install times across apps.
+    'ConvertTo-YardstickWallClock',
     'New-YardstickWin32AppDetectionRuleFile',
     'New-YardstickWin32AppDetectionRuleMsi',
     'New-YardstickWin32AppDetectionRuleRegistry',

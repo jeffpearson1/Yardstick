@@ -105,8 +105,69 @@ Describe 'Yardstick Intune assignments' {
     }
 }
 
-Describe 'Yardstick Intune relationships' {
-    It 'preserves supersedence while replacing dependencies' {
+Describe 'Yardstick Intune install time settings' {
+    # An 11:00 PM deployment moved forward 14 days came back as 4:00 AM the next
+    # day, because the wall clock Intune stores was being treated as an instant
+    # and converted into UTC by the build host's offset.
+
+    It 'writes an install time as the wall clock it was given' {
+        InModuleScope YardstickIntune {
+            # Same wall clock, different Kind. Both must serialize identically:
+            # a value that changes when .Kind changes is being converted.
+            $local = [datetime]::SpecifyKind([datetime]'2026-08-25 23:00', [System.DateTimeKind]::Local)
+            $utc = [datetime]::SpecifyKind([datetime]'2026-08-25 23:00', [System.DateTimeKind]::Utc)
+            ConvertTo-YardstickGraphDate $local | Should -Be '2026-08-25T23:00:00.000Z'
+            ConvertTo-YardstickGraphDate $utc | Should -Be '2026-08-25T23:00:00.000Z'
+        }
+    }
+
+    It 'still converts to UTC for values that name an instant' {
+        InModuleScope YardstickIntune {
+            $local = [datetime]::SpecifyKind([datetime]'2026-08-25 23:00', [System.DateTimeKind]::Local)
+            $expected = $local.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [cultureinfo]::InvariantCulture)
+            ConvertTo-YardstickGraphDate $local -AsUtc | Should -Be $expected
+        }
+    }
+
+    It 'uses UTC for detection rule dates' {
+        $value = [datetime]::SpecifyKind([datetime]'2026-08-25 23:00', [System.DateTimeKind]::Local)
+        $rule = New-YardstickWin32AppDetectionRuleFile -DateModified -Path 'C:\App' -FileOrFolder 'app.exe' `
+            -Operator greaterThanOrEqual -DateTimeValue $value
+        $rule.detectionValue | Should -Be ($value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [cultureinfo]::InvariantCulture))
+    }
+
+    It 'reads back every shape Graph reports a date in without shifting it' {
+        # PowerShell 7 ConvertFrom-Json yields Kind Utc, 5.1 yields the raw
+        # string, and a DateTimeOffset carries its offset separately. Left
+        # alone, a [datetime] cast of the string reinterprets it into the host
+        # timezone and the three disagree about what .Hour means.
+        $fromJson = ('{"d":"2026-08-25T23:00:00.0000000Z"}' | ConvertFrom-Json).d
+        $inputs = @($fromJson, '2026-08-25T23:00:00.0000000Z', [datetimeoffset]'2026-08-25T23:00:00.0000000Z')
+        foreach ($value in $inputs) {
+            $wallClock = ConvertTo-YardstickWallClock $value
+            $wallClock.Hour | Should -Be 23
+            $wallClock.Minute | Should -Be 0
+            $wallClock.Kind | Should -Be ([System.DateTimeKind]::Unspecified)
+        }
+    }
+
+    It 'round-trips a stored install time through read and write unchanged' {
+        InModuleScope YardstickIntune {
+            $stored = ('{"d":"2026-08-25T23:00:00.0000000Z"}' | ConvertFrom-Json).d
+            $wallClock = ConvertTo-YardstickWallClock $stored
+            $rebased = [datetime]::SpecifyKind((Get-Date).Date.AddDays(14), [System.DateTimeKind]::Unspecified).AddHours($wallClock.Hour).AddMinutes($wallClock.Minute)
+            $body = New-YardstickAssignmentBody -TargetType '#microsoft.graph.groupAssignmentTarget' -GroupID 'g' `
+                -Intent required -AvailableTime $rebased -UseLocalTime $true
+            $body.settings.installTimeSettings.useLocalTime | Should -BeTrue
+            # 23:00 in, 23:00 out, on any host. The offset applies to the date
+            # alone - it must not leak into the time of day.
+            $body.settings.installTimeSettings.startDateTime | Should -Match 'T23:00:00\.000Z$'
+            $body.settings.installTimeSettings.startDateTime | Should -BeLike "$((Get-Date).Date.AddDays(14).ToString('yyyy-MM-dd'))*"
+        }
+    }
+}
+
+Describe 'Yardstick Intune relationships' {    It 'preserves supersedence while replacing dependencies' {
         Mock Get-YardstickWin32AppSupersedence -ModuleName YardstickIntune {
             [ordered]@{ '@odata.type' = '#microsoft.graph.mobileAppSupersedence'; targetId = 'old' }
         }
