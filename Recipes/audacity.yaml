@@ -2,26 +2,21 @@ url: https://www.audacityteam.org/download/windows/
 urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $URL
-  $Script:URL = ($Content.links | where href -match "audacity-win-.*-64bit\.exe").href
-  $Script:fileName = ($URL -split "/")[-1]
+  $url = ($Content.links | where href -match "audacity-win-.*-x86_64\.msi").href
+  $filename = ($url -split "/")[-1]
   $filename -match "([0-9]{1,}\.){2}[0-9]{1,}" | Out-Null
-  $Script:version = $matches[0]
-  $Script:fileDetectionVersion = "$($version).0"
-installScript: <filename> /VERYSILENT /NORESTART
-uninstallScript: 'C:\Program Files\Audacity\unins000.exe /VERYSILENT /NORESTART'
-version:
-fileName:
+  $version = $matches[0]
+installScript: msiexec /i <filename> /qn /norestart ALLUSERS=1
+uninstallScript: msiexec /x <productcode> /qn /norestart
 iconFile: audacity.png
 id: audacity
 displayName: Audacity
 publisher: The Audacity Team
 description: Audacity is a free, open source, cross-platform audio software for multi-track recording and editing.
-softwareName: "Audacity*"
-detectionType: file
-fileDetectionPath: 'C:\Program Files\Audacity'
-fileDetectionName: audacity.exe
-fileDetectionMethod: version
-fileDetectionVersion:
-fileDetectionOperator: equal
+fileType: msi
+detectionType: msi
 installExperience: system
-maximumInstallationTimeInMinutes: 5
+restartBehavior: suppress
+minOSVersion: W11_24H2
+uninstallPreviousVersion: true
+numVersionsToKeep: 2
