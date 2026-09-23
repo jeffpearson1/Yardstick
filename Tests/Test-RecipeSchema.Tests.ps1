@@ -175,4 +175,57 @@ Describe "Test-RecipeSchema" {
             $result.Warnings | Where-Object { $_ -match "incorrect casing.*urlRedirects" } | Should -Not -BeNullOrEmpty
         }
     }
+
+    Context "Reserved runner variables" {
+        It "Warns when a preDownloadScript assigns `$temp" {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = "`$temp = Join-Path `$env:TEMP 'staging'`nNew-Item -Path `$temp -ItemType Directory"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "reserved runner variable '\`$temp'" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Warns regardless of casing, because PowerShell variable names are case-insensitive" {
+            $recipe = New-ValidRecipe
+            $recipe['downloadScript'] = "  `$BuildSpace = 'C:\somewhere'"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "reserved runner variable" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Names the field that did it" {
+            $recipe = New-ValidRecipe
+            $recipe['postDownloadScript'] = "`$published = 'x'"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "Field 'postDownloadScript'" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Leaves client-side scripts alone" {
+            # detectionScript runs on the endpoint, where `$applications is just a
+            # local variable and shares nothing with the runner.
+            $recipe = New-ValidRecipe -DetectionType script
+            $recipe['detectionScript'] = "`$applications = Get-ItemProperty 'HKLM:\SOFTWARE\*'"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "reserved runner variable" } | Should -BeNullOrEmpty
+        }
+
+        It "Does not warn on an unrelated variable of its own" {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = "`$stagingArea = Join-Path `$env:TEMP 'staging'"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "reserved runner variable" } | Should -BeNullOrEmpty
+        }
+
+        It "Does not warn on a comparison or a member read" {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = "if (`$temp -eq 'x') { }`n`$path = Join-Path `$Temp 'file.exe'"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "reserved runner variable" } | Should -BeNullOrEmpty
+        }
+
+        It "Keeps the recipe valid - this is a warning, not an error" {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = "`$temp = 'x'"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+        }
+    }
 }

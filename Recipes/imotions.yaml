@@ -1,0 +1,132 @@
+# iMotions is licence-gated: imotions.com exposes no download surface at all (request-a-demo only),
+# and the installer is delivered per customer via their subscription/support channel. Stage the
+# vendor-supplied installer in <SoftwareDropbox>\imotions.
+#
+# Engine (verified against iMotions-11.1.5.exe 2026-09-01): an InstallShield setup launcher. The PE
+# has a ZIP overlay whose first entry is Data1.cab, the classic InstallShield single-exe layout, and
+# the binary exposes the /v"" passthrough, so it is MSI-based InstallShield. Silent install is
+# therefore `/s /v"/qn"` with MSI properties passed through /v.
+#
+# NOTE: the payload is ~2.3 GB. That is within Intune's Win32 app size limit but packaging,
+# upload, and client download will all be slow; budget accordingly and expect long install times.
+manualDownload: true
+manualDownloadFolder: imotions
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  if (-not (Get-Variable -Name dropboxPath -ErrorAction SilentlyContinue)) { $dropboxPath = '<SoftwareDropbox>\imotions' }
+  if (-not (Get-Variable -Name dropboxFiles -ErrorAction SilentlyContinue)) { $dropboxFiles = @() }
+
+  $installer = $dropboxFiles |
+    Where-Object { $_.Extension -eq '.exe' -and $_.Name -match '(?i)imotions' } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+  if (-not $installer) {
+    throw "No iMotions installer (.exe) staged in $dropboxPath. Obtain it from your iMotions customer/support contact and place it there."
+  }
+
+  $fileName = $installer.Name
+  $url = $installer.FullName
+
+  # iMotions names its installers iMotions-<version>.exe, which is the most reliable source.
+  $version = $null
+  if ($fileName -match 'iMotions[-_ ]?(\d+(?:\.\d+){1,3})') { $version = $Matches[1] }
+
+  # Fall back to the launcher's own version resource.
+  if (-not $version) {
+    $resourceVersion = (Get-Item -LiteralPath $installer.FullName).VersionInfo.ProductVersion
+    if ($resourceVersion -match '^\d+(?:\.\d+){1,3}') { $version = $Matches[0] }
+  }
+
+  if (-not $version) { throw "Could not determine the iMotions version for $fileName." }
+fileType: exe
+installScript: <filename> /s /v"/qn REBOOT=ReallySuppress"
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -match '(?i)^iMotions' -and ($_.QuietUninstallString -or $_.UninstallString) } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the iMotions uninstall entry in the registry.' }
+
+  $command = if ($app.QuietUninstallString) { [string]$app.QuietUninstallString } else { [string]$app.UninstallString }
+
+  if ($command -match '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}') {
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/x', $Matches[0], '/qn', '/norestart' -Wait -PassThru
+    if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+      throw "iMotions uninstaller exited with $($process.ExitCode)."
+    }
+  } else {
+    # InstallShield setup launcher. -runfromtemp relaunches from %TEMP% and returns immediately,
+    # so poll for the ARP entry to disappear rather than trusting the exit code alone.
+    $raw = $command
+    $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+      elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+      else { $raw.Trim('"') }
+    if (-not (Test-Path -LiteralPath $exe)) { throw "iMotions uninstaller not found at '$exe'." }
+
+    $arguments = if ($raw -match '(?i)-runfromtemp') { @('-remove', '-runfromtemp', '-silent') } else { @('/s', '/v"/qn REBOOT=ReallySuppress"') }
+    $process = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru
+    if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+      throw "iMotions uninstaller exited with $($process.ExitCode)."
+    }
+
+    $still = $null
+    $deadline = (Get-Date).AddMinutes(30)
+    while ((Get-Date) -lt $deadline) {
+      $still = Get-ItemProperty -Path @(
+          'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        ) -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match '(?i)^iMotions' } |
+        Select-Object -First 1
+      if (-not $still) { break }
+      Start-Sleep -Seconds 15
+    }
+    if ($still) { throw 'iMotions uninstall did not complete within 30 minutes.' }
+  }
+iconFile: imotions.png
+id: imotions
+displayName: iMotions
+publisher: iMotions A/S
+description: iMotions is a biometric research platform that synchronises eye tracking, facial expression analysis, EEG, GSR, and other sensor data for human behaviour studies. A subscription licence is required and the installer must be staged manually because iMotions distributes it only to licensed customers.
+detectionType: script
+detectionScript: |
+  $expectedText = '<version>'
+  $expectedParts = @($expectedText -split '\.')
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notmatch '(?i)^iMotions') { continue }
+
+      $foundText = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $foundParts = @($foundText -split '\.')
+      if ($foundParts.Count -lt 2) {
+        Write-Output 'Detected'
+        exit 0
+      }
+
+      $count = [Math]::Min([Math]::Min($expectedParts.Count, $foundParts.Count), 4)
+      $expected = $null
+      $found = $null
+      if ([version]::TryParse((($expectedParts[0..($count - 1)]) -join '.'), [ref]$expected) -and
+          [version]::TryParse((($foundParts[0..($count - 1)]) -join '.'), [ref]$found) -and
+          $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 180

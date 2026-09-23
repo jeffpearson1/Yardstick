@@ -26,13 +26,13 @@ Describe "Test-Prerequisites" {
     It "Warns when curl.exe is not found" {
         # Windows ships curl.exe in System32, so the PATH lookup has to be mocked
         # away for this to test the bundled-copy check at all.
-        Mock -ModuleName YardstickSupport Get-Command { $null } -ParameterFilter { $Name -eq 'curl' }
+        Mock -ModuleName YardstickSupport Get-Command { $null } -ParameterFilter { $Name -eq 'curl.exe' }
         $result = Test-Prerequisites -ToolsPath $script:toolsPath
         $result.Warnings | Where-Object { $_ -match "curl.exe" } | Should -Not -BeNullOrEmpty
     }
 
     It "Does not warn about curl.exe when it exists" {
-        Mock -ModuleName YardstickSupport Get-Command { $null } -ParameterFilter { $Name -eq 'curl' }
+        Mock -ModuleName YardstickSupport Get-Command { $null } -ParameterFilter { $Name -eq 'curl.exe' }
         # Create a dummy curl.exe
         New-Item -Path (Join-Path $script:toolsPath "curl.exe") -ItemType File -Force | Out-Null
         $result = Test-Prerequisites -ToolsPath $script:toolsPath
@@ -40,6 +40,14 @@ Describe "Test-Prerequisites" {
     }
 
     It "Does not warn when curl is only on PATH" {
+        # Mocked rather than leaning on the host's own curl: the lookup resolves
+        # through PATHEXT, and a runner whose shell truncates that (Git Bash sets
+        # it to .CPL) would fail this test for reasons that have nothing to do
+        # with the branch being exercised. No curl.exe under ToolsPath, so a
+        # warning here means the PATH hit was ignored.
+        Mock -ModuleName YardstickSupport Get-Command {
+            [pscustomobject]@{ Name = 'curl.exe'; Source = 'C:\Windows\System32\curl.exe' }
+        } -ParameterFilter { $Name -eq 'curl.exe' }
         $result = Test-Prerequisites -ToolsPath $script:toolsPath
         $result.Warnings | Where-Object { $_ -match "curl.exe" } | Should -BeNullOrEmpty
     }

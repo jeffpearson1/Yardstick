@@ -40,6 +40,8 @@ Most of this file should be fairly self-explanatory. Defaults do not necessarily
 
 The TenantID, ClientID and ClientSecret are **not** stored in this file - see [Set the Intune credentials](#set-the-intune-credentials) below. `credentialTarget`, `credentialExpirationWarningDays`, `credentialExpirationEmailIntervalHours` and `adminEmailRecipient` tune where those credentials are stored and who is told when they are about to expire.
 
+`SoftwareDropbox` and `SoftwareArchive` support recipes for vendors whose installer is behind a signed-in, licensed download that cannot be automated. An operator stages the installer in a folder and Yardstick packages whatever is there. See [SoftwareDropbox-README.md](SoftwareDropbox-README.md). Leave both blank if you have no such recipes.
+
 Setting the optional `Backup` folder makes Yardstick keep a copy of every `.intunewin` file it uploads, so a bad release can be traced back to the exact package that shipped. Each recipe gets its own subfolder, and each file is named with the version and the time Intune finished publishing it. The newest three are retained (`backupVersionsToKeep`). The copy runs on a background thread while Yardstick carries on with supersedence and assignments, and a backup failure is reported without failing the application update. Leave `Backup` blank to turn this off.
 
 

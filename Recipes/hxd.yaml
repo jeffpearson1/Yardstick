@@ -1,0 +1,113 @@
+# mh-nexus publishes HxD as a versionless zip (HxDSetup.zip) containing an Inno Setup installer
+# (verified: .itext + .bss sections). The zip itself is unsigned, which is expected - the author
+# publishes detached OpenPGP signatures instead - so the harness will warn on signature status.
+# The version is read from the extracted installer's version resource because the URL carries none.
+url: https://mh-nexus.de/downloads/HxDSetup.zip
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $url = 'https://mh-nexus.de/downloads/HxDSetup.zip'
+  $fileName = 'HxDSetup.zip'
+
+  # The download page carries no machine-readable version, so pull the zip once, read the
+  # installer's version resource, and use that as the package version.
+  # Recipe scripts share the runner's variable scope, so this cannot be called $temp -
+  # that name is the runner's own Temp directory and clobbering it breaks later recipes.
+  $hxdStaging = Join-Path ([System.IO.Path]::GetTempPath()) ("hxd-" + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $hxdStaging -Force | Out-Null
+  try {
+    $archive = Join-Path $hxdStaging 'HxDSetup.zip'
+    Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing -ErrorAction Stop
+    Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $hxdStaging 'x') -Force
+    $setup = Get-ChildItem -Path (Join-Path $hxdStaging 'x') -Filter '*.exe' -Recurse -File | Select-Object -First 1
+    if (-not $setup) { throw 'HxDSetup.zip did not contain an installer executable.' }
+
+    $raw = [string]$setup.VersionInfo.ProductVersion
+    if ([string]::IsNullOrWhiteSpace($raw)) { $raw = [string]$setup.VersionInfo.FileVersion }
+    $raw = $raw.Trim()
+    if ($raw -match '^\d+(?:\.\d+){1,3}') { $version = $Matches[0] } else { throw "Could not read a version from '$($setup.Name)'." }
+  } finally {
+    Remove-Item -LiteralPath $hxdStaging -Recurse -Force -ErrorAction SilentlyContinue
+  }
+fileType: zip
+powerShellInstallScript: |
+  $archive = (Resolve-Path -LiteralPath '.\<filename>').ProviderPath
+  $extractDir = Join-Path $PWD '_hxd_extract'
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath $archive -DestinationPath $extractDir -Force
+
+  $setup = Get-ChildItem -LiteralPath $extractDir -Filter '*.exe' -File | Select-Object -First 1
+  if (-not $setup) { throw 'Could not find the HxD installer in the extracted archive.' }
+
+  # Inno Setup. /S is ignored by Inno (it returns exit 2), so use the Inno switches.
+  $process = Start-Process -FilePath $setup.FullName `
+    -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/ALLUSERS' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "HxD installer exited with $($process.ExitCode)." }
+
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'HxD*' -and ($_.QuietUninstallString -or $_.UninstallString) } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the HxD uninstall entry in the registry.' }
+
+  $raw = [string]$app.UninstallString
+  if ([string]::IsNullOrWhiteSpace($raw)) { $raw = [string]$app.QuietUninstallString }
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "HxD uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  $process = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "HxD uninstaller exited with $($process.ExitCode)." }
+
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: hxd.png
+id: hxd
+displayName: HxD Hex Editor
+publisher: Maël Hörz
+description: HxD is a fast hex, disk, and RAM editor that can open files of any size, edit raw disks and main memory, and compare or checksum binary data. Free for private and commercial use.
+detectionType: script
+detectionScript: |
+  $expectedText = '<version>'
+  $expectedParts = @($expectedText -split '\.')
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'HxD*') { continue }
+
+      $foundText = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $foundParts = @($foundText -split '\.')
+      if ($foundParts.Count -lt 2) {
+        Write-Output 'Detected'
+        exit 0
+      }
+
+      $count = [Math]::Min([Math]::Min($expectedParts.Count, $foundParts.Count), 4)
+      $expected = $null
+      $found = $null
+      if ([version]::TryParse((($expectedParts[0..($count - 1)]) -join '.'), [ref]$expected) -and
+          [version]::TryParse((($foundParts[0..($count - 1)]) -join '.'), [ref]$found) -and
+          $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

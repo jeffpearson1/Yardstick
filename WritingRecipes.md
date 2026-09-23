@@ -140,6 +140,8 @@ Two extra variables are available to the script blocks:
 
 After Intune accepts the upload, Yardstick moves the payload to `<SoftwareArchive>\<id>\<version>`. That empties the dropbox, which is what makes the next run skip the recipe rather than republishing the same build - so an empty dropbox is the normal steady state, not an error. Under `-Repair` an empty dropbox still gets the usual maintenance sweep.
 
+The operator-facing side of this - staging files, archiving, and what each failure mode looks like - is documented in [SoftwareDropbox-README.md](SoftwareDropbox-README.md).
+
 ### `postDownloadScript`
 
 Executes after download completes. The working directory is set to `$BuildSpace\$id\$version` before execution.

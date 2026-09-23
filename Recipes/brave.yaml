@@ -1,0 +1,128 @@
+url: https://github.com/brave/brave-browser
+urlRedirects: false
+preDownloadScript: |
+  # GitHub's releases feed also contains Beta and Nightly builds whose prerelease
+  # flags are not consistent. The repository's /releases/latest endpoint is the
+  # authoritative stable release selected by Brave's maintainers.
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/brave/brave-browser/releases/latest' -Headers @{ 'User-Agent' = 'Yardstick' }
+  if ($release.draft -or $release.prerelease -or $release.name -notmatch '^Release\s+v') {
+    throw "The Brave latest-release endpoint did not return a stable release ('$($release.name)')."
+  }
+  $version = ([string]$release.tag_name).TrimStart('v')
+  if ($version -notmatch '^\d+(?:\.\d+){2,3}$') {
+    throw "Unexpected Brave version '$version'."
+  }
+  # Brave's *SilentSetup asset is per-user. The regular standalone asset
+  # supports machine scope when elevated with /silent /install.
+  $asset = $release.assets | Where-Object { $_.name -ceq 'BraveBrowserStandaloneSetup.exe' } | Select-Object -First 1
+  if (-not $asset) { throw "Brave $version has no x64 standalone machine installer asset." }
+  $url = [string]$asset.browser_download_url
+  $fileName = [string]$asset.name
+installScript: '"<filename>" /silent /install'
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'SilentlyContinue'
+  Get-Process -Name 'brave' -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+  $targets = @()
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if ($base) { $targets += [pscustomobject]@{ Root = Join-Path $base 'BraveSoftware\Brave-Browser\Application'; SystemLevel = $true } }
+  }
+  if ($env:LOCALAPPDATA) {
+    $targets += [pscustomobject]@{ Root = Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\Application'; SystemLevel = $false }
+  }
+
+  foreach ($target in $targets | Sort-Object Root -Unique) {
+    $setup = Get-ChildItem -LiteralPath $target.Root -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '^\d+(?:\.\d+){2,3}$' } |
+      Sort-Object { [version]$_.Name } -Descending |
+      ForEach-Object { Join-Path $_.FullName 'Installer\setup.exe' } |
+      Where-Object { Test-Path -LiteralPath $_ } |
+      Select-Object -First 1
+    if ($setup) {
+      $arguments = @('--uninstall', '--force-uninstall')
+      if ($target.SystemLevel) { $arguments += '--system-level' }
+      $process = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
+      if ($process.ExitCode -notin 0, 19) { exit $process.ExitCode }
+    }
+
+    $deadline = (Get-Date).AddMinutes(3)
+    $application = Join-Path $target.Root 'brave.exe'
+    while ((Test-Path -LiteralPath $application) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+    if (Test-Path -LiteralPath $application) { exit 1 }
+    Remove-Item -LiteralPath (Split-Path -Parent $target.Root) -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  # Brave's browser uninstaller can retain the shared machine updater. Remove
+  # it only when no stable, Beta, Dev, or Nightly Brave browser remains.
+  $remainingBrowser = foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if ($base) {
+      Get-ChildItem -LiteralPath (Join-Path $base 'BraveSoftware') -Filter 'brave.exe' -File -Recurse -ErrorAction SilentlyContinue
+    }
+  }
+  if (-not $remainingBrowser) {
+    $machineVendorRoot = if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'BraveSoftware' } else { $null }
+    $updater = if ($machineVendorRoot) { Join-Path $machineVendorRoot 'Update\BraveUpdate.exe' } else { $null }
+    if ($updater -and (Test-Path -LiteralPath $updater)) {
+      Start-Process -FilePath $updater -ArgumentList '/uninstall' -Wait -ErrorAction SilentlyContinue | Out-Null
+      Start-Sleep -Seconds 3
+    }
+    Get-Process -Name 'BraveUpdate*' -ErrorAction SilentlyContinue |
+      Stop-Process -Force -ErrorAction SilentlyContinue
+    if ($machineVendorRoot) {
+      Remove-Item -LiteralPath (Join-Path $machineVendorRoot 'Update') -Recurse -Force -ErrorAction SilentlyContinue
+      if ((Test-Path -LiteralPath $machineVendorRoot) -and
+          -not (Get-ChildItem -LiteralPath $machineVendorRoot -Force -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $machineVendorRoot -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  foreach ($key in @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\BraveSoftware Brave-Browser',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\BraveSoftware Brave-Browser',
+      'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\BraveSoftware Brave-Browser'
+    )) {
+    Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -LiteralPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Brave.lnk') -Force -ErrorAction SilentlyContinue
+  if ($env:APPDATA) { Remove-Item -LiteralPath (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Brave.lnk') -Force -ErrorAction SilentlyContinue }
+  exit 0
+fileType: exe
+iconFile: brave.png
+id: brave
+displayName: Brave Browser
+publisher: Brave Software, Inc.
+description: Brave is a Chromium-based web browser with built-in tracker blocking, ad blocking, and privacy protections.
+detectionType: script
+detectionScript: |
+  $expected = $null
+  if (-not [version]::TryParse('<version>', [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+  $applications = foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if ($base) { Join-Path $base 'BraveSoftware\Brave-Browser\Application\brave.exe' }
+  }
+  foreach ($application in $applications | Select-Object -Unique) {
+    if (-not (Test-Path -LiteralPath $application)) { continue }
+    $raw = [string](Get-Item -LiteralPath $application).VersionInfo.ProductVersion
+    $match = [regex]::Match($raw, '^\d+(?:\.\d+){2,3}')
+    if ($match.Success) {
+      $parts = @($match.Value -split '\.')
+      # brave.exe prefixes the Chromium major (for example 152.1.94.121).
+      if ($parts.Count -eq 4) { $candidateText = $parts[1..3] -join '.' } else { $candidateText = $match.Value }
+      $installed = $null
+      if ([version]::TryParse($candidateText, [ref]$installed) -and $installed -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+    }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+uninstallPreviousVersion: false

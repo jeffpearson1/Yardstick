@@ -1,0 +1,23 @@
+# Deploy this package only after azurevirtualdesktopagent. Microsoft requires the
+# Bootloader Win32 app to depend on the Agent Win32 app in Intune.
+url: https://go.microsoft.com/fwlink/?linkid=2311028
+urlRedirects: true
+preDownloadScript: |
+  if ($url -notmatch '/(?<file>Microsoft\.RDInfra\.RDAgentBootLoader\.Installer-x64-(?<version>\d+(?:\.\d+){3})\.msi)(?:\?.*)?$') {
+    throw "Could not parse the Azure Virtual Desktop Agent Bootloader version and filename from redirected URL '$url'."
+  }
+  $version = $Matches['version']
+  $fileName = $Matches['file']
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: azurevirtualdesktopagentbootloader.png
+id: azurevirtualdesktopagentbootloader
+displayName: Azure Virtual Desktop Agent Bootloader
+publisher: Microsoft Corporation
+description: The Azure Virtual Desktop Agent Bootloader loads and updates the Agent components required for Intune Remote Help unattended control; configure the Azure Virtual Desktop Agent as its Intune dependency.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_1607

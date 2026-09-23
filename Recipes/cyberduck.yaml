@@ -1,0 +1,23 @@
+url: https://version.cyberduck.io/windows/changelog.rss
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $rss = (Invoke-WebRequest -Uri 'https://version.cyberduck.io/windows/changelog.rss' -UseBasicParsing -ErrorAction Stop).Content
+  $match = [regex]::Match($rss, 'url="(?<url>https://update\.cyberduck\.io//Cyberduck-Installer-(?<ver>\d+(?:\.\d+)+)\.exe)"')
+  if (-not $match.Success) { throw 'Could not find Cyberduck Windows installer in changelog RSS.' }
+  $version = $match.Groups['ver'].Value
+  $url = ($match.Groups['url'].Value -replace '\.exe$', '.msi')
+  $fileName = ($url -split '/')[-1]
+installScript: msiexec /i "<filename>" /qn /norestart InstallBonjour=0 Autostart=1
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: cyberduck.png
+id: cyberduck
+displayName: Cyberduck
+publisher: iterate GmbH
+description: Cyberduck is a libre server and cloud storage browser for FTP, SFTP, WebDAV, Amazon S3, OpenStack Swift, Backblaze B2, Azure, and other services.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

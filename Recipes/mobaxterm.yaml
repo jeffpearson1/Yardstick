@@ -1,0 +1,31 @@
+url: https://mobaxterm.mobatek.net/download-home-edition.html
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $page = Invoke-WebRequest -Uri 'https://mobaxterm.mobatek.net/download-home-edition.html' -UseBasicParsing -ErrorAction Stop
+  $link = @([regex]::Matches($page.Content, 'href="(?<href>[^"]*MobaXterm_Installer_v\d+(?:\.\d+)*\.zip)"') |
+    ForEach-Object { $_.Groups['href'].Value })[0]
+  if (-not $link) { throw 'Could not find the latest MobaXterm Home Edition installer ZIP.' }
+  if ($link -notmatch 'MobaXterm_Installer_v(?<ver>\d+(?:\.\d+)*)\.zip$') { throw "Could not parse MobaXterm version from $link" }
+  $version = $matches['ver']
+  $url = if ($link -match '^https?://') { $link } else { "https://mobaxterm.mobatek.net$link" }
+  $fileName = "MobaXterm_installer_$version.msi"
+downloadScript: |
+  $zipFile = "MobaXterm_Installer_v$version.zip"
+  Start-BitsTransfer -Source $url -Destination $zipFile
+  Expand-Archive -LiteralPath $zipFile -DestinationPath . -Force
+  Remove-Item -LiteralPath $zipFile -Force
+  if (-not (Test-Path -LiteralPath $fileName)) { throw "Expected $fileName was not found after extracting $zipFile." }
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: mobaxterm.png
+id: mobaxterm
+displayName: MobaXterm Home Edition
+publisher: Mobatek
+description: MobaXterm is an enhanced terminal for Windows with X11 server, SSH, RDP, VNC, FTP, and Unix command support. Home Edition is free for personal and educational use; use Professional for commercial deployments requiring its license terms.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

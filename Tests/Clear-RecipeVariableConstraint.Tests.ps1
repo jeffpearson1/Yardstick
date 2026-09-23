@@ -98,6 +98,77 @@ switch ($Scenario) {
         param([string]$Scenario)
         & $Global:Fixture -Scenario $Scenario -YardstickPath $Global:YardstickPath
     }
+
+    # Restore-RunnerPathVariable has the same problem: it reads and writes script
+    # scope, so it only behaves realistically inside a real .ps1.
+    $Global:PathFixture = Join-Path $TestDrive 'runner-path-scenario.ps1'
+    Set-Content -Path $Global:PathFixture -Value @'
+param([Parameter(Mandatory)][string]$Scenario, [string]$YardstickPath)
+
+function Write-Log { param([string]$Message) }
+
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($YardstickPath, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $n.Name -eq 'Restore-RunnerPathVariable' }, $true)
+if (-not $fn) { throw "Restore-RunnerPathVariable not found in $YardstickPath" }
+. ([scriptblock]::Create($fn.Extent.Text))
+
+# The runner sets these once at startup from preferences.
+$Script:Temp       = 'C:\Yardstick\Temp'
+$Script:BuildSpace = 'C:\Yardstick\Build'
+$Script:Published  = 'C:\Yardstick\Published'
+
+# hxd's actual defect: an innocuous lowercase $temp in a preDownloadScript.
+$clobberingRecipe = { $temp = 'C:\Users\someone\AppData\Local\Temp\hxd-abc123' }
+
+switch ($Scenario) {
+    'ReproducesTheClobber' {
+        Invoke-Command -ScriptBlock $clobberingRecipe -NoNewScope
+        $Script:Temp
+    }
+    'RestoresAfterClobber' {
+        Restore-RunnerPathVariable          # baseline
+        Invoke-Command -ScriptBlock $clobberingRecipe -NoNewScope
+        Restore-RunnerPathVariable
+        $Script:Temp
+    }
+    'FirstCallChangesNothing' {
+        Invoke-Command -ScriptBlock $clobberingRecipe -NoNewScope
+        Restore-RunnerPathVariable          # baseline is taken from the clobbered value
+        $Script:Temp
+    }
+    'RestoresEveryTrackedName' {
+        Restore-RunnerPathVariable
+        Invoke-Command -ScriptBlock {
+            $temp = 'x'; $buildspace = 'y'; $PUBLISHED = 'z'
+        } -NoNewScope
+        Restore-RunnerPathVariable
+        "$Script:Temp|$Script:BuildSpace|$Script:Published"
+    }
+    'StableAcrossIterations' {
+        Restore-RunnerPathVariable
+        for ($i = 0; $i -lt 3; $i++) {
+            Restore-RunnerPathVariable
+            Invoke-Command -ScriptBlock $clobberingRecipe -NoNewScope
+        }
+        Restore-RunnerPathVariable
+        $Script:Temp
+    }
+    'LeavesRecipeStateAlone' {
+        Restore-RunnerPathVariable
+        $someRecipeVariable = 'keep me'
+        Invoke-Command -ScriptBlock $clobberingRecipe -NoNewScope
+        Restore-RunnerPathVariable
+        $someRecipeVariable
+    }
+}
+'@
+
+    function Invoke-PathScenario {
+        param([string]$Scenario)
+        & $Global:PathFixture -Scenario $Scenario -YardstickPath $Global:YardstickPath
+    }
 }
 
 Describe "Clear-RecipeVariableConstraint" {
@@ -126,6 +197,33 @@ Describe "Clear-RecipeVariableConstraint" {
     }
 }
 
+Describe "Restore-RunnerPathVariable" {
+    It "Reproduces the clobber it exists to repair" {
+        Invoke-PathScenario 'ReproducesTheClobber' | Should -BeLike '*hxd-abc123'
+    }
+
+    It "Puts the runner's temp directory back after a recipe overwrites it" {
+        Invoke-PathScenario 'RestoresAfterClobber' | Should -Be 'C:\Yardstick\Temp'
+    }
+
+    It "Takes a baseline on its first call and changes nothing" {
+        Invoke-PathScenario 'FirstCallChangesNothing' | Should -BeLike '*hxd-abc123'
+    }
+
+    It "Restores every tracked folder variable regardless of casing" {
+        Invoke-PathScenario 'RestoresEveryTrackedName' |
+            Should -Be 'C:\Yardstick\Temp|C:\Yardstick\Build|C:\Yardstick\Published'
+    }
+
+    It "Stays stable across repeated loop iterations" {
+        Invoke-PathScenario 'StableAcrossIterations' | Should -Be 'C:\Yardstick\Temp'
+    }
+
+    It "Leaves unrelated recipe state alone" {
+        Invoke-PathScenario 'LeavesRecipeStateAlone' | Should -Be 'keep me'
+    }
+}
+
 Describe "Recipe scripts run by the Yardstick host" {
     # Left-side casts leak a type constraint into the shared recipe scope. Casts in
     # detectionScript/installScript are fine -- those run on the endpoint, not here.
@@ -137,6 +235,24 @@ Describe "Recipe scripts run by the Yardstick host" {
             foreach ($key in $hostKeys) {
                 if ($recipe.$key -match '(?m)^\s*\[[A-Za-z.]+\]\s*\$[A-Za-z_]\w*\s*=') {
                     "$($file.Name) ($key)"
+                }
+            }
+        }
+        $offenders | Should -BeNullOrEmpty
+    }
+
+    # Host-side scripts share the runner's script scope, so assigning one of its
+    # folder variables redirects Yardstick's own paths. hxd did this with $temp and
+    # then deleted the directory in a finally block, breaking every later recipe.
+    It "Assign to no reserved runner variable" {
+        $hostKeys = 'preDownloadScript', 'downloadScript', 'postDownloadScript', 'postRunScript'
+        $pattern = '(?im)^\s*\$(temp|buildspace|scripts|published|recipes|icons|tools|secrets|softwaredropbox|softwarearchive|prefs|applications)\s*='
+        $offenders = foreach ($file in Get-ChildItem "$PSScriptRoot\..\Recipes" -Recurse -Filter *.yaml) {
+            $recipe = try { ConvertFrom-Yaml (Get-Content $file.FullName -Raw) } catch { continue }
+            if ($recipe -isnot [hashtable]) { continue }
+            foreach ($key in $hostKeys) {
+                foreach ($match in [regex]::Matches([string]$recipe.$key, $pattern)) {
+                    "$($file.Name) ($key): `$$($match.Groups[1].Value)"
                 }
             }
         }

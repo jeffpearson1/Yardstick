@@ -1,0 +1,88 @@
+# Gpg4win ships an NSIS installer (verified: .ndata section). files.gpg4win.org serves a plain
+# directory listing, so the newest gpg4win-<version>.exe is picked from there. /S performs a
+# silent install with the default component set (GnuPG, Kleopatra, GpgOL, GpgEX).
+url: https://files.gpg4win.org/
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $listing = Invoke-WebRequest -Uri 'https://files.gpg4win.org/' -UseBasicParsing -ErrorAction Stop
+
+  $candidates = [regex]::Matches($listing.Content, 'gpg4win-(\d+(?:\.\d+){1,3})\.exe') |
+    ForEach-Object { [version]$_.Groups[1].Value } |
+    Sort-Object -Descending -Unique
+  if (-not $candidates) { throw 'Could not find a gpg4win installer in the files.gpg4win.org listing.' }
+
+  $version = ($candidates | Select-Object -First 1).ToString()
+  $fileName = "gpg4win-$version.exe"
+  $url = "https://files.gpg4win.org/$fileName"
+fileType: exe
+installScript: <filename> /S
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'Gpg4win*' -and ($_.QuietUninstallString -or $_.UninstallString) } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the Gpg4win uninstall entry in the registry.' }
+
+  $raw = [string]$app.UninstallString
+  if ([string]::IsNullOrWhiteSpace($raw)) { $raw = [string]$app.QuietUninstallString }
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "Gpg4win uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  # NSIS: "_?=<dir>" forces the uninstaller to run synchronously and in place instead of
+  # self-copying to %TEMP% and returning immediately.
+  $process = Start-Process -FilePath $exe -ArgumentList '/S', "_?=$installDir" -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "Gpg4win uninstaller exited with $($process.ExitCode)." }
+
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $app.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Gpg4win" -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: gpg4win.png
+id: gpg4win
+displayName: Gpg4win
+publisher: g10 Code GmbH
+description: Gpg4win is the official Windows distribution of GnuPG. It provides file and email encryption and digital signatures through the Kleopatra certificate manager, GpgOL for Outlook, and GpgEX for File Explorer.
+detectionType: script
+detectionScript: |
+  $expectedText = '<version>'
+  $expectedParts = @($expectedText -split '\.')
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'Gpg4win*') { continue }
+
+      $foundText = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $foundParts = @($foundText -split '\.')
+      if ($foundParts.Count -lt 2) {
+        Write-Output 'Detected'
+        exit 0
+      }
+
+      $count = [Math]::Min([Math]::Min($expectedParts.Count, $foundParts.Count), 4)
+      $expected = $null
+      $found = $null
+      if ([version]::TryParse((($expectedParts[0..($count - 1)]) -join '.'), [ref]$expected) -and
+          [version]::TryParse((($foundParts[0..($count - 1)]) -join '.'), [ref]$found) -and
+          $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

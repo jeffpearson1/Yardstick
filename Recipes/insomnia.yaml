@@ -1,0 +1,42 @@
+url: https://github.com/Kong/insomnia
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Kong/insomnia/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipeAuthor' } -ErrorAction Stop
+  if (-not $release) { throw 'Could not retrieve Insomnia release information from GitHub.' }
+  $version = ([string]$release.tag_name) -replace '^core@', '' -replace '^v', ''
+  if ($version -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "Unexpected Insomnia version string '$version'." }
+  $asset = $release.assets | Where-Object { $_.name -match '^Insomnia\.Core-[0-9].*\.exe$' } | Select-Object -First 1
+  if (-not $asset) { throw "Could not find the Insomnia Windows EXE installer asset for $version." }
+  $url = [string]$asset.browser_download_url
+  $fileName = [string]$asset.name
+installScript: <filename> -s
+powerShellUninstallScript: |
+  Get-Process -Name 'Insomnia' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 5
+  $roots = @(
+    (Join-Path $env:LOCALAPPDATA 'insomnia'),
+    (Join-Path $env:LOCALAPPDATA 'Insomnia')
+  )
+  $updater = $roots | ForEach-Object { Join-Path $_ 'Update.exe' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  if ($updater) {
+    Start-Process -FilePath $updater -ArgumentList '--uninstall', '-s' -Wait
+  }
+  foreach ($root in $roots) {
+    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Insomnia' -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+iconFile: insomnia.png
+id: insomnia
+displayName: Insomnia
+publisher: Kong Inc.
+description: Insomnia is a desktop API client for designing, debugging, and testing REST, GraphQL, gRPC, and WebSocket APIs.
+detectionType: file
+fileDetectionPath: '%LOCALAPPDATA%\insomnia'
+fileDetectionName: Insomnia.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

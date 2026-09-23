@@ -1,0 +1,77 @@
+url: https://github.com/FreeCAD/FreeCAD
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/FreeCAD/FreeCAD/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipeAuthor' } -ErrorAction Stop
+  if (-not $release) { throw 'Could not retrieve FreeCAD release information from GitHub.' }
+  $version = ([string]$release.tag_name).TrimStart('v')
+  if ($version -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "Unexpected FreeCAD version string '$version'." }
+  $asset = $release.assets | Where-Object { $_.name -match '^FreeCAD_[0-9][^-]*-Windows-x86_64-.*-installer\.exe$' } | Select-Object -First 1
+  if (-not $asset) {
+    $asset = $release.assets | Where-Object { $_.name -match '^FreeCAD_.*Windows-x86_64.*installer\.exe$' } | Select-Object -First 1
+  }
+  if (-not $asset) { throw "Could not find the FreeCAD Windows x64 installer asset for $version." }
+  $url = [string]$asset.browser_download_url
+  $fileName = [string]$asset.name
+  $registryDetectionValue = $version
+installScript: <filename> /S
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'FreeCAD*' -and $_.UninstallString } |
+    Sort-Object DisplayVersion -Descending |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the FreeCAD uninstaller registry entry.' }
+
+  # UninstallString may carry arguments (e.g. '"...uninstall.exe" /AllUsers'),
+  # so pull just the executable path out of it.
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "FreeCAD uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  Start-Process -FilePath $exe -ArgumentList '/S', "_?=$installDir" -Wait
+
+  # With _?= NSIS leaves the uninstaller folder, the ARP entry and the
+  # Start Menu shortcuts behind, so clean those up explicitly.
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $app.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+  Get-ChildItem -Path (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs') -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'FreeCAD*' } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: freecad.png
+id: freecad
+displayName: FreeCAD
+publisher: FreeCAD
+description: FreeCAD is an open-source parametric 3D CAD modeler for product design, mechanical engineering, and architecture.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'FreeCAD*') { continue }
+      $text = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $found = $null
+      if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+maximumInstallationTimeInMinutes: 60
+minOSVersion: W10_20H2

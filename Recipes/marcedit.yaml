@@ -1,0 +1,164 @@
+url: https://marcedit.reeset.net/software/marcedit75/MarcEdit_7_8_mixed.exe
+urlRedirects: false
+preDownloadScript: |
+  # The vendor keeps the consolidated organization build at a stable URL and
+  # does not publish the patch number on the download page. Stage it once, then
+  # read the authoritative embedded ProductVersion without downloading twice.
+  $url = 'https://marcedit.reeset.net/software/marcedit75/MarcEdit_7_8_mixed.exe'
+  $fileName = 'MarcEdit_7_8_mixed.exe'
+  $marcEditStagedInstaller = Join-Path $Temp $fileName
+  Remove-Item -LiteralPath $marcEditStagedInstaller -Force -ErrorAction SilentlyContinue
+  Start-BitsTransfer -Source $url -Destination $marcEditStagedInstaller
+
+  $version = ([string](Get-Item -LiteralPath $marcEditStagedInstaller).VersionInfo.ProductVersion).Trim()
+  if ($version -notmatch '^\d+(?:\.\d+){1,3}$') {
+    throw "MarcEdit returned an invalid ProductVersion: '$version'."
+  }
+
+  # MarcEdit requires both x64 and x86 .NET Desktop Runtime 10. Resolve the
+  # current servicing release from Microsoft's release metadata so the package
+  # is self-contained and does not rely on the vendor bootstrapper at install.
+  $dotnetMetadata = Invoke-RestMethod -Uri 'https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json'
+  $dotnetRelease = $dotnetMetadata.releases |
+    Where-Object { $_.'release-version' -eq $dotnetMetadata.'latest-runtime' } |
+    Select-Object -First 1
+  if (-not $dotnetRelease -or -not $dotnetRelease.windowsdesktop) {
+    throw 'Microsoft .NET 10 metadata did not contain the latest Windows Desktop Runtime release.'
+  }
+
+  $dotnetPayloads = foreach ($rid in 'win-x64', 'win-x86') {
+    $asset = $dotnetRelease.windowsdesktop.files |
+      Where-Object { $_.rid -eq $rid -and $_.name -match '\.exe$' } |
+      Select-Object -First 1
+    if (-not $asset) { throw "Microsoft .NET 10 metadata contained no $rid Windows Desktop Runtime executable." }
+    [pscustomobject]@{
+      Url = [string]$asset.url
+      Hash = [string]$asset.hash
+      Destination = "windowsdesktop-runtime-$rid.exe"
+    }
+  }
+downloadScript: |
+  Copy-Item -LiteralPath $marcEditStagedInstaller -Destination $fileName -Force
+
+  foreach ($payload in $dotnetPayloads) {
+    Start-BitsTransfer -Source $payload.Url -Destination $payload.Destination
+    $actualHash = (Get-FileHash -LiteralPath $payload.Destination -Algorithm SHA512).Hash
+    if ($actualHash -ne $payload.Hash) {
+      throw "Hash validation failed for $($payload.Destination)."
+    }
+  }
+postDownloadScript: |
+  # Advanced Installer's bootstrapper can remove its temporary MSI before
+  # msiexec opens it. Extract the consolidated payload at build time and deploy
+  # its x64 MSI with the complete loose-file source tree instead.
+  $wrapper = Join-Path $PWD $fileName
+  # The bootstrapper extracts beside itself. Start-Process -Wait also tracks its
+  # extraction child, unlike direct invocation of this GUI-subsystem executable.
+  $process = Start-Process -FilePath $wrapper -ArgumentList '/extract' -WorkingDirectory $PWD.Path -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "MarcEdit payload extraction exited with $($process.ExitCode)." }
+
+  $installer = Get-ChildItem -LiteralPath $PWD.Path -Filter 'MarcEdit_7_8_mixed.x64.msi' -File -Recurse |
+    Select-Object -First 1
+  if (-not $installer) { throw 'The extracted MarcEdit bundle contained no x64 MSI.' }
+  $fileName = $installer.FullName.Substring($PWD.Path.Length).TrimStart('\')
+  Remove-Item -LiteralPath $wrapper -Force
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  function Invoke-MarcEditPrerequisite {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string[]]$Arguments)
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Required MarcEdit prerequisite was not packaged: $Path" }
+    $process = Start-Process -FilePath $Path -ArgumentList $Arguments -Wait -PassThru
+    if ($process.ExitCode -notin 0, 1641, 3010) { throw "Prerequisite '$Path' exited with $($process.ExitCode)." }
+  }
+
+  foreach ($rid in 'win-x64', 'win-x86') {
+    Invoke-MarcEditPrerequisite -Path (Join-Path $PSScriptRoot "windowsdesktop-runtime-$rid.exe") -Arguments @('/install', '/quiet', '/norestart')
+  }
+
+  $webView = Join-Path $PSScriptRoot 'WebView2\MicrosoftEdgeWebview2Setup.exe'
+  Invoke-MarcEditPrerequisite -Path $webView -Arguments @('/silent', '/install')
+
+  $installer = Join-Path $PSScriptRoot '<filename>'
+  $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList @(
+    '/i', ('"{0}"' -f $installer), '/qn', '/norestart',
+    'ALLUSERS=1', 'NOAUTOUPDATE=1', ('SETUPEXEDIR="{0}"' -f $PSScriptRoot)
+  ) -Wait -PassThru
+  exit $process.ExitCode
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'Stop'
+  Get-Process -Name 'MarcEdit*' -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+  )
+  $entries = @(Get-ItemProperty -Path $roots -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -match '(?i)^MarcEdit(?:\s|$)' })
+
+  foreach ($entry in $entries) {
+    $command = if ($entry.QuietUninstallString) { [string]$entry.QuietUninstallString } else { [string]$entry.UninstallString }
+    $guid = [regex]::Match($command + ' ' + [string]$entry.PSChildName, '\{[0-9A-Fa-f-]{36}\}').Value
+    if ($guid) {
+      $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/x', $guid, '/qn', '/norestart' -Wait -PassThru
+    } elseif ($command -match '^\s*"([^"]+\.exe)"' -or $command -match '^\s*(.+?\.exe)(?:\s|$)') {
+      $uninstaller = $Matches[1]
+      if (-not (Test-Path -LiteralPath $uninstaller)) {
+        throw "MarcEdit uninstaller not found at '$uninstaller'."
+      }
+      $process = Start-Process -FilePath $uninstaller -ArgumentList '/exenoui', '/qn' -Wait -PassThru
+    } else {
+      throw "Could not interpret the MarcEdit uninstall command '$command'."
+    }
+    if ($process.ExitCode -notin 0, 1605, 1614, 3010) {
+      throw "MarcEdit uninstaller exited with $($process.ExitCode)."
+    }
+  }
+
+  # The vendor MSI leaves its final executable/PDB and all-users shortcut
+  # behind. Remove only those machine-wide application artifacts; per-user
+  # MarcEdit settings and working data are intentionally preserved.
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if (-not $base) { continue }
+    $vendorRoot = Join-Path $base 'Terry Reese'
+    Remove-Item -LiteralPath (Join-Path $vendorRoot 'MarcEdit 7.8') -Recurse -Force -ErrorAction SilentlyContinue
+    if ((Test-Path -LiteralPath $vendorRoot) -and
+        -not (Get-ChildItem -LiteralPath $vendorRoot -Force -ErrorAction SilentlyContinue)) {
+      Remove-Item -LiteralPath $vendorRoot -Force -ErrorAction SilentlyContinue
+    }
+  }
+  Remove-Item -LiteralPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\MarcEdit 7.8') -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+fileType: msi
+iconFile: marcedit.png
+id: marcedit
+displayName: MarcEdit
+publisher: Terry Reese
+description: MarcEdit is a metadata editing suite for creating, converting, validating, and transforming MARC and related library metadata formats. This package uses the vendor's consolidated managed-computer installer and disables its built-in automatic updater.
+detectionType: script
+detectionScript: |
+  $expected = $null
+  if (-not [version]::TryParse('<version>', [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+  foreach ($entry in @(Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -match '(?i)^MarcEdit(?:\s|$)' })) {
+    $match = [regex]::Match([string]$entry.DisplayVersion, '^\d+(?:\.\d+){1,3}')
+    $installed = $null
+    if ($match.Success -and [version]::TryParse($match.Value, [ref]$installed) -and $installed -ge $expected) {
+      Write-Output 'Detected'
+      exit 0
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 90
+uninstallPreviousVersion: false

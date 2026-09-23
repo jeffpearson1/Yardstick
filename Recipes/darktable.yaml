@@ -1,0 +1,74 @@
+url: https://github.com/darktable-org/darktable/releases
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $apiUrl = 'https://api.github.com/repos/darktable-org/darktable/releases/latest'
+  $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
+  if (-not $release) { throw 'Could not retrieve darktable release information from GitHub.' }
+
+  $version = [string]$release.tag_name
+  $version = $version -replace '^release-', ''
+  $asset = $release.assets |
+    Where-Object { $_.name -match '^darktable-[0-9]+(?:\.[0-9]+)+-win64\.exe$' } |
+    Select-Object -First 1
+  if (-not $asset) { throw 'Could not find the darktable win64 installer asset.' }
+
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+  $registryDetectionValue = $version
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'darktable*' -and $_.UninstallString } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the darktable uninstaller registry entry.' }
+
+  # UninstallString may carry arguments (e.g. '"...uninstall.exe" /AllUsers'),
+  # so pull just the executable path out of it.
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "darktable uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  # darktable ships an Inno Setup installer (unins000.exe)
+  $process = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "darktable uninstaller exited with $($process.ExitCode)." }
+
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: darktable.png
+id: darktable
+displayName: darktable
+publisher: darktable
+description: darktable is a free and open-source photography workflow application and RAW developer for managing and editing digital negatives.
+fileType: exe
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'darktable*') { continue }
+      $text = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $found = $null
+      if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

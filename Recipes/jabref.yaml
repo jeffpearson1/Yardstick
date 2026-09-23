@@ -1,0 +1,27 @@
+url: https://github.com/JabRef/jabref/releases
+urlRedirects: false
+preDownloadScript: |
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/JabRef/jabref/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  if ($release.prerelease -or $release.tag_name -match '(?i)(alpha|beta|rc)') { throw 'Latest JabRef release is a prerelease.' }
+
+  $version = $release.tag_name.TrimStart('v')
+  $asset = $release.assets |
+    Where-Object { $_.name -match '^JabRef-\d+(?:\.\d+)+\.msi$' -and $_.name -notmatch '(?i)(arm64|portable)' } |
+    Select-Object -First 1
+  if (-not $asset) { throw 'Could not find the JabRef x64 MSI asset.' }
+
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: jabref.png
+id: jabref
+displayName: JabRef
+publisher: JabRef
+description: JabRef is an open-source bibliography reference manager for collecting, organizing, and citing research literature.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

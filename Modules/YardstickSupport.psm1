@@ -144,8 +144,10 @@ function Test-Prerequisites {
 
     # External tools. A curl on PATH (Windows ships one in System32) serves the
     # download scripts just as well as the bundled copy, so only warn when neither
-    # is available.
-    if (-not (Get-Command "curl" -ErrorAction SilentlyContinue)) {
+    # is available. Ask for it by full filename: a bare "curl" is resolved through
+    # PATHEXT, and a shell that hands us a truncated one - Git Bash sets it to
+    # .CPL - then misses a curl sitting right there on PATH.
+    if (-not (Get-Command "curl.exe" -ErrorAction SilentlyContinue)) {
         $curlPath = Join-Path $ToolsPath "curl.exe"
         if (-not (Test-Path $curlPath)) {
             $warnings.Add("curl.exe not found at '$curlPath' or on PATH. Some download scripts may fail.")
@@ -177,53 +179,154 @@ function Test-Prerequisites {
 
 
 
+function Test-YardstickTransientNetworkError {
+    <#
+    .SYNOPSIS
+    Reports whether an error record was caused by a transient network fault.
+
+    .DESCRIPTION
+    Vendor endpoints intermittently drop or time out connections, and a single
+    refused socket is enough to fail a recipe that would have succeeded a few
+    seconds later. This walks the inner-exception chain looking for the fault
+    types that are worth replaying - connection timeouts, refused or unreachable
+    hosts, and DNS hiccups - so callers can retry only those and let real
+    failures (HTTP 404, bad credentials, a thrown recipe error) surface at once.
+
+    .PARAMETER ErrorRecord
+    The error record, exception, or anything carrying an Exception property.
+
+    .OUTPUTS
+    [bool] True when the error looks transient and retrying is worthwhile.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        $ErrorRecord
+    )
+
+    if ($null -eq $ErrorRecord) { return $false }
+
+    $exception = if ($ErrorRecord -is [System.Exception]) {
+        $ErrorRecord
+    } elseif ($ErrorRecord.PSObject.Properties['Exception']) {
+        $ErrorRecord.Exception
+    } else {
+        $null
+    }
+
+    $transientSocketErrors = @(
+        [System.Net.Sockets.SocketError]::TimedOut,
+        [System.Net.Sockets.SocketError]::ConnectionRefused,
+        [System.Net.Sockets.SocketError]::ConnectionReset,
+        [System.Net.Sockets.SocketError]::HostUnreachable,
+        [System.Net.Sockets.SocketError]::NetworkUnreachable,
+        [System.Net.Sockets.SocketError]::TryAgain
+    )
+    $transientWebStatuses = @(
+        [System.Net.WebExceptionStatus]::Timeout,
+        [System.Net.WebExceptionStatus]::ConnectFailure,
+        [System.Net.WebExceptionStatus]::NameResolutionFailure,
+        [System.Net.WebExceptionStatus]::ReceiveFailure,
+        [System.Net.WebExceptionStatus]::SendFailure,
+        [System.Net.WebExceptionStatus]::KeepAliveFailure,
+        [System.Net.WebExceptionStatus]::PipelineFailure
+    )
+
+    # Guard against a self-referential or cyclic inner-exception chain.
+    $depth = 0
+    while ($exception -and $depth -lt 16) {
+        if ($exception -is [System.Net.Sockets.SocketException]) {
+            if ($transientSocketErrors -contains $exception.SocketErrorCode) { return $true }
+        } elseif ($exception -is [System.Net.WebException]) {
+            # A WebException with a Response is a real HTTP answer, not a network fault.
+            if ($null -eq $exception.Response -and $transientWebStatuses -contains $exception.Status) { return $true }
+        } elseif ($exception -is [System.Net.Http.HttpRequestException]) {
+            # HttpRequestException without an HTTP status is a transport failure;
+            # with one it carries a real server response and should not be replayed.
+            $statusProperty = $exception.PSObject.Properties['StatusCode']
+            if (-not $statusProperty -or $null -eq $statusProperty.Value) { return $true }
+        } elseif ($exception -is [System.TimeoutException]) {
+            return $true
+        }
+
+        if ([object]::ReferenceEquals($exception, $exception.InnerException)) { break }
+        $exception = $exception.InnerException
+        $depth++
+    }
+
+    return $false
+}
+
+
+
 function Get-RedirectedUrl {
     <#
     .SYNOPSIS
     Follows HTTP redirects and returns the final URL.
-    
+
     .DESCRIPTION
     This function follows HTTP redirects to determine the final destination URL
     of a given URL. Useful for handling shortened URLs or redirects.
-    
+
+    Transient network faults are retried with a short backoff, because this runs
+    once per recipe against a vendor endpoint and a single refused connection
+    would otherwise fail the whole package.
+
     .PARAMETER URL
     The URL to follow redirects for.
-    
+
+    .PARAMETER MaximumAttempts
+    How many times to attempt the request before giving up. Only transient
+    network faults are retried; every other failure throws on the first attempt.
+
     .OUTPUTS
     The final redirected URL as a string.
     #>
     param (
         [Parameter(Mandatory=$true)]
-        [String]$URL
-    )
-    
-    $userAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::Chrome
-    $httpClient = $null
-    $Response = $null
-    
-    try {
-        $httpClient = [System.Net.Http.HttpClient]::new()
-        $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($userAgent)
+        [String]$URL,
 
-        # ResponseHeadersRead stops once the final response headers arrive. Without it
-        # HttpClient buffers the entire installer body just to read the resolved URI,
-        # which blows past the 100 second timeout on large downloads.
-        $Response = $httpClient.GetAsync($URL, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        if ($Response.IsSuccessStatusCode) {
-            $RedirectedURL = $Response.RequestMessage.RequestUri.AbsoluteUri
-        } else {
-            throw "HTTP request failed with status: $($Response.StatusCode)"
-        }
-        return $RedirectedURL
-    } catch {
-        Write-Error "Error getting redirected URL for '$URL': $_"
-        throw 
-    } finally {
-        if ($Response) {
-            $Response.Dispose()
-        }
-        if ($httpClient) {
-            $httpClient.Dispose()
+        [ValidateRange(1, 10)]
+        [int]$MaximumAttempts = 3
+    )
+
+    $userAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::Chrome
+
+    for ($attempt = 1; ; $attempt++) {
+        $httpClient = $null
+        $Response = $null
+
+        try {
+            $httpClient = [System.Net.Http.HttpClient]::new()
+            $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($userAgent)
+
+            # ResponseHeadersRead stops once the final response headers arrive. Without it
+            # HttpClient buffers the entire installer body just to read the resolved URI,
+            # which blows past the 100 second timeout on large downloads.
+            $Response = $httpClient.GetAsync($URL, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            if ($Response.IsSuccessStatusCode) {
+                $RedirectedURL = $Response.RequestMessage.RequestUri.AbsoluteUri
+            } else {
+                throw "HTTP request failed with status: $($Response.StatusCode)"
+            }
+            return $RedirectedURL
+        } catch {
+            if ($attempt -lt $MaximumAttempts -and (Test-YardstickTransientNetworkError -ErrorRecord $_)) {
+                Write-Log "Transient network error resolving '$URL' on attempt $attempt of ${MaximumAttempts}: $($_.Exception.Message)"
+                Start-Sleep -Seconds ([math]::Pow(2, $attempt))
+                continue
+            }
+            Write-Error "Error getting redirected URL for '$URL': $_"
+            throw
+        } finally {
+            if ($Response) {
+                $Response.Dispose()
+            }
+            if ($httpClient) {
+                $httpClient.Dispose()
+            }
         }
     }
 }
@@ -2669,7 +2772,26 @@ function Remove-YardstickApp {
     }
 
     Write-Log "Removing app $($App.DisplayName) ($($App.id))"
-    Remove-YardstickWin32App -Id $App.id
+
+    # Intune is eventually consistent about relationship teardown: Clear-YardstickAppLink
+    # can report every link removed and the delete still be refused a second later with
+    # "Cannot delete this app at this time. Try again shortly." Invoke-YardstickGraphRequest
+    # only retries 408/429/5xx, so this 4xx would otherwise fail the prune outright.
+    $deleteBackoff = @(5, 10, 15)
+    for ($attempt = 0; ; $attempt++) {
+        try {
+            Remove-YardstickWin32App -Id $App.id
+            break
+        } catch {
+            $message = [string]$_
+            $isRelationshipLag = $message -match 'Cannot delete this app at this time' -or
+                                 $message -match 'MetadataBehaviorValidateRelationshipsForAppToDelete'
+            if (-not $isRelationshipLag -or $attempt -ge $deleteBackoff.Count) { throw }
+            $delay = $deleteBackoff[$attempt]
+            Write-Log "Intune is not ready to delete $($App.DisplayName) ($($App.id)) yet; retrying in $delay second(s) (attempt $($attempt + 1) of $($deleteBackoff.Count + 1))."
+            Start-Sleep -Seconds $delay
+        }
+    }
 
     # Remove-YardstickWin32App downgrades Graph failures (including Intune's refusal
     # to delete an app that is still in a relationship) to a warning, so confirm
@@ -2876,6 +2998,22 @@ function Test-RecipeSchema {
         $Recipe['downloadScript']
         $Recipe['postDownloadScript']
     ) -join "`n"
+
+    # Runner-side scripts are dot-sourced into Yardstick's own scope (Invoke-Command
+    # -NoNewScope), and PowerShell variable names are case-insensitive, so a recipe
+    # that assigns an innocuous-looking $temp overwrites the runner's $Temp for the
+    # rest of the run. Restore-RunnerPathVariable repairs that between recipes, but
+    # the clobber still breaks the recipe doing it, so warn at authoring time.
+    # Only these three fields: install/uninstall/detection scripts run on the client
+    # and share nothing with the runner.
+    $reservedVariablePattern = '(?im)^\s*\$(temp|buildspace|scripts|published|recipes|icons|tools|secrets|softwaredropbox|softwarearchive|prefs|applications)\s*='
+    foreach ($field in 'preDownloadScript', 'downloadScript', 'postDownloadScript') {
+        $body = [string]$Recipe[$field]
+        if ([string]::IsNullOrWhiteSpace($body)) { continue }
+        foreach ($match in [regex]::Matches($body, $reservedVariablePattern)) {
+            $warnings.Add("Field '$field' assigns to reserved runner variable '`$$($match.Groups[1].Value)'. Rename it - it overwrites Yardstick's own folder variable for the rest of the run.")
+        }
+    }
 
     # Always-required fields
     $requiredFields = @('id', 'displayName', 'detectionType', 'iconFile', 'description', 'publisher')

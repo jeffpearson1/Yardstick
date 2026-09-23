@@ -116,3 +116,147 @@ Describe "Compare-AppVersions" {
         { Compare-AppVersions -Version1 "1.0.0" -Version2 "" } | Should -Throw "*null or empty*"
     }
 }
+
+Describe "Test-YardstickTransientNetworkError" {
+    BeforeAll {
+        function New-NetworkErrorRecord {
+            param([Parameter(Mandatory)][System.Exception]$Exception)
+            [System.Management.Automation.ErrorRecord]::new(
+                $Exception, 'TestError', [System.Management.Automation.ErrorCategory]::ConnectionError, $null)
+        }
+    }
+
+    It "Treats a connection timeout as transient" {
+        $record = New-NetworkErrorRecord -Exception ([System.Net.Sockets.SocketException]::new(
+            [int][System.Net.Sockets.SocketError]::TimedOut))
+        Test-YardstickTransientNetworkError -ErrorRecord $record | Should -BeTrue
+    }
+
+    It "Treats a refused connection as transient" {
+        $record = New-NetworkErrorRecord -Exception ([System.Net.Sockets.SocketException]::new(
+            [int][System.Net.Sockets.SocketError]::ConnectionRefused))
+        Test-YardstickTransientNetworkError -ErrorRecord $record | Should -BeTrue
+    }
+
+    It "Finds a socket fault wrapped in an HttpRequestException" {
+        # This is the shape Get-RedirectedUrl actually sees: HttpClient wraps the
+        # socket error, and PowerShell wraps that again in the error record.
+        $socket = [System.Net.Sockets.SocketException]::new([int][System.Net.Sockets.SocketError]::TimedOut)
+        $http = [System.Net.Http.HttpRequestException]::new('The operation has timed out.', $socket)
+        $record = New-NetworkErrorRecord -Exception ([System.Management.Automation.MethodInvocationException]::new(
+            'Exception calling "GetResult"', $http))
+        Test-YardstickTransientNetworkError -ErrorRecord $record | Should -BeTrue
+    }
+
+    It "Treats a DNS failure as transient" {
+        $record = New-NetworkErrorRecord -Exception ([System.Net.WebException]::new(
+            'The remote name could not be resolved.', [System.Net.WebExceptionStatus]::NameResolutionFailure))
+        Test-YardstickTransientNetworkError -ErrorRecord $record | Should -BeTrue
+    }
+
+    It "Does not treat a protocol error as transient" {
+        $record = New-NetworkErrorRecord -Exception ([System.Net.WebException]::new(
+            'The remote server returned an error: (404) Not Found.', [System.Net.WebExceptionStatus]::ProtocolError))
+        Test-YardstickTransientNetworkError -ErrorRecord $record | Should -BeFalse
+    }
+
+    It "Does not treat a recipe's own failure as transient" {
+        $record = New-NetworkErrorRecord -Exception ([System.InvalidOperationException]::new(
+            "The vendor feed returned an invalid ProductVersion: ''."))
+        Test-YardstickTransientNetworkError -ErrorRecord $record | Should -BeFalse
+    }
+
+    It "Accepts a bare exception as well as an error record" {
+        Test-YardstickTransientNetworkError -ErrorRecord ([System.TimeoutException]::new()) | Should -BeTrue
+    }
+
+    It "Returns false for null" {
+        Test-YardstickTransientNetworkError -ErrorRecord $null | Should -BeFalse
+    }
+
+    It "Survives a self-referential inner exception" {
+        # Some .NET exceptions return themselves from InnerException; walking that
+        # chain naively hangs forever.
+        $looping = [pscustomobject]@{ Message = 'loop' }
+        $looping | Add-Member -MemberType ScriptProperty -Name InnerException -Value { $looping }
+        Test-YardstickTransientNetworkError -ErrorRecord ([pscustomobject]@{ Exception = $looping }) | Should -BeFalse
+    }
+}
+
+Describe "Remove-YardstickApp delete retry" {
+    BeforeAll {
+        $Script:App = [pscustomobject]@{ id = 'app-1'; DisplayName = 'Google Chrome (N-1)' }
+    }
+
+    It "Retries while Intune is still catching up, then succeeds" {
+        InModuleScope YardstickSupport {
+            $Script:attempts = 0
+            Mock Clear-YardstickAppLink { @() }
+            Mock Write-Log {}
+            Mock Start-Sleep {}
+            Mock Get-YardstickWin32App { $null }
+            Mock Remove-YardstickWin32App {
+                $Script:attempts++
+                if ($Script:attempts -lt 3) { throw 'Cannot delete this app at this time. Try again shortly.' }
+            }
+
+            Remove-YardstickApp -App ([pscustomobject]@{ id = 'app-1'; DisplayName = 'Google Chrome (N-1)' })
+
+            $Script:attempts | Should -Be 3
+        }
+    }
+
+    It "Retries the relationship-validation wording Intune also uses" {
+        InModuleScope YardstickSupport {
+            $Script:attempts = 0
+            Mock Clear-YardstickAppLink { @() }
+            Mock Write-Log {}
+            Mock Start-Sleep {}
+            Mock Get-YardstickWin32App { $null }
+            Mock Remove-YardstickWin32App {
+                $Script:attempts++
+                if ($Script:attempts -lt 2) { throw 'MetadataBehaviorValidateRelationshipsForAppToDeleteAndThrowAsync failed' }
+            }
+
+            Remove-YardstickApp -App ([pscustomobject]@{ id = 'app-1'; DisplayName = 'App' })
+
+            $Script:attempts | Should -Be 2
+        }
+    }
+
+    It "Gives up after the last attempt" {
+        InModuleScope YardstickSupport {
+            $Script:attempts = 0
+            Mock Clear-YardstickAppLink { @() }
+            Mock Write-Log {}
+            Mock Start-Sleep {}
+            Mock Get-YardstickWin32App { $null }
+            Mock Remove-YardstickWin32App {
+                $Script:attempts++
+                throw 'Cannot delete this app at this time. Try again shortly.'
+            }
+
+            { Remove-YardstickApp -App ([pscustomobject]@{ id = 'app-1'; DisplayName = 'App' }) } |
+                Should -Throw '*Cannot delete this app at this time*'
+            $Script:attempts | Should -Be 4
+        }
+    }
+
+    It "Does not retry an unrelated failure" {
+        InModuleScope YardstickSupport {
+            $Script:attempts = 0
+            Mock Clear-YardstickAppLink { @() }
+            Mock Write-Log {}
+            Mock Start-Sleep {}
+            Mock Get-YardstickWin32App { $null }
+            Mock Remove-YardstickWin32App {
+                $Script:attempts++
+                throw 'Forbidden'
+            }
+
+            { Remove-YardstickApp -App ([pscustomobject]@{ id = 'app-1'; DisplayName = 'App' }) } |
+                Should -Throw '*Forbidden*'
+            $Script:attempts | Should -Be 1
+        }
+    }
+}

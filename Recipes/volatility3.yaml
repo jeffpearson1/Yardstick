@@ -1,0 +1,108 @@
+# The Volatility Foundation ships standalone PyInstaller builds of vol.exe / volshell.exe as a
+# "volatility3-win-exes-<version>.zip" release asset, so no Python runtime is needed on the target.
+# That asset is NOT attached to every release (v2.26.2 and older releases lack it), so the
+# preDownloadScript walks back through releases until it finds one that has it.
+url: https://github.com/volatilityfoundation/volatility3/releases
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/volatilityfoundation/volatility3/releases?per_page=30' `
+    -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+
+  $candidate = $null
+  foreach ($release in ($releases | Where-Object { -not $_.prerelease -and -not $_.draft })) {
+    $asset = $release.assets | Where-Object { $_.name -match '^volatility3-win-exes-(\d+(?:\.\d+){1,3})\.zip$' } | Select-Object -First 1
+    if ($asset) {
+      $candidate = [pscustomobject]@{
+        Version = [version]([regex]::Match($asset.name, '(\d+(?:\.\d+){1,3})').Value)
+        Asset   = $asset
+      }
+      break
+    }
+  }
+  if (-not $candidate) {
+    throw 'No volatility3-win-exes zip asset found in the 30 most recent Volatility 3 releases.'
+  }
+
+  $version = $candidate.Version.ToString()
+  $url = $candidate.Asset.browser_download_url
+  $fileName = $candidate.Asset.name
+fileType: zip
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Volatility3'
+  $extractDir = Join-Path (Get-Location) 'volatility3-extract'
+  if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $extractDir -Force
+
+  $volExe = Get-ChildItem -Path $extractDir -Filter 'vol.exe' -Recurse -File | Select-Object -First 1
+  if (-not $volExe) { throw 'Could not locate vol.exe in the downloaded ZIP.' }
+  $sourceRoot = Split-Path $volExe.FullName -Parent
+
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installDir -Recurse -Force
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if (($machinePath -split ';') -notcontains $installDir) {
+    [Environment]::SetEnvironmentVariable('Path', (($machinePath.TrimEnd(';'), $installDir) -join ';'), 'Machine')
+  }
+
+  # There is no vendor installer, so publish an ARP entry ourselves. This is what the
+  # detection script reads and it also makes the package visible in Programs and Features.
+  $arpKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Volatility3'
+  New-Item -Path $arpKey -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayName' -Value 'Volatility 3' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayVersion' -Value '<version>' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'Publisher' -Value 'Volatility Foundation' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'InstallLocation' -Value $installDir -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoModify' -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoRepair' -Value 1 -PropertyType DWord -Force | Out-Null
+
+  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Volatility3'
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $newPath = (($machinePath -split ';') | Where-Object { $_ -and ($_ -ne $installDir) }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+
+  Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Volatility3' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: volatility3.png
+id: volatility3
+displayName: Volatility 3
+publisher: Volatility Foundation
+description: Volatility 3 is an open-source memory forensics framework for extracting digital artefacts from volatile memory (RAM) samples. This package deploys the standalone Windows builds of vol.exe and volshell.exe, so no Python runtime is required.
+detectionType: script
+detectionScript: |
+  $expected = $null
+  if (-not [version]::TryParse('<version>', [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $arpKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Volatility3'
+  $props = Get-ItemProperty -Path $arpKey -ErrorAction SilentlyContinue
+  if (-not $props) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $volExe = Join-Path (Join-Path $env:ProgramFiles 'Volatility3') 'vol.exe'
+  if (-not (Test-Path -LiteralPath $volExe)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $found = $null
+  if ([version]::TryParse(([string]$props.DisplayVersion), [ref]$found) -and $found -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -666,32 +666,198 @@ function Wait-YardstickIntuneFileProcessing {
 }
 
 
+function Write-YardstickIntuneLog {
+    # Write-Log belongs to YardstickSupport and resolves from the session that
+    # imported both modules, the same way Invoke-YardstickGraphRequest does.
+    # Fall back to the warning stream when this module is loaded on its own.
+    param([Parameter(Mandatory)][string]$Message)
+    if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log $Message } else { Write-Warning $Message }
+}
+
+function ConvertTo-YardstickUploadUri {
+    <#
+    .SYNOPSIS
+    Pairs a content file's SAS URI with the moment Intune says it stops working.
+
+    .DESCRIPTION
+    azureStorageUriExpirationDateTime names a real instant, so it is normalised
+    to UTC rather than read as a wall clock. It is left null when the service
+    omits it; callers fall back to a fixed lifetime in that case.
+    #>
+    param([Parameter(Mandatory)]$File)
+    $expiresAt = $null
+    $raw = Get-YardstickPropertyValue $File 'azureStorageUriExpirationDateTime'
+    if ($raw -is [datetime]) {
+        # An Unspecified kind means something stripped the trailing Z; Graph
+        # only ever sends UTC here, so say so rather than let ToUniversalTime
+        # shift it by the build host's offset.
+        $expiresAt = if ($raw.Kind -eq [datetimekind]::Unspecified) {
+            [datetime]::SpecifyKind($raw, [datetimekind]::Utc)
+        } else { $raw.ToUniversalTime() }
+    }
+    elseif ($raw -is [datetimeoffset]) { $expiresAt = $raw.UtcDateTime }
+    elseif ($raw) {
+        $parsed = [datetime]::MinValue
+        if ([datetime]::TryParse([string]$raw, [cultureinfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+            $expiresAt = $parsed.ToUniversalTime()
+        }
+    }
+    return [pscustomobject]@{
+        Uri       = [string](Get-YardstickPropertyValue $File 'azureStorageUri')
+        ExpiresAt = $expiresAt
+    }
+}
+
+function Get-YardstickUploadUriRenewalTime {
+    <#
+    .SYNOPSIS
+    Decides when to renew an upload SAS, preferring the expiry Intune published.
+
+    .PARAMETER Margin
+    How far ahead of the stated expiry to renew, so a chunk already in flight
+    cannot land after the signature dies.
+
+    .PARAMETER FallbackLifetime
+    Used when the service did not publish an expiry. A guess, but a bounded one.
+    #>
+    param(
+        [Parameter(Mandatory)]$UploadUri,
+        [timespan]$Margin = [timespan]::FromMinutes(5),
+        [timespan]$FallbackLifetime = [timespan]::FromMinutes(7)
+    )
+    $now = [datetime]::UtcNow
+    if (-not $UploadUri.ExpiresAt) { return $now.Add($FallbackLifetime) }
+    $renewAt = $UploadUri.ExpiresAt.Subtract($Margin)
+    # A window shorter than the margin would otherwise renew on every chunk.
+    $floor = $now.AddMinutes(1)
+    if ($renewAt -lt $floor) { return $floor }
+    return $renewAt
+}
+
 function Update-YardstickIntuneUploadUri {
-    param([Parameter(Mandatory)][string]$FileResource)
-    Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "$FileResource/renewUpload" -Body @{} | Out-Null
-    return (Wait-YardstickIntuneFileProcessing -Resource $FileResource -Stage 'azureStorageUriRenewal').azureStorageUri
+    <#
+    .SYNOPSIS
+    Renews the Azure upload signature for an Intune content file.
+
+    .DESCRIPTION
+    Renewal occasionally comes back azureStorageUriRenewalFailed for no reason
+    the service explains. Re-POSTing renewUpload restarts the service-side state
+    machine, so a second attempt is meaningful - and worth it, because the
+    alternative is throwing away an upload that has already spent minutes
+    packaging and transferring. Only the renewal is replayed; blocks already
+    staged against the blob are untouched.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FileResource,
+        [ValidateRange(1, 10)][int]$MaximumAttempts = 3
+    )
+    $backoff = @(5, 10)
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "$FileResource/renewUpload" -Body @{} | Out-Null
+            $file = Wait-YardstickIntuneFileProcessing -Resource $FileResource -Stage 'azureStorageUriRenewal'
+            return ConvertTo-YardstickUploadUri -File $file
+        } catch {
+            if ($attempt -ge $MaximumAttempts) { throw }
+            $delay = $backoff[[math]::Min($attempt - 1, $backoff.Count - 1)]
+            Write-YardstickIntuneLog "Upload signature renewal failed on attempt $attempt of ${MaximumAttempts}: $_. Retrying in $delay second(s)."
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
+function Get-YardstickHttpErrorDetail {
+    <#
+    .SYNOPSIS
+    Pulls the most informative text out of a failed web request.
+
+    .DESCRIPTION
+    ErrorDetails carries the service's response body, which is where Azure
+    actually explains itself; Exception.Message alone is just the status line.
+    Azure prefixes that body with a byte order mark, which otherwise ends up
+    glued to the front of the message in the log.
+    #>
+    param([Parameter(Mandatory)]$ErrorRecord)
+    $detail = if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        $ErrorRecord.ErrorDetails.Message
+    } else { $ErrorRecord.Exception.Message }
+    return ([string]$detail).Trim([char]0xFEFF, ' ', "`t", "`r", "`n")
+}
+
+function Test-YardstickSasRejection {
+    <#
+    .SYNOPSIS
+    True when Azure rejected the shared access signature rather than the request.
+
+    .DESCRIPTION
+    Intune hands out a SAS backed by a stored access policy on the container -
+    the si= parameter - instead of one that carries its own expiry. When the
+    service drops that policy the signature stops verifying and Azure answers
+    403 AuthenticationFailed with "SAS identifier cannot be found for specified
+    signed identifier". Nothing about the request is wrong, so renewing the SAS
+    and replaying it is the fix. That is why this is sorted out from the plain
+    403 that means we genuinely are not allowed to do this, which stays fatal.
+    #>
+    param([string]$Detail, $StatusCode)
+    if ($StatusCode -and $StatusCode -notin 401, 403) { return $false }
+    return $Detail -match 'SAS identifier cannot be found|AuthenticationFailed|AuthorizationFailure|Signature did not match'
 }
 
 function Invoke-YardstickBlobRequestWithRetry {
+    <#
+    .SYNOPSIS
+    PUTs one blob request, renewing the SAS and replaying it when Azure rejects
+    the signature.
+
+    .DESCRIPTION
+    Renewal mints a new SAS against the same blob, so blocks already staged stay
+    staged and only the rejected request needs replaying.
+
+    .OUTPUTS
+    The upload URI actually used - renewed or not - so the caller keeps sending
+    against a signature that still works.
+    #>
     param(
         [Parameter(Mandatory)][ValidateSet('Put')][string]$Method,
-        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)]$UploadUri,
+        [Parameter(Mandatory)][string]$FileResource,
+        [Parameter(Mandatory)][string]$Query,
         [Parameter(Mandatory)][byte[]]$Body,
-        [hashtable]$Headers,
+        [hashtable]$Headers = @{},
         [string]$ContentType = 'application/octet-stream',
+        [string]$Label = 'blob request',
         [int]$MaximumRetryCount = 5
     )
     for ($attempt = 0; $attempt -le $MaximumRetryCount; $attempt++) {
         try {
-            return Invoke-WebRequest -Method $Method -Uri $Uri -Body $Body -Headers $Headers -ContentType $ContentType -UseBasicParsing -ErrorAction Stop
+            $separator = if ($UploadUri.Uri.Contains('?')) { '&' } else { '?' }
+            Invoke-WebRequest -Method $Method -Uri "$($UploadUri.Uri)$separator$Query" -Body $Body -Headers $Headers -ContentType $ContentType -UseBasicParsing -ErrorAction Stop | Out-Null
+            return $UploadUri
         } catch {
             $status = $null
-            if ($_.Exception.Response) {
-                try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = $null }
+            # Not every failure carries an HTTP response - a dropped connection
+            # mid-chunk raises an exception with no Response at all, and under
+            # StrictMode reaching for one directly throws from inside the
+            # handler instead of retrying.
+            $response = Get-YardstickPropertyValue $_.Exception 'Response'
+            if ($response) {
+                try { $status = [int]$response.StatusCode } catch { $status = $null }
             }
-            if ($attempt -ge $MaximumRetryCount -or ($status -and $status -notin 408, 429 -and $status -lt 500)) { throw }
-            $delay = [math]::Min(30, [math]::Pow(2, $attempt + 1))
-            Start-Sleep -Seconds $delay
+            $detail = Get-YardstickHttpErrorDetail -ErrorRecord $_
+            $sasRejected = Test-YardstickSasRejection -Detail $detail -StatusCode $status
+            $retryable = $sasRejected -or (-not $status) -or ($status -in 408, 429) -or ($status -ge 500)
+            if ($attempt -ge $MaximumRetryCount -or -not $retryable) {
+                throw "$Label failed after $($attempt + 1) attempt(s): $detail"
+            }
+            $statusText = if ($status) { "HTTP $status" } else { 'no response' }
+            Write-YardstickIntuneLog "$Label failed ($statusText) on attempt $($attempt + 1) of $($MaximumRetryCount + 1): $detail"
+            if ($sasRejected) {
+                Write-YardstickIntuneLog "Azure rejected the upload signature. Renewing it and replaying $Label."
+                $UploadUri = Update-YardstickIntuneUploadUri -FileResource $FileResource
+            } else {
+                Start-Sleep -Seconds ([math]::Min(30, [math]::Pow(2, $attempt + 1)))
+            }
         }
     }
 }
@@ -700,20 +866,22 @@ function Send-YardstickIntuneContentBlob {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$FilePath,
-        [Parameter(Mandatory)][string]$UploadUri,
+        [Parameter(Mandatory)]$UploadUri,
         [Parameter(Mandatory)][string]$FileResource,
         [int]$ChunkSize = 8MB
     )
-    $stream = [io.file]::OpenRead((Resolve-Path -LiteralPath $FilePath))
+    $resolvedPath = Resolve-Path -LiteralPath $FilePath
+    $blockCount = [math]::Max(1, [math]::Ceiling((Get-Item -LiteralPath $resolvedPath).Length / $ChunkSize))
+    $stream = [io.file]::OpenRead($resolvedPath)
     $blockIds = [collections.generic.list[string]]::new()
-    $uriIssuedAt = [datetime]::UtcNow
+    $renewAt = Get-YardstickUploadUriRenewalTime -UploadUri $UploadUri
     try {
         $index = 0
         $buffer = [byte[]]::new($ChunkSize)
         while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            if ([datetime]::UtcNow.Subtract($uriIssuedAt).TotalMinutes -ge 7) {
+            if ([datetime]::UtcNow -ge $renewAt) {
                 $UploadUri = Update-YardstickIntuneUploadUri -FileResource $FileResource
-                $uriIssuedAt = [datetime]::UtcNow
+                $renewAt = Get-YardstickUploadUriRenewalTime -UploadUri $UploadUri
             }
             $blockId = [convert]::ToBase64String([text.encoding]::ASCII.GetBytes($index.ToString('D6')))
             $blockIds.Add($blockId)
@@ -723,9 +891,13 @@ function Send-YardstickIntuneContentBlob {
                 $payload = [byte[]]::new($read)
                 [array]::Copy($buffer, $payload, $read)
             }
-            $separator = if ($UploadUri.Contains('?')) { '&' } else { '?' }
-            $blockUri = "$UploadUri$($separator)comp=block&blockid=$([uri]::EscapeDataString($blockId))"
-            Invoke-YardstickBlobRequestWithRetry -Method Put -Uri $blockUri -Body $payload -Headers @{ 'x-ms-blob-type' = 'BlockBlob' } | Out-Null
+            $sent = Invoke-YardstickBlobRequestWithRetry -Method Put -UploadUri $UploadUri -FileResource $FileResource `
+                -Query "comp=block&blockid=$([uri]::EscapeDataString($blockId))" `
+                -Body $payload -Headers @{ 'x-ms-blob-type' = 'BlockBlob' } `
+                -Label "Block $($index + 1) of $blockCount"
+            # A renewal inside the retry helper replaces the URI our deadline was calculated from.
+            if ($sent.Uri -ne $UploadUri.Uri) { $renewAt = Get-YardstickUploadUriRenewalTime -UploadUri $sent }
+            $UploadUri = $sent
             $index++
         }
     } finally {
@@ -736,8 +908,9 @@ function Send-YardstickIntuneContentBlob {
     [void]$blockXml.Append('<?xml version="1.0" encoding="utf-8"?><BlockList>')
     foreach ($blockId in $blockIds) { [void]$blockXml.Append("<Latest>$blockId</Latest>") }
     [void]$blockXml.Append('</BlockList>')
-    $separator = if ($UploadUri.Contains('?')) { '&' } else { '?' }
-    Invoke-YardstickBlobRequestWithRetry -Method Put -Uri "$UploadUri$($separator)comp=blocklist" -Body ([text.encoding]::UTF8.GetBytes($blockXml.ToString())) -Headers @{} -ContentType 'application/xml' | Out-Null
+    Invoke-YardstickBlobRequestWithRetry -Method Put -UploadUri $UploadUri -FileResource $FileResource `
+        -Query 'comp=blocklist' -Body ([text.encoding]::UTF8.GetBytes($blockXml.ToString())) `
+        -ContentType 'application/xml' -Label 'Block list commit' | Out-Null
 }
 
 function Get-YardstickDefaultReturnCode {
@@ -882,7 +1055,7 @@ function Add-YardstickWin32App {
         $contentFile = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource $fileResource -Body $fileBody
         $contentFileResource = "$fileResource/$($contentFile.id)"
         $contentFile = Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'azureStorageUriRequest'
-        Send-YardstickIntuneContentBlob -FilePath $expandedContent -UploadUri $contentFile.azureStorageUri -FileResource $contentFileResource
+        Send-YardstickIntuneContentBlob -FilePath $expandedContent -UploadUri (ConvertTo-YardstickUploadUri -File $contentFile) -FileResource $contentFileResource
         $encryptionInfo = $applicationInfo.EncryptionInfo
         $commitBody = [ordered]@{
             fileEncryptionInfo = [ordered]@{

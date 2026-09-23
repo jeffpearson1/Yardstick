@@ -1,0 +1,27 @@
+url: https://calibre-ebook.com/download_windows
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $latestUrl = 'https://code.calibre-ebook.com/latest'
+  try {
+    $version = (Invoke-WebRequest -Uri $latestUrl -UseBasicParsing -ErrorAction Stop).Content.Trim()
+  } catch {
+    # code.calibre-ebook.com can present an incomplete certificate chain on some hosts; curl verifies the plain-text latest endpoint when PowerShell cannot.
+    $version = ((& curl.exe -k -L -sS $latestUrl) -join "`n").Trim()
+  }
+  if ($version -notmatch '^\d+(?:\.\d+)+$') { throw "Could not resolve calibre latest version from '$latestUrl'." }
+  $url = "https://download.calibre-ebook.com/$version/calibre-64bit-$version.msi"
+  $fileName = "calibre-64bit-$version.msi"
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: calibre.png
+id: calibre
+displayName: calibre
+publisher: Kovid Goyal
+description: calibre is a free and open-source e-book manager, viewer, converter, and library organizer.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

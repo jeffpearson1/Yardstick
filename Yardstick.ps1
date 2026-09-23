@@ -303,6 +303,50 @@ function Clear-RecipeVariableConstraint {
 }
 
 
+function Restore-RunnerPathVariable {
+    <#
+    .SYNOPSIS
+    Re-asserts the runner-owned folder variables that recipes can overwrite.
+
+    .DESCRIPTION
+    The folder locations are read from preferences once at startup, but recipe
+    scripts run via Invoke-Command -NoNewScope and therefore share this scope.
+    PowerShell variable names are case-insensitive, so a recipe that writes an
+    innocuous-looking $temp overwrites the runner's own $Temp for the rest of the
+    run. That is exactly what hxd did: it pointed $Temp at a folder under the
+    user's TEMP and then deleted it in a finally block, which broke every later
+    recipe that reads $Temp and silently stopped the per-recipe temp clear.
+
+    Clear-RecipeVariableConstraint protects these names from removal but cannot
+    restore a value, so snapshot them on the first call and put them back at the
+    top of every recipe. A recipe clobber then lasts only for that recipe.
+    #>
+    $names = @(
+        'Temp', 'BuildSpace', 'Scripts', 'Published', 'Recipes',
+        'Icons', 'Tools', 'Secrets', 'SoftwareDropbox', 'SoftwareArchive'
+    )
+
+    if (-not $Script:RunnerPathBaseline) {
+        $Script:RunnerPathBaseline = [ordered]@{}
+        foreach ($name in $names) {
+            $Script:RunnerPathBaseline[$name] = Get-Variable -Name $name -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        }
+        return
+    }
+
+    foreach ($name in $names) {
+        $expected = $Script:RunnerPathBaseline[$name]
+        $current = Get-Variable -Name $name -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        # Compare as strings on purpose: these are all paths, and a recipe that put
+        # an array here would make -eq return a filtered collection, which an if()
+        # reads as true and would silently skip the restore.
+        if ([string]$current -ceq [string]$expected) { continue }
+        Write-Log "Restoring `$$name - a recipe overwrote it with '$current'."
+        Set-Variable -Name $name -Value $expected -Scope Script
+    }
+}
+
+
 function Invoke-YardstickAppMaintenance {
     <#
     .SYNOPSIS
@@ -1207,10 +1251,22 @@ foreach ($AppId_Processing in $Applications) {
     try {
         # Refresh token if necessary
         Connect-YardstickGraph
-        
-        # Clear the temp file
+
+        # Undo any folder variable the previous recipe overwrote before anything
+        # in this iteration reads one.
+        Restore-RunnerPathVariable
+
+        # Clear the temp file. -LiteralPath and a top-level enumeration on purpose:
+        # Get-ChildItem $Temp -Exclude ".gitkeep" -Recurse quietly returns nothing
+        # when $Temp does not exist, because -Exclude turns -Path into a wildcard
+        # container query. That hid a missing temp directory for a whole run.
         Write-Log "Clearing the temp directory..."
-        Get-ChildItem $Temp -Exclude ".gitkeep" -Recurse | Remove-Item -Recurse -Force
+        if (-not (Test-Path -LiteralPath $Temp -PathType Container)) {
+            throw "The Yardstick temp directory '$Temp' does not exist."
+        }
+        Get-ChildItem -LiteralPath $Temp -Force |
+            Where-Object Name -ne ".gitkeep" |
+            Remove-Item -Recurse -Force
 
         # Open the YAML file and collect all necessary attributes
         try {
@@ -1307,7 +1363,21 @@ foreach ($AppId_Processing in $Applications) {
         if ($Script:PreDownloadScript) {
             Write-Log "Running pre-download script..."
             try {
-                Invoke-Command -ScriptBlock $Script:PreDownloadScript -NoNewScope
+                # Pre-download scripts are almost all version probes against a vendor
+                # endpoint, so a dropped or timed-out connection fails a recipe that
+                # would have succeeded a moment later. Only genuinely transient
+                # network faults are replayed; anything else throws on the first try.
+                $preDownloadAttempts = 3
+                for ($preDownloadAttempt = 1; ; $preDownloadAttempt++) {
+                    try {
+                        Invoke-Command -ScriptBlock $Script:PreDownloadScript -NoNewScope
+                        break
+                    } catch {
+                        if ($preDownloadAttempt -ge $preDownloadAttempts -or -not (Test-YardstickTransientNetworkError -ErrorRecord $_)) { throw }
+                        Write-Log "Pre-download script hit a transient network error on attempt $preDownloadAttempt of ${preDownloadAttempts}: $($_.Exception.Message)"
+                        Start-Sleep -Seconds ([math]::Pow(2, $preDownloadAttempt))
+                    }
+                }
                 Write-Log "Pre-download script ran successfully."
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running pre-download PowerShell script: $_" -FailureStage "Pre-Download Script"

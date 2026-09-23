@@ -1,0 +1,64 @@
+url: https://www.sumatrapdfreader.org/download-free-pdf-viewer
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $updateUrl = 'https://www.sumatrapdfreader.org/update-check-rel.txt'
+  $content = (Invoke-WebRequest -Uri $updateUrl -UseBasicParsing -ErrorAction Stop).Content
+  $match = [regex]::Match($content, '(?m)^Latest\s+(?<version>\d+(?:\.\d+)+)')
+  if (-not $match.Success) { throw "Could not find SumatraPDF latest version in '$updateUrl'." }
+  $version = $match.Groups['version'].Value
+  $url = "https://www.sumatrapdfreader.org/dl/rel/$version/SumatraPDF-$version-64-install.exe"
+  $fileName = "SumatraPDF-$version-64-install.exe"
+# Custom SumatraPDF installer, not NSIS/Inno: vendor docs list -install, -s, -all-users, -d, and -uninstall; binary inspection showed .text/.rdata/.data/.pdata/_RDATA/.rsrc/.reloc (no .ndata or .itext) and strings for -install/-s/-all-users/-d/-uninstall.
+installScript: <filename> -install -s -all-users
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { ($_.DisplayName -like 'SumatraPDF*' -or $_.DisplayName -like 'Sumatra PDF*') -and $_.UninstallString } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the SumatraPDF uninstaller registry entry.' }
+
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "SumatraPDF uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  $process = Start-Process -FilePath $exe -ArgumentList '-uninstall', '-s' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "SumatraPDF uninstaller exited with $($process.ExitCode)." }
+
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: sumatrapdf.png
+id: sumatrapdf
+displayName: SumatraPDF
+publisher: Krzysztof Kowalczyk
+description: SumatraPDF is a free lightweight document reader for PDF, eBook, comic book, and other document formats.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'SumatraPDF*' -and $props.DisplayName -notlike 'Sumatra PDF*') { continue }
+      $text = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $found = $null
+      if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

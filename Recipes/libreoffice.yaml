@@ -1,0 +1,37 @@
+url: https://download.documentfoundation.org/libreoffice/stable/
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  # Use the second-newest LibreOffice stable release line ("Still") for enterprise stability.
+  $stableRoot = 'https://download.documentfoundation.org/libreoffice/stable/'
+  $listing = Invoke-WebRequest -Uri $stableRoot -UseBasicParsing -ErrorAction Stop
+  $versions = @($listing.Links.href |
+    Where-Object { $_ -match '^\d+\.\d+\.\d+/$' } |
+    ForEach-Object { $_.TrimEnd('/') } |
+    Sort-Object { [version]$_ })
+  if ($versions.Count -eq 0) { throw 'Could not find LibreOffice stable versions.' }
+
+  $releaseLines = @($versions |
+    Group-Object { ($_ -split '\.')[0..1] -join '.' } |
+    Sort-Object { [version]$_.Name })
+  $selectedLine = if ($releaseLines.Count -ge 2) { $releaseLines[-2] } else { $releaseLines[-1] }
+  $version = @($selectedLine.Group | Sort-Object { [version]$_ })[-1]
+
+  $downloadRoot = "$stableRoot$version/win/x86_64/"
+  $downloadListing = Invoke-WebRequest -Uri $downloadRoot -UseBasicParsing -ErrorAction Stop
+  $fileName = @($downloadListing.Links.href | Where-Object { $_ -match '^LibreOffice_.*_Win_x86-64\.msi$' })[0]
+  if (-not $fileName) { throw "Could not find LibreOffice x64 MSI for version $version." }
+  $url = "$downloadRoot$fileName"
+installScript: msiexec /i "<filename>" /qn /norestart ALLUSERS=1 REBOOTYESNO=No
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: libreoffice.png
+id: libreoffice
+displayName: LibreOffice
+publisher: The Document Foundation
+description: LibreOffice is a free and open-source office suite. This recipe tracks the Still release line for enterprise stability and installs the x64 MSI silently.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

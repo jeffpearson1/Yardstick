@@ -1,5 +1,5 @@
 url: https://github.com/jasp-stats/jasp-desktop
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
   $downloadFileRegex = "JASP-([0-9]+\.[0-9]+\.[0-9]+)-Community\.msi$"
