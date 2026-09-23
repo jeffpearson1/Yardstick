@@ -1,0 +1,121 @@
+url: https://download.easeus.com/trial/drw_trial.exe
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  # EaseUS does not publish a version manifest and the version shown on the product
+  # marketing page runs ahead of what the download endpoint actually serves, so read
+  # the version straight out of the installer's VS_VERSION_INFO resource. The PE
+  # resource section of this installer lives in the first ~200 KB of the file, so a
+  # single ranged request is enough and we avoid pulling the whole 75 MB package twice.
+  $url = 'https://download.easeus.com/trial/drw_trial.exe'
+  $fileName = 'drw_trial.exe'
+
+  $header = $null
+  foreach ($attempt in 1..3) {
+    try {
+      $header = Invoke-WebRequest -Uri $url -UseBasicParsing -Headers @{ Range = 'bytes=0-262143' } -TimeoutSec 120
+      break
+    } catch {
+      if ($attempt -eq 3) { throw "Could not read the EaseUS installer header: $($_.Exception.Message)" }
+      Start-Sleep -Seconds 10
+    }
+  }
+
+  $resourceText = [System.Text.Encoding]::Unicode.GetString($header.Content)
+  if ($resourceText -match 'ProductVersion[\u0000\s]*([0-9]+(?:\.[0-9]+){1,3})') {
+    $version = $Matches[1]
+  } elseif ($resourceText -match 'FileVersion[\u0000\s]*([0-9]+(?:\.[0-9]+){1,3})') {
+    $version = $Matches[1]
+  } else {
+    throw 'Could not determine the EaseUS Data Recovery Wizard version from the installer.'
+  }
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'EaseUS Data Recovery Wizard*' -and ($_.QuietUninstallString -or $_.UninstallString) } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the EaseUS Data Recovery Wizard uninstaller registry entry.' }
+
+  # UninstallString may carry arguments, so pull just the executable path out of it.
+  $raw = [string]$app.UninstallString
+  if ([string]::IsNullOrWhiteSpace($raw)) { $raw = [string]$app.QuietUninstallString }
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "EaseUS uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  # Inno Setup uninstaller (unins000.exe); /S is ignored by Inno and returns exit 2.
+  $process = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "EaseUS uninstaller exited with $($process.ExitCode)." }
+
+  # Inno's uninstaller returns as soon as it hands off to its temp copy, so give the
+  # ARP entry a chance to disappear before the caller re-runs detection.
+  $deadline = (Get-Date).AddMinutes(5)
+  while ((Get-Date) -lt $deadline) {
+    $still = Get-ItemProperty -Path @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      ) -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like 'EaseUS Data Recovery Wizard*' } |
+      Select-Object -First 1
+    if (-not $still) { break }
+    Start-Sleep -Seconds 5
+  }
+
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: easeus.png
+id: easeusdatarecoverywizard
+displayName: EaseUS Data Recovery Wizard
+publisher: EaseUS
+description: EaseUS Data Recovery Wizard recovers deleted, formatted, and otherwise lost files from hard drives, SSDs, USB devices, and memory cards. The downloaded package is the full product; a purchased licence key is required to unlock recovery beyond the trial limit.
+fileType: exe
+detectionType: script
+detectionScript: |
+  # The ARP DisplayVersion is often reported with fewer components than the
+  # installer's file version (for example '19.0' against '19.0.0.0'), so compare
+  # only the components that both sides actually publish.
+  $expectedText = '<version>'
+  $expectedParts = @($expectedText -split '\.')
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'EaseUS Data Recovery Wizard*') { continue }
+
+      $foundText = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $foundParts = @($foundText -split '\.')
+      if ($foundParts.Count -lt 2) {
+        # No usable version published; presence of the product is good enough.
+        Write-Output 'Detected'
+        exit 0
+      }
+
+      $count = [Math]::Min($expectedParts.Count, $foundParts.Count)
+      $count = [Math]::Min($count, 4)
+      $expected = $null
+      $found = $null
+      $expectedTrimmed = ($expectedParts[0..($count - 1)] -join '.')
+      $foundTrimmed = ($foundParts[0..($count - 1)] -join '.')
+      if ([version]::TryParse($expectedTrimmed, [ref]$expected) -and
+          [version]::TryParse($foundTrimmed, [ref]$found) -and
+          $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

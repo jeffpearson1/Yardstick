@@ -1,0 +1,74 @@
+url: https://downloads.imagej.net/fiji/latest/
+urlRedirects: false
+# Fiji publishes rolling ZIPs plus checksum files but no semantic release manifest for this build;
+# use the ZIP Last-Modified date as a date-based package version.
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $url = 'https://downloads.imagej.net/fiji/latest/fiji-latest-win64-jdk.zip'
+  $response = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -ErrorAction Stop
+  $lastModifiedHeader = ($response.Headers['Last-Modified'] | Select-Object -First 1)
+  if (-not $lastModifiedHeader) { throw 'Could not determine Fiji ZIP Last-Modified header.' }
+  $lastModified = [datetimeoffset]::Parse($lastModifiedHeader, [Globalization.CultureInfo]::InvariantCulture)
+  $version = '{0}.{1}.{2}' -f $lastModified.UtcDateTime.Year, $lastModified.UtcDateTime.Month, $lastModified.UtcDateTime.Day
+  $fileName = 'fiji-latest-win64-jdk.zip'
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Fiji'
+  $extractDir = Join-Path (Get-Location) 'fiji-extract'
+  if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $extractDir -Force
+  $sourceExe = Get-ChildItem -Path $extractDir -Filter 'fiji-windows-x64.exe' -Recurse | Select-Object -First 1
+  if (-not $sourceExe) { throw 'Could not locate fiji-windows-x64.exe in the downloaded ZIP.' }
+  $sourceRoot = Split-Path -Parent $sourceExe.FullName
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installDir -Recurse -Force
+  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+
+  $exe = Join-Path $installDir 'fiji-windows-x64.exe'
+  $programs = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+  $shortcut = Join-Path $programs 'Fiji.lnk'
+  $shell = New-Object -ComObject WScript.Shell
+  $link = $shell.CreateShortcut($shortcut)
+  $link.TargetPath = $exe
+  $link.WorkingDirectory = $installDir
+  $link.IconLocation = "$exe,0"
+  $link.Save()
+
+  $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Fiji'
+  New-Item -Path $key -Force | Out-Null
+  New-ItemProperty -Path $key -Name DisplayName -Value 'Fiji' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $key -Name DisplayVersion -Value '<version>' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $key -Name Publisher -Value 'Fiji contributors' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $key -Name InstallLocation -Value $installDir -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $key -Name DisplayIcon -Value "$exe,0" -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $key -Name URLInfoAbout -Value 'https://fiji.sc/' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $key -Name NoModify -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $key -Name NoRepair -Value 1 -PropertyType DWord -Force | Out-Null
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Fiji'
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+  Remove-Item -LiteralPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Fiji.lnk') -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Fiji' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: fiji.png
+id: fiji
+displayName: Fiji
+publisher: Fiji contributors
+description: Fiji (Fiji Is Just ImageJ) is an ImageJ distribution for scientific image analysis, bundled with plugins and an updater.
+fileType: zip
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $exe = Join-Path $env:ProgramFiles 'Fiji\fiji-windows-x64.exe'
+  $props = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Fiji' -ErrorAction SilentlyContinue
+  $found = $null
+  if ((Test-Path -LiteralPath $exe) -and $props -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

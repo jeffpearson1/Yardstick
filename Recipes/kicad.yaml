@@ -1,0 +1,80 @@
+url: https://www.kicad.org/download/windows/
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $page = Invoke-WebRequest -Uri $url -UseBasicParsing -ErrorAction Stop
+  $matches = [regex]::Matches($page.Content, 'https://kicad-downloads\.s3\.cern\.ch/windows/stable/kicad-(?<version>[0-9]+(?:\.[0-9]+)+)-x86_64\.exe')
+  if ($matches.Count -eq 0) {
+    $matches = [regex]::Matches($page.Content, 'https://github\.com/KiCad/kicad-source-mirror/releases/download/(?<version>[0-9]+(?:\.[0-9]+)+)/kicad-\k<version>-x86_64\.exe')
+  }
+  if ($matches.Count -eq 0) {
+    throw 'Could not find the KiCad Windows x64 installer on the official download page.'
+  }
+  $selected = $matches | Sort-Object { [version]$_.Groups['version'].Value } -Descending | Select-Object -First 1
+  $version = $selected.Groups['version'].Value
+  $url = $selected.Value
+  $fileName = "kicad-$version-x86_64.exe"
+  $registryDetectionValue = $version
+installScript: <filename> /S /allusers
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'KiCad*' -and $_.UninstallString } |
+    Sort-Object DisplayVersion -Descending |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the KiCad uninstaller registry entry.' }
+
+  # UninstallString may carry arguments (e.g. '"...uninstall.exe" /AllUsers'),
+  # so pull just the executable path out of it.
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "KiCad uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  # KiCad's installer uses NsisMultiUser, which aborts silent runs (exit 666660)
+  # unless the install scope is stated explicitly.
+  Start-Process -FilePath $exe -ArgumentList '/S', '/allusers', "_?=$installDir" -Wait
+
+  # With _?= NSIS leaves the uninstaller folder, the ARP entry and the
+  # Start Menu shortcuts behind, so clean those up explicitly.
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $app.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+  Get-ChildItem -Path (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs') -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'KiCad*' } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: kicad.png
+id: kicad
+displayName: KiCad EDA
+publisher: KiCad
+description: KiCad is an open-source electronics design automation suite for schematic capture and PCB layout.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'KiCad*') { continue }
+      $text = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $found = $null
+      if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+maximumInstallationTimeInMinutes: 120
+minOSVersion: W10_20H2

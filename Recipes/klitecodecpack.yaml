@@ -1,0 +1,65 @@
+url: https://www.codecguide.com/download_k-lite_codec_pack_standard.htm
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  # K-Lite Codec Pack - Free multimedia codec suite for audio and video playback
+  # Standard variant recommended for most deployments
+  
+  $page = Invoke-WebRequest "https://www.codecguide.com/download_k-lite_codec_pack_standard.htm" -UseBasicParsing -ErrorAction SilentlyContinue
+  
+  # Extract version from page (e.g., "Version 19.9.5")
+  if ($page.Content -match 'Version\s+(\d+(?:\.\d+)+)') {
+    $version = $matches[1]
+  } else {
+    throw "Could not retrieve K-Lite Codec Pack version from download page"
+  }
+  
+  # Extract download links (typically hosted on files2/files3.codecguide.com)
+  if ($page.Content -match 'files2\.codecguide\.com/([^"]+)') {
+    $fileName = $matches[1]
+    $url = "https://files2.codecguide.com/$fileName"
+  } elseif ($page.Content -match 'files3\.codecguide\.com/([^"]+)') {
+    $fileName = $matches[1]
+    $url = "https://files3.codecguide.com/$fileName"
+  } else {
+    throw "Could not find K-Lite download link"
+  }
+  
+  $registryDetectionValue = $version
+installScript: <filename> /verysilent
+powerShellUninstallScript: |
+  $uninstaller = Get-ChildItem -Path @("${env:ProgramFiles}\K-Lite Codec Pack", "${env:ProgramFiles(x86)}\K-Lite Codec Pack") -Filter "unins*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+  
+  if ($uninstaller) {
+    & cmd.exe /c "$($uninstaller.FullName)" /verysilent
+  } else {
+    throw "Could not find K-Lite Codec Pack uninstaller"
+  }
+iconFile: klitecodecpack.png
+id: klitecodecpack
+displayName: K-Lite Codec Pack (Standard)
+publisher: Codec Guide
+description: K-Lite Codec Pack is a free software bundle containing essential audio and video codecs for multimedia playback. Includes MPC-HC player.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      $found = $null
+      if ($props.DisplayName -like 'K-Lite Codec Pack*' -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

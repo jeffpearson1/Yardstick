@@ -1,5 +1,6 @@
 # Exclude all files that are not recipes
 /Apps/*
+/Published/*
 /BuildSpace/*
 /Icons/*
 /Recipes/Incomplete

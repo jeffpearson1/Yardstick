@@ -1,0 +1,150 @@
+url: https://www.sketchup.com/en/download/all
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  # SketchUp Pro downloads are available from Trimble's download servers
+  # Extract the direct download link from the main download page
+  
+  $page = Invoke-WebRequest "https://www.sketchup.com/en/download/all" -UseBasicParsing -ErrorAction SilentlyContinue
+  
+  # Look for direct .exe download link (e.g., https://download.sketchup.com/SketchUp-2025-0-660-288.exe)
+  if ($page.Content -match 'https://download\.sketchup\.com/(SketchUp-[0-9\-]+\.exe)') {
+    $fileName = $matches[1]
+    $url = "https://download.sketchup.com/$fileName"
+    
+    # Extract version from filename (e.g., SketchUp-2025-0-660-288.exe -> 2025.0.660)
+    if ($fileName -match 'SketchUp-(\d+)-(\d+)-(\d+)') {
+      $version = "$($matches[1]).$($matches[2]).$($matches[3])"
+      $registryDetectionValue = $version
+    } else {
+      throw "Could not parse version from SketchUp filename: $fileName"
+    }
+  } else {
+    throw "Could not find SketchUp download link on download page"
+  }
+installScript: <filename> /silent
+powerShellUninstallScript: |
+  # SketchUp registers TWO ARP entries: the real MSI product (DisplayVersion like 25.0.660.288,
+  # with an InstallLocation) and an InstallShield wrapper stub (DisplayVersion 25.0.660, no
+  # InstallLocation) whose UninstallString is "<setup>.exe -remove -runfromtemp". Running the
+  # wrapper removes the product correctly but leaves its OWN stub key behind, which made
+  # PostUninstallDetect still report Detected. So: run the removal, wait for the product to go,
+  # then clean up any stub whose payload is genuinely gone.
+  function Get-SketchUpArpEntries {
+    Get-ItemProperty -Path @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      ) -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like 'SketchUp*' }
+  }
+
+  function Test-SketchUpProductPresent {
+    # The product is really gone once no versioned program directory remains.
+    $root = Join-Path $env:ProgramFiles 'SketchUp'
+    if (-not (Test-Path -LiteralPath $root)) { return $false }
+    return [bool](Get-ChildItem -LiteralPath $root -Directory -Filter 'SketchUp *' -ErrorAction SilentlyContinue)
+  }
+
+  # Close anything holding the install directory open; the InstallShield engine silently
+  # abandons a removal when the product is still in use.
+  Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessName -match '^(SketchUp|LayOut|Style ?Builder)' } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    if (-not (Test-SketchUpProductPresent)) { break }
+    Start-Sleep -Seconds 30
+
+    foreach ($entry in @(Get-SketchUpArpEntries)) {
+      $command = $null
+      if ($entry.QuietUninstallString) {
+        $command = $entry.QuietUninstallString
+      } elseif ($entry.UninstallString -match '(?i)msiexec') {
+        if ($entry.PSChildName -match '^\{[0-9A-Fa-f-]+\}$') {
+          $command = "msiexec.exe /x $($entry.PSChildName) /qn /norestart"
+        }
+      } elseif ($entry.UninstallString) {
+        # InstallShield: keep its own arguments (-remove -runfromtemp) and add -silent.
+        $command = $entry.UninstallString.Trim() + ' -silent'
+      }
+      if (-not $command) { continue }
+
+      & cmd.exe /c $command
+      $exitCode = $LASTEXITCODE
+      if ($exitCode -ne 0 -and $exitCode -ne 3010 -and $exitCode -ne 1605) {
+        Write-Output "SketchUp removal command returned $exitCode; continuing."
+      }
+    }
+
+    # -runfromtemp relaunches from %TEMP% and returns immediately, so poll for the product.
+    $deadline = (Get-Date).AddMinutes(5)
+    while ((Get-Date) -lt $deadline) {
+      if (-not (Test-SketchUpProductPresent)) { break }
+      Start-Sleep -Seconds 10
+    }
+  }
+
+  if (Test-SketchUpProductPresent) { throw 'SketchUp program files are still present after 3 removal attempts.' }
+
+  # The product is gone. Remove orphaned ARP stubs and the InstallShield cache folder, which
+  # InstallShield leaves behind (it still holds the ~1 GB setup payload).
+  foreach ($entry in @(Get-SketchUpArpEntries)) {
+    $location = [string]$entry.InstallLocation
+    if ($location -and (Test-Path -LiteralPath $location)) { continue }
+
+    $installShieldDir = $null
+    if ($entry.UninstallString -match '^\s*"([^"]+)"') {
+      $installShieldDir = Split-Path -Parent $Matches[1]
+    }
+    Remove-Item -LiteralPath $entry.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+    if ($installShieldDir -and $installShieldDir -like '*InstallShield Installation Information*') {
+      Remove-Item -LiteralPath $installShieldDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  $root = Join-Path $env:ProgramFiles 'SketchUp'
+  if ((Test-Path -LiteralPath $root) -and -not (Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $root -Force -ErrorAction SilentlyContinue
+  }
+
+  if (Get-SketchUpArpEntries) { throw 'SketchUp ARP entries remain after cleanup.' }
+iconFile: sketchup.png
+id: sketchup2026
+displayName: SketchUp 2026
+publisher: Trimble Inc.
+description: SketchUp is a 3D modeling and design software for architects, engineers, and designers.
+detectionType: script
+detectionScript: |
+  # SketchUp installs via MSI, so its ARP key is a GUID rather than a name we can
+  # wildcard. Match on DisplayName instead, across both registry views.
+  $expectedText = '<version>'
+  $expectedYear = ($expectedText -split '\.')[0]
+  $expected = $null
+  [void][version]::TryParse($expectedText, [ref]$expected)
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'SketchUp*') { continue }
+
+      $found = $null
+      if ($expected -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+      if ($props.DisplayName -like "SketchUp $expectedYear*") {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

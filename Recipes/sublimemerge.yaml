@@ -1,0 +1,27 @@
+url: https://www.sublimemerge.com/updates/stable_update_check?platform=windows&arch=x64
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $update = Invoke-RestMethod -Uri $url -ErrorAction Stop
+  $version = [string]$update.latest_version
+  if ($version -notmatch '^\d+$') { throw "Unexpected Sublime Merge stable build value: $version" }
+  $url = "https://download.sublimetext.com/sublime_merge_build_${version}_x64_setup.exe"
+  $fileName = "sublime_merge_build_${version}_x64_setup.exe"
+  $fileDetectionVersion = "4.0.0.$version"
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+uninstallScript: '"%ProgramFiles%\Sublime Merge\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: sublimemerge.png
+id: sublimemerge
+displayName: Sublime Merge
+publisher: Sublime HQ Pty Ltd
+description: Sublime Merge is a Git client from Sublime HQ with fast repository navigation, powerful search, and integrated merge tools.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Sublime Merge'
+fileDetectionName: sublime_merge.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

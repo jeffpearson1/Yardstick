@@ -1,0 +1,76 @@
+url: https://ftp.gnu.org/gnu/octave/windows/
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $listingUrl = 'https://ftp.gnu.org/gnu/octave/windows/'
+  $listing = Invoke-WebRequest -Uri $listingUrl -UseBasicParsing -ErrorAction Stop
+  $installers = @([regex]::Matches($listing.Content, 'href="(?<file>octave-(?<ver>\d+(?:\.\d+)+)-w64-installer\.exe)"') |
+    ForEach-Object { [PSCustomObject]@{ Version = [version]$_.Groups['ver'].Value; VersionText = $_.Groups['ver'].Value; FileName = $_.Groups['file'].Value } } |
+    Sort-Object Version)
+  if ($installers.Count -eq 0) { throw 'Could not find GNU Octave Windows x64 installers.' }
+  $latest = $installers[-1]
+  $version = $latest.VersionText
+  $fileName = $latest.FileName
+  # ftpmirror.gnu.org round-robins to community mirrors, some of which return
+  # HTTP 502; the canonical host is slower but reliable.
+  $url = "https://ftp.gnu.org/gnu/octave/windows/$fileName"
+installScript: '"<filename>" /S'
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { ($_.DisplayName -like 'GNU Octave*' -or $_.DisplayName -like 'Octave*') -and $_.UninstallString } |
+    Sort-Object DisplayVersion -Descending |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the GNU Octave uninstaller registry entry.' }
+
+  # UninstallString may carry arguments (e.g. '"...uninstall.exe" /AllUsers'),
+  # so pull just the executable path out of it.
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "GNU Octave uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  Start-Process -FilePath $exe -ArgumentList '/S', "_?=$installDir" -Wait
+
+  # With _?= NSIS leaves the uninstaller folder, the ARP entry and the
+  # Start Menu shortcuts behind, so clean those up explicitly.
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $app.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+  Get-ChildItem -Path (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs') -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'GNU Octave*' } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: gnuoctave.png
+id: gnuoctave
+displayName: GNU Octave
+publisher: GNU Project / John W. Eaton
+description: GNU Octave is a high-level programming language and numerical computing environment that is largely compatible with MATLAB.
+fileType: exe
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      $found = $null
+      if (($props.DisplayName -like 'GNU Octave*' -or $props.DisplayName -like 'Octave*') -and [version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 120

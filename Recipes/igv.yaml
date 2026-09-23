@@ -1,0 +1,68 @@
+url: https://igv.org/doc/desktop/DownloadPage/
+urlRedirects: false
+preDownloadScript: |
+  $page = (Invoke-WebRequest -Uri 'https://igv.org/doc/desktop/DownloadPage/' -UseBasicParsing -ErrorAction Stop).Content
+  $match = [regex]::Match($page, 'https://data\.broadinstitute\.org/igv/projects/downloads/(?<series>\d+\.\d+)/(?<name>IGV_Win_(?<ver>\d+(?:\.\d+)+)-WithJava-installer\.exe)')
+  if (-not $match.Success) { throw 'Could not find the IGV Windows WithJava installer.' }
+
+  $version = $match.Groups['ver'].Value
+  $url = $match.Value
+  $fileName = $match.Groups['name'].Value
+installScript: <filename> /S
+powerShellUninstallScript: |
+  # IGV writes NO Add/Remove Programs entry. It installs to "C:\Program Files\IGV_<version>"
+  # and drops its own NSIS uninstaller.exe there, so locate it on disk instead of in the registry.
+  $installRoot = Join-Path $env:ProgramFiles 'IGV_<version>'
+  $dirs = @()
+  if (Test-Path -LiteralPath $installRoot) {
+    $dirs += Get-Item -LiteralPath $installRoot
+  } else {
+    $dirs += Get-ChildItem -LiteralPath $env:ProgramFiles -Directory -Filter 'IGV_*' -ErrorAction SilentlyContinue
+  }
+  if (-not $dirs) { exit 0 }
+
+  Get-Process -Name 'igv' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+  foreach ($dir in $dirs) {
+    $exe = Join-Path $dir.FullName 'uninstaller.exe'
+    if (Test-Path -LiteralPath $exe) {
+      # NSIS: "_?=<dir>" forces a synchronous in-place uninstall instead of the
+      # uninstaller copying itself to %TEMP% and returning immediately.
+      $process = Start-Process -FilePath $exe -ArgumentList '/S', "_?=$($dir.FullName)" -Wait -PassThru
+      if ($process.ExitCode -ne 0) { throw "IGV uninstaller exited with $($process.ExitCode)." }
+    }
+    Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\$($dir.Name)") -Recurse -Force -ErrorAction SilentlyContinue
+  }
+iconFile: igv.png
+id: igv
+displayName: Integrative Genomics Viewer
+publisher: Broad Institute
+description: Integrative Genomics Viewer is a high-performance visualization tool for interactive exploration of large integrated genomic datasets. This package installs the build that bundles its own Java runtime.
+fileType: exe
+detectionType: script
+detectionScript: |
+  # IGV registers nothing in Add/Remove Programs, so detect the versioned install directory
+  # that its installer creates under Program Files.
+  $expectedText = '<version>'
+  $expected = $null
+  if (-not [version]::TryParse($expectedText, [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  foreach ($dir in @(Get-ChildItem -LiteralPath $env:ProgramFiles -Directory -Filter 'IGV_*' -ErrorAction SilentlyContinue)) {
+    if ($dir.Name -notmatch '^IGV_(\d+(?:\.\d+){1,3})$') { continue }
+    $found = $null
+    if (-not [version]::TryParse($Matches[1], [ref]$found)) { continue }
+    if ($found -lt $expected) { continue }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir.FullName 'igv.bat'))) { continue }
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

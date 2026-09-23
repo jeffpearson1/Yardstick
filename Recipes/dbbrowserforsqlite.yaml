@@ -1,0 +1,31 @@
+# DB Browser for SQLite publishes a machine-wide x64 MSI on every GitHub release, so this is a
+# straightforward MSI package. The release also carries arm64/win32 MSIs, zips, an AppImage, a
+# dmg, and a PortableApps .paf.exe, so the asset regex is deliberately strict.
+url: https://github.com/sqlitebrowser/sqlitebrowser/releases
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/sqlitebrowser/sqlitebrowser/releases/latest' `
+    -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+
+  $asset = $release.assets |
+    Where-Object { $_.name -match '^DB\.Browser\.for\.SQLite-v(\d+(?:\.\d+){1,3})-win64\.msi$' } |
+    Select-Object -First 1
+  if (-not $asset) { throw 'Could not find the win64 MSI asset in the latest DB Browser for SQLite release.' }
+
+  $version = [regex]::Match($asset.name, '-v(\d+(?:\.\d+){1,3})-').Groups[1].Value
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+fileType: MSI
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: dbbrowserforsqlite.png
+id: dbbrowserforsqlite
+displayName: DB Browser for SQLite
+publisher: DB Browser for SQLite Team
+description: DB Browser for SQLite is a high quality, visual, open-source tool for creating, designing, and editing SQLite database files. It is widely used in digital forensics for examining application databases.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

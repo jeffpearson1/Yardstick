@@ -1,0 +1,67 @@
+url: https://www.voidtools.com/downloads/
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $downloadPage = Invoke-WebRequest -Uri 'https://www.voidtools.com/downloads/' -UseBasicParsing -ErrorAction Stop
+  # Package stable 1.4: the downloads page still labels Everything 1.5 as Beta, so it is not yet enterprise-stable.
+  # Do not name this $matches - that is the automatic variable populated by -match.
+  $found = [regex]::Matches($downloadPage.Content, 'Everything-(?<version>1\.4\.[0-9]+(?:\.[0-9]+)*)\.x64-Setup\.exe')
+  if ($found.Count -eq 0) { throw 'Could not find the Everything 1.4 x64 setup installer on the downloads page.' }
+  $version = @($found | ForEach-Object { $_.Groups['version'].Value } | Sort-Object { [version]$_ } -Descending)[0]
+  $url = "https://www.voidtools.com/Everything-$version.x64-Setup.exe"
+  $fileName = "Everything-$version.x64-Setup.exe"
+  $fileDetectionVersion = $version
+# Everything setup is NSIS (confirmed by the .ndata PE section). /S is the NSIS silent switch;
+# voidtools documents the installer's own options in dash form (-install-service,
+# -enable-run-as-admin), so those must not be written with a leading slash or they are ignored.
+installScript: <filename> /S -install-service -enable-run-as-admin
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'Everything*' -and $_.UninstallString } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the Everything uninstaller registry entry.' }
+
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "Everything uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  $service = Get-Service -Name 'Everything' -ErrorAction SilentlyContinue
+  if ($service) {
+    if ($service.Status -ne 'Stopped') { Stop-Service -Name 'Everything' -Force -ErrorAction SilentlyContinue }
+    & sc.exe delete Everything | Out-Null
+  }
+
+  # NSIS: a plain "/S" makes the uninstaller copy itself to %TEMP% and return immediately, so
+  # the harness would still detect the app afterwards. "_?=<dir>" forces a synchronous,
+  # in-place uninstall. Stop the app first or the uninstaller cannot remove its own folder.
+  Get-Process -Name 'Everything' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 3
+
+  $process = Start-Process -FilePath $exe -ArgumentList '/S', "_?=$installDir" -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "Everything uninstaller exited with $($process.ExitCode)." }
+
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $app.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: everything.png
+id: everything
+displayName: Everything
+publisher: voidtools
+description: Everything is a free instant file search utility for Windows that locates files and folders by name.
+detectionType: file
+fileDetectionPath: 'C:\Program Files\Everything'
+fileDetectionName: Everything.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+

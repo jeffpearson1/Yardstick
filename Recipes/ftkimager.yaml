@@ -1,0 +1,151 @@
+# Exterro publishes the free FTK Imager build on a public CloudFront bucket. The marketing
+# landing page is form-gated, but the FTK Downloads Library at https://www.exterro.com/ftk-downloads
+# links straight to the zip, so no registration is required for automated packaging.
+# Deliberately ignores "FTK Imager Pro" (a paid product, store-gated) and "Imager Lite".
+url: https://www.exterro.com/ftk-downloads
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $libraryUrl = 'https://www.exterro.com/ftk-downloads'
+  $library = Invoke-WebRequest -Uri $libraryUrl -UseBasicParsing -ErrorAction Stop
+
+  # Release pages look like /ftk-downloads/ftk-imager-8-3. Exclude the paid "Pro" builds and
+  # the "Imager Lite" how-to article.
+  $candidates = [regex]::Matches($library.Content, 'href="(/ftk-downloads/ftk-imager-[^"]*)"') |
+    ForEach-Object { $_.Groups[1].Value } |
+    Where-Object { $_ -notmatch 'imager-pro|lite|flash-drive' } |
+    Sort-Object -Unique
+  if (-not $candidates) { throw 'Could not find any FTK Imager release pages in the Exterro downloads library.' }
+
+  # Rank by the version embedded in the slug so the newest release wins regardless of page order.
+  $ranked = foreach ($slug in $candidates) {
+    if ($slug -match 'ftk-imager-(\d+)(?:-(\d+))?(?:-(\d+))?') {
+      $major = $Matches[1]
+      $minor = if ($Matches[2]) { $Matches[2] } else { '0' }
+      $patch = if ($Matches[3]) { $Matches[3] } else { '0' }
+      [pscustomobject]@{
+        Slug = $slug
+        Rank = [version]"$major.$minor.$patch"
+      }
+    }
+  }
+  $best = $ranked | Sort-Object Rank -Descending | Select-Object -First 1
+  if (-not $best) { throw 'Could not parse a version out of any FTK Imager release page slug.' }
+
+  $releasePage = Invoke-WebRequest -Uri ("https://www.exterro.com" + $best.Slug) -UseBasicParsing -ErrorAction Stop
+  $zipUrl = [regex]::Matches($releasePage.Content, 'https://d1kpmuwb7gvu1i\.cloudfront\.net[^"''\s<>]+\.zip') |
+    ForEach-Object { $_.Value } |
+    Where-Object { $_ -match '(?i)imager' } |
+    Select-Object -First 1
+  if (-not $zipUrl) { throw "Could not find a CloudFront download link on $($best.Slug)." }
+
+  # e.g. .../8.3/Imager/FTK%20Imager%208.3.0.27.zip
+  $decoded = [System.Uri]::UnescapeDataString($zipUrl)
+  if ($decoded -match 'FTK\s*Imager\s*(\d+(?:\.\d+){1,3})') {
+    $version = $Matches[1]
+  } else {
+    throw "Could not parse the FTK Imager version from '$decoded'."
+  }
+
+  $url = $zipUrl
+  # Keep spaces out of the local file name so the CMD install line stays simple.
+  $fileName = "FTKImager-$version.zip"
+fileType: zip
+powerShellInstallScript: |
+  $archive = (Resolve-Path -LiteralPath '.\<filename>').ProviderPath
+  $extractDir = Join-Path $PWD '_ftkimager_extract'
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath $archive -DestinationPath $extractDir -Force
+
+  # The zip ships the setup launcher alongside an ISSetupPrerequisites folder holding the
+  # CodeMeter runtime, so the launcher must be run from the extracted directory for
+  # InstallShield to find its prerequisite.
+  $setup = Get-ChildItem -LiteralPath $extractDir -Filter '*.exe' -File |
+    Where-Object { $_.Name -match '(?i)ftk.*imager' } |
+    Sort-Object Length -Descending |
+    Select-Object -First 1
+  if (-not $setup) { throw 'Could not find the FTK Imager setup launcher in the extracted archive.' }
+
+  # InstallShield MSI-based setup launcher: /s runs the launcher silently and /v passes
+  # arguments through to msiexec.
+  $process = Start-Process -FilePath $setup.FullName `
+    -ArgumentList '/s', '/v"/qn REBOOT=ReallySuppress"' `
+    -WorkingDirectory $extractDir -Wait -PassThru
+  if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+    throw "FTK Imager installer exited with $($process.ExitCode)."
+  }
+
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -match '(?i)FTK Imager' -and ($_.QuietUninstallString -or $_.UninstallString) } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the FTK Imager uninstall entry in the registry.' }
+
+  $command = if ($app.QuietUninstallString) { [string]$app.QuietUninstallString } else { [string]$app.UninstallString }
+  if ($command -match '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}') {
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/x', $Matches[0], '/qn', '/norestart' -Wait -PassThru
+  } else {
+    # InstallShield setup launcher fallback.
+    $raw = $command
+    $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+      elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+      else { $raw.Trim('"') }
+    $process = Start-Process -FilePath $exe -ArgumentList '/s', '/v"/qn REBOOT=ReallySuppress"' -Wait -PassThru
+  }
+  if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+    throw "FTK Imager uninstaller exited with $($process.ExitCode)."
+  }
+
+  # The CodeMeter runtime is installed as a shared InstallShield prerequisite and is
+  # deliberately left in place: other forensic tooling depends on it.
+iconFile: ftkimager.png
+id: ftkimager
+displayName: FTK Imager
+publisher: Exterro
+description: FTK Imager is a free forensic imaging and preview tool used to create forensically sound disk images, capture memory, and preview evidence without altering the original media.
+detectionType: script
+detectionScript: |
+  $expectedText = '<version>'
+  $expectedParts = @($expectedText -split '\.')
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notmatch '(?i)FTK Imager') { continue }
+      if ($props.DisplayName -match '(?i)imager pro') { continue }
+
+      $foundText = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $foundParts = @($foundText -split '\.')
+      if ($foundParts.Count -lt 2) {
+        Write-Output 'Detected'
+        exit 0
+      }
+
+      $count = [Math]::Min([Math]::Min($expectedParts.Count, $foundParts.Count), 4)
+      $expected = $null
+      $found = $null
+      if ([version]::TryParse((($expectedParts[0..($count - 1)]) -join '.'), [ref]$expected) -and
+          [version]::TryParse((($foundParts[0..($count - 1)]) -join '.'), [ref]$found) -and
+          $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 60

@@ -1,0 +1,159 @@
+url: https://developers.exlibrisgroup.com/wp-content/uploads/2015/08/setup_offcirc.zip
+urlRedirects: false
+preDownloadScript: |
+  # Ex Libris publishes this utility at a stable ZIP URL with no product-version
+  # metadata in either the archive or installer. Use the vendor's Last-Modified
+  # value as a monotonic package version, as we do for other unversioned tools.
+  $url = 'https://developers.exlibrisgroup.com/wp-content/uploads/2015/08/setup_offcirc.zip'
+  $archivePath = Join-Path $Temp 'setup_offcirc.zip'
+  $extractPath = Join-Path $Temp 'alma-offline-circulation'
+  Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $extractPath -Recurse -Force -ErrorAction SilentlyContinue
+
+  $response = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -MaximumRedirection 10
+  $modifiedText = [string]$response.Headers['Last-Modified']
+  $modified = [DateTimeOffset]::MinValue
+  if (-not [DateTimeOffset]::TryParse($modifiedText, [ref]$modified)) {
+    throw 'Ex Libris returned no usable Last-Modified value for the Offline Circulation utility.'
+  }
+  $version = $modified.UtcDateTime.ToString('yyyy.MM.dd')
+
+  Invoke-WebRequest -Uri $url -OutFile $archivePath -UseBasicParsing -MaximumRedirection 10
+  Expand-Archive -LiteralPath $archivePath -DestinationPath $extractPath -Force
+  $almaStagedInstaller = Get-ChildItem -LiteralPath $extractPath -Filter 'setup_offcirc.exe' -File -Recurse |
+    Select-Object -First 1 -ExpandProperty FullName
+  if (-not $almaStagedInstaller) {
+    throw 'The Ex Libris archive did not contain setup_offcirc.exe.'
+  }
+  $fileName = 'setup_offcirc.exe'
+downloadScript: |
+  Copy-Item -LiteralPath $almaStagedInstaller -Destination $fileName -Force
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $installer = (Resolve-Path -LiteralPath '.\<filename>').Path
+  $process = Start-Process -FilePath $installer -ArgumentList '/s' -Wait -PassThru
+  if ($process.ExitCode -notin 0, 3010) {
+    throw "Alma Offline Circulation installer exited with $($process.ExitCode)."
+  }
+
+  $installRoot = 'C:\Alma Offline Circulation'
+  $application = Join-Path $installRoot 'OffCirc\Bin\OffCirc.exe'
+  $deadline = (Get-Date).AddMinutes(3)
+  while (-not (Test-Path -LiteralPath $application) -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 5
+  }
+  if (-not (Test-Path -LiteralPath $application)) {
+    throw "The installer completed, but '$application' was not created."
+  }
+
+  # The legacy setup writes its shortcut into the installing account's Start
+  # Menu even during an elevated install. Replace it with an all-users shortcut.
+  $legacyShortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Alma Offline Circulation'
+  Remove-Item -LiteralPath $legacyShortcut -Recurse -Force -ErrorAction SilentlyContinue
+  $publicShortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Alma Offline Circulation.lnk'
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut($publicShortcut)
+  $shortcut.TargetPath = $application
+  $shortcut.WorkingDirectory = Split-Path -Parent $application
+  $shortcut.Save()
+
+  $utf8NoBom = [Text.UTF8Encoding]::new($false)
+  [IO.File]::WriteAllText((Join-Path $installRoot '.yardstick-version'), '<version>', $utf8NoBom)
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $installRoot = 'C:\Alma Offline Circulation'
+  $markerPath = Join-Path $installRoot '.yardstick-version'
+  if (Test-Path -LiteralPath $markerPath) {
+    $installedVersion = (Get-Content -LiteralPath $markerPath -Raw).Trim()
+    # A superseded package must not remove a newer in-place deployment.
+    if ($installedVersion -ne '<version>') { exit 0 }
+  } elseif (-not (Test-Path -LiteralPath $installRoot)) {
+    exit 0
+  }
+
+  Get-Process -Name 'OffCirc' -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+  # Preserve un-uploaded circulation transactions even if the vendor uninstaller
+  # removes its installation directory.
+  $dataPath = Join-Path $installRoot 'OffCirc\files'
+  $backupPath = Join-Path $env:TEMP ('alma-offcirc-data-' + [guid]::NewGuid().ToString('N'))
+  $hasData = (Test-Path -LiteralPath $dataPath -PathType Container) -and
+    (@(Get-ChildItem -LiteralPath $dataPath -Force -ErrorAction SilentlyContinue).Count -gt 0)
+  if ($hasData) {
+    New-Item -ItemType Directory -Path $backupPath -Force | Out-Null
+    Copy-Item -Path (Join-Path $dataPath '*') -Destination $backupPath -Recurse -Force
+  }
+
+  try {
+    $entries = @(Get-ItemProperty -Path @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      ) -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -match '(?i)(Alma.*Offline.*Circulation|Offline.*Circulation.*Alma)' })
+
+    foreach ($entry in $entries) {
+      $process = $null
+      $command = if ($entry.QuietUninstallString) { [string]$entry.QuietUninstallString } else { [string]$entry.UninstallString }
+      $guid = [regex]::Match($command + ' ' + [string]$entry.PSChildName, '\{[0-9A-Fa-f-]{36}\}').Value
+      if ($guid) {
+        $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/x', $guid, '/qn', '/norestart' -Wait -PassThru
+      } elseif ($command -match '^\s*"([^"]+\.exe)"' -or $command -match '^\s*(.+?\.exe)(?:\s|$)') {
+        $uninstaller = $Matches[1]
+        if (Test-Path -LiteralPath $uninstaller) {
+          $arguments = if ([IO.Path]::GetFileName($uninstaller) -like 'unins*.exe') {
+            @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+          } else {
+            @('/s')
+          }
+          $process = Start-Process -FilePath $uninstaller -ArgumentList $arguments -Wait -PassThru
+        }
+      }
+      if ($process -and $process.ExitCode -notin 0, 1605, 1614, 3010) {
+        throw "Alma Offline Circulation uninstaller exited with $($process.ExitCode)."
+      }
+    }
+
+    # The legacy installer is not consistent about publishing an ARP entry.
+    # Remove its application files after the vendor uninstall, then restore data.
+    Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($entry in $entries) {
+      Remove-Item -LiteralPath $entry.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Alma Offline Circulation') -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Alma Offline Circulation.lnk') -Force -ErrorAction SilentlyContinue
+  }
+  finally {
+    if ($hasData) {
+      New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
+      Copy-Item -Path (Join-Path $backupPath '*') -Destination $dataPath -Recurse -Force
+      Remove-Item -LiteralPath $backupPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+fileType: exe
+iconFile: almaofflinecirculation.png
+id: almaofflinecirculation
+displayName: Alma Offline Circulation
+publisher: Ex Libris Ltd.
+description: Alma Offline Circulation records loans and returns locally during a network outage so the transaction file can be uploaded to Alma when service is restored.
+detectionType: script
+detectionScript: |
+  $expected = $null
+  $installed = $null
+  $root = 'C:\Alma Offline Circulation'
+  $application = Join-Path $root 'OffCirc\Bin\OffCirc.exe'
+  $marker = Join-Path $root '.yardstick-version'
+  if ((Test-Path -LiteralPath $application) -and (Test-Path -LiteralPath $marker) -and
+      [version]::TryParse('<version>', [ref]$expected) -and
+      [version]::TryParse((Get-Content -LiteralPath $marker -Raw).Trim(), [ref]$installed) -and
+      $installed -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+uninstallPreviousVersion: false

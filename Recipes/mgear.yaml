@@ -1,0 +1,209 @@
+url: https://github.com/mgear-dev/mgear
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new(
+    $url,
+    'mgear[-_]\d+(?:\.\d+){2,3}\.zip$',
+    '\d+(?:\.\d+){2,3}'
+  )
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  if (-not $url -or -not $fileName -or -not $version) {
+    throw 'No stable mGear release ZIP was found.'
+  }
+fileType: zip
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $installRoot = Join-Path $env:ProgramData 'mGear'
+  # Intune's management extension is 32-bit, so CommonProgramFiles can point
+  # at Program Files (x86). Maya is 64-bit and only scans the native shared
+  # module directory.
+  $commonProgramFiles64 = if (${env:CommonProgramW6432}) {
+    ${env:CommonProgramW6432}
+  } elseif (${env:ProgramW6432}) {
+    Join-Path ${env:ProgramW6432} 'Common Files'
+  } else {
+    $env:CommonProgramFiles
+  }
+  $moduleRoot = Join-Path $commonProgramFiles64 'Autodesk Shared\Modules\maya'
+  $moduleRootsToClean = @($moduleRoot)
+  $programFilesX86 = if (${env:ProgramFiles(x86)}) { ${env:ProgramFiles(x86)} } elseif ($env:ProgramFiles -match '\(x86\)$') { $env:ProgramFiles }
+  if ($programFilesX86) {
+    $moduleRootsToClean += Join-Path $programFilesX86 'Common Files\Autodesk Shared\Modules\maya'
+  }
+  $moduleRootsToClean = @($moduleRootsToClean | Select-Object -Unique)
+  $extractRoot = Join-Path $env:TEMP ('mgear-install-' + [guid]::NewGuid().ToString('N'))
+
+  try {
+    New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+    Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $extractRoot -Force
+
+    $sourceManifest = Get-ChildItem -LiteralPath $extractRoot -Filter 'mGear.mod' -File -Recurse |
+      Where-Object { $_.Directory.Name -eq 'release' } |
+      Select-Object -First 1
+    if (-not $sourceManifest) {
+      throw 'The downloaded archive does not contain release\mGear.mod.'
+    }
+    $payloadRoot = $sourceManifest.Directory.FullName
+    foreach ($requiredItem in @('icons', 'platforms', 'scripts')) {
+      if (-not (Test-Path -LiteralPath (Join-Path $payloadRoot $requiredItem))) {
+        throw "The downloaded archive is missing release\$requiredItem."
+      }
+    }
+
+    if (Test-Path -LiteralPath $installRoot) {
+      Remove-Item -LiteralPath $installRoot -Recurse -Force
+    }
+    Copy-Item -LiteralPath $payloadRoot -Destination $installRoot -Recurse -Force
+
+    $installedManifest = Join-Path $installRoot 'mGear.mod'
+    $moduleContent = Get-Content -LiteralPath $installedManifest -Raw
+    $installRootForward = $installRoot.Replace('\', '/')
+    $moduleReplacement = '${1}<version> ' + $installRootForward + '/platforms/'
+    $moduleContent = $moduleContent -replace `
+      '(?m)^(\+\s+MAYAVERSION:\d+\s+PLATFORM:\S+\s+mGear\s+)\S+\s+\./platforms/',
+      $moduleReplacement
+    $moduleContent = "# Managed by Yardstick; package version <version>`r`n$moduleContent"
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText($installedManifest, $moduleContent, $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $installRoot '.yardstick-version'), '<version>', $utf8NoBom)
+
+    New-Item -ItemType Directory -Path $moduleRoot -Force | Out-Null
+    foreach ($rootToClean in $moduleRootsToClean) {
+      Get-ChildItem -LiteralPath $rootToClean -Filter 'mGear.mod' -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match '(?m)^# Managed by Yardstick;' } |
+        Remove-Item -Force
+    }
+
+    $platformRoot = Join-Path $installRoot 'platforms'
+    $supportedYears = Get-ChildItem -LiteralPath $platformRoot -Directory |
+      Where-Object {
+        $_.Name -match '^\d{4}$' -and
+        (Test-Path -LiteralPath (Join-Path $_.FullName 'windows\x64\plug-ins'))
+      }
+    if (-not $supportedYears) {
+      throw 'The downloaded archive contains no supported Windows x64 Maya platforms.'
+    }
+    foreach ($year in $supportedYears) {
+      $yearModuleRoot = Join-Path $moduleRoot $year.Name
+      New-Item -ItemType Directory -Path $yearModuleRoot -Force | Out-Null
+      [IO.File]::WriteAllText((Join-Path $yearModuleRoot 'mGear.mod'), $moduleContent, $utf8NoBom)
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+powerShellUninstallScript: |
+  $installRoot = Join-Path $env:ProgramData 'mGear'
+  $markerPath = Join-Path $installRoot '.yardstick-version'
+  $installedVersion = if (Test-Path -LiteralPath $markerPath) {
+    (Get-Content -LiteralPath $markerPath -Raw).Trim()
+  }
+
+  # An older superseded package must never remove a newer in-place deployment.
+  if ($installedVersion -ne '<version>') {
+    exit 0
+  }
+
+  $commonProgramFiles64 = if (${env:CommonProgramW6432}) {
+    ${env:CommonProgramW6432}
+  } elseif (${env:ProgramW6432}) {
+    Join-Path ${env:ProgramW6432} 'Common Files'
+  } else {
+    $env:CommonProgramFiles
+  }
+  $moduleRoots = @(Join-Path $commonProgramFiles64 'Autodesk Shared\Modules\maya')
+  $programFilesX86 = if (${env:ProgramFiles(x86)}) { ${env:ProgramFiles(x86)} } elseif ($env:ProgramFiles -match '\(x86\)$') { $env:ProgramFiles }
+  if ($programFilesX86) {
+    $moduleRoots += Join-Path $programFilesX86 'Common Files\Autodesk Shared\Modules\maya'
+  }
+  foreach ($moduleRoot in @($moduleRoots | Select-Object -Unique)) {
+    if (Test-Path -LiteralPath $moduleRoot) {
+      Get-ChildItem -LiteralPath $moduleRoot -Filter 'mGear.mod' -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object {
+          (Get-Content -LiteralPath $_.FullName -Raw) -match
+            '(?m)^# Managed by Yardstick; package version <version>\r?$'
+        } |
+        Remove-Item -Force
+    }
+  }
+  Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: mgear.png
+id: mgear
+displayName: mGear
+publisher: mgear-dev
+description: mGear is an open-source rigging and animation framework for Autodesk Maya. This package deploys the shared Windows module and compiled solvers for supported Maya versions.
+detectionType: script
+detectionScript: |
+  $expected = $null
+  if (-not [version]::TryParse('<version>', [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $installRoot = Join-Path $env:ProgramData 'mGear'
+  $markerPath = Join-Path $installRoot '.yardstick-version'
+  $manifestPath = Join-Path $installRoot 'mGear.mod'
+  if (-not (Test-Path -LiteralPath $markerPath) -or -not (Test-Path -LiteralPath $manifestPath)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $installed = $null
+  $installedText = (Get-Content -LiteralPath $markerPath -Raw).Trim()
+  if (-not [version]::TryParse($installedText, [ref]$installed) -or $installed -lt $expected) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $commonProgramFiles64 = if (${env:CommonProgramW6432}) {
+    ${env:CommonProgramW6432}
+  } elseif (${env:ProgramW6432}) {
+    Join-Path ${env:ProgramW6432} 'Common Files'
+  } else {
+    $env:CommonProgramFiles
+  }
+  $moduleRoot = Join-Path $commonProgramFiles64 'Autodesk Shared\Modules\maya'
+  $platformRoot = Join-Path $installRoot 'platforms'
+  $supportedYears = @(Get-ChildItem -LiteralPath $platformRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -match '^\d{4}$' -and
+      (Test-Path -LiteralPath (Join-Path $_.FullName 'windows\x64\plug-ins'))
+    } |
+    Sort-Object Name)
+  if (-not $supportedYears) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $escapedVersion = [regex]::Escape($installedText)
+  $installRootForward = [regex]::Escape($installRoot.Replace('\', '/'))
+  foreach ($year in $supportedYears) {
+    $pluginRoot = Join-Path $year.FullName 'windows\x64\plug-ins'
+    if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot 'mgear_solvers.mll')) -or
+        -not (Test-Path -LiteralPath (Join-Path $pluginRoot 'mGearWeightDriver.mll'))) {
+      Write-Output 'Not Detected'
+      exit 1
+    }
+    $descriptor = Join-Path (Join-Path $moduleRoot $year.Name) 'mGear.mod'
+    if (-not (Test-Path -LiteralPath $descriptor)) {
+      Write-Output 'Not Detected'
+      exit 1
+    }
+    $content = Get-Content -LiteralPath $descriptor -Raw
+    if ($content -notmatch "(?m)^# Managed by Yardstick; package version $escapedVersion\r?$" -or
+        $content -notmatch "(?m)^\+\s+MAYAVERSION:$($year.Name)\s+PLATFORM:win64\s+mGear\s+\S+\s+$installRootForward/platforms/$($year.Name)/windows/x64\r?$") {
+      Write-Output 'Not Detected'
+      exit 1
+    }
+  }
+  Write-Output 'Detected'
+  exit 0
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+uninstallPreviousVersion: false

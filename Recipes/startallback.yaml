@@ -1,0 +1,46 @@
+url: https://www.startallback.com/
+urlRedirects: false
+preDownloadScript: |
+  $page = (Invoke-WebRequest -Uri $url -UseBasicParsing -ErrorAction Stop).Content
+  $match = [regex]::Match($page, 'Download\s+v(?<version>\d+(?:\.\d+)+)', 'IgnoreCase')
+  if (-not $match.Success) { throw "Could not resolve the latest StartAllBack version from '$url'." }
+  $version = $match.Groups['version'].Value
+  $fileName = "StartAllBack_${version}_setup.exe"
+  $url = "https://startisback.sfo3.cdn.digitaloceanspaces.com/$fileName"
+fileType: exe
+installScript: <filename> /allusers /silent
+powerShellUninstallScript: |
+  $configuration = Join-Path $env:ProgramFiles 'StartAllBack\StartAllBackCfg.exe'
+  if (-not (Test-Path -LiteralPath $configuration)) { exit 0 }
+  $process = Start-Process -FilePath $configuration -ArgumentList '/uninstall', '/silent' -Wait -PassThru
+  if ($process.ExitCode -notin 0, 3010) { throw "StartAllBack uninstaller exited with $($process.ExitCode)." }
+  $installDir = Split-Path -Parent $configuration
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  if (-not (Test-Path -LiteralPath $installDir)) {
+    Remove-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'DelStartIsBack' -Force -ErrorAction SilentlyContinue
+  }
+iconFile: startallback.png
+id: startallback
+displayName: StartAllBack
+publisher: startisback.com
+description: StartAllBack restores a classic, customizable Start menu, taskbar, and File Explorer experience on Windows 11.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'StartAllBack*' } |
+    Select-Object -First 1
+  $found = $null
+  if ($app -and [version]::TryParse(([string]$app.DisplayVersion -replace '[^0-9.].*$',''), [ref]$found) -and $found -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_21H2

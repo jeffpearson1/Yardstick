@@ -1,0 +1,65 @@
+url: https://www.dragonframe.com/downloads/
+urlRedirects: false
+preDownloadScript: |
+  $page = Invoke-WebRequest -Uri $url -UseBasicParsing -ErrorAction Stop
+  $match = [regex]::Match(
+    $page.Content,
+    'https://www\.dragonframe\.com/download/(?<file>Dragonframe_(?<version>\d{4}(?:\.\d+){2})-Setup\.exe)',
+    [Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+  if (-not $match.Success) {
+    throw 'Could not find the current Dragonframe Windows installer on the vendor downloads page.'
+  }
+  $version = $match.Groups['version'].Value
+  $fileName = $match.Groups['file'].Value
+  $url = $match.Value
+postDownloadScript: |
+  # The vendor EXE is an Advanced Installer bundle. Extract its signed MSI,
+  # external CAB, and Visual C++ prerequisite so Intune can install reliably.
+  $wrapper = Join-Path $PWD $fileName
+  $process = Start-Process -FilePath $wrapper -ArgumentList '/extract' -WorkingDirectory $PWD.Path -Wait -PassThru
+  if ($process.ExitCode -ne 0) {
+    throw "Dragonframe payload extraction exited with $($process.ExitCode)."
+  }
+
+  $installer = Join-Path $PWD 'setup.msi'
+  $cab = Join-Path $PWD 'setup1.cab'
+  $redist = Join-Path $PWD 'Visual C++ Redistributable for Visual Studio 2019\vc_redist.x64.exe'
+  foreach ($required in $installer, $cab, $redist) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+      throw "The extracted Dragonframe bundle is missing '$required'."
+    }
+  }
+
+  $fileName = 'setup.msi'
+  Remove-Item -LiteralPath $wrapper -Force
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $redist = Join-Path $PSScriptRoot 'Visual C++ Redistributable for Visual Studio 2019\vc_redist.x64.exe'
+  $process = Start-Process -FilePath $redist -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+  if ($process.ExitCode -notin 0, 1638, 1641, 3010) {
+    throw "Dragonframe Visual C++ prerequisite exited with $($process.ExitCode)."
+  }
+
+  $installer = Join-Path $PSScriptRoot '<filename>'
+  $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList @(
+    '/i', ('"{0}"' -f $installer), '/qn', '/norestart',
+    ('SETUPEXEDIR="{0}"' -f $PSScriptRoot)
+  ) -Wait -PassThru
+  if ($process.ExitCode -notin 0, 1641, 3010) {
+    throw "Dragonframe MSI installation exited with $($process.ExitCode)."
+  }
+  exit 0
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: dragonframe.png
+id: dragonframe
+displayName: Dragonframe
+publisher: DZED Systems LLC
+description: Dragonframe is professional motion control and stop-motion animation software for film and television production.
+fileType: msi
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 60

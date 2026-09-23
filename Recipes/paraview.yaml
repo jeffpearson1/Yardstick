@@ -1,0 +1,37 @@
+url: https://www.paraview.org/files/listing.txt
+urlRedirects: false
+preDownloadScript: |
+  $listing = (Invoke-WebRequest -Uri 'https://www.paraview.org/files/listing.txt' -UseBasicParsing -ErrorAction Stop).Content
+  $candidates = foreach ($line in ($listing -split "`n")) {
+    if ($line -match '^\./v(?<series>\d+\.\d+)/(?<name>ParaView-(?<ver>\d+(?:\.\d+)+)-Windows-Python[\d.]+-msvc\d+-AMD64\.msi)\s') {
+      [PSCustomObject]@{
+        Version = [version]$Matches['ver']
+        VersionText = $Matches['ver']
+        Series = $Matches['series']
+        Name = $Matches['name']
+      }
+    }
+  }
+  $candidate = $candidates | Sort-Object Version -Descending | Select-Object -First 1
+  if (-not $candidate) { throw 'Could not find a ParaView Windows AMD64 MSI in listing.txt.' }
+
+  $version = $candidate.VersionText
+  $fileName = $candidate.Name
+  # Use the direct file URL, not paraview-downloads/download.php. The download.php wrapper
+  # streams the response without a Content-Length header, and the harness (and Yardstick)
+  # need the file size up front, so download.php fails with
+  # "The server did not return the file size."
+  $url = "https://www.paraview.org/files/v$($candidate.Series)/$fileName"
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: paraview.png
+id: paraview
+displayName: ParaView
+publisher: Kitware, Inc.
+description: ParaView is an open-source scientific visualization application for analyzing data with qualitative and quantitative techniques.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

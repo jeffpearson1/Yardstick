@@ -1,0 +1,107 @@
+url: https://developer.android.com/studio
+urlRedirects: false
+preDownloadScript: |
+  # Google's update feed supplies the exact stable build used by build.txt,
+  # while the download page supplies the current signed Windows installer.
+  # Intune reports the short release version the installer path uses
+  # (2026.1.4.7); the long build number (AI-252.26199...) only drives detection.
+  # Cast on the right, not the left: a left-side cast leaks a type constraint
+  # onto $updates in the runner's shared recipe scope.
+  $updates = [xml](Invoke-WebRequest -Uri 'https://dl.google.com/android/studio/patches/updates.xml' -UseBasicParsing).Content
+  $stableChannel = @($updates.products.product.channel | Where-Object { $_.status -eq 'release' })[0]
+  $stableBuild = @($stableChannel.build)[0]
+  if (-not $stableBuild) { throw 'The Android Studio update feed returned no stable build.' }
+
+  $buildNumber = [string]$stableBuild.number
+  if ($buildNumber -notmatch '^AI-\d+(?:\.\d+)+$') {
+    throw "Unexpected Android Studio stable build number '$buildNumber'."
+  }
+
+  $releaseLabel = [string]$stableBuild.version
+  if ($releaseLabel -notmatch '(?<release>\d{4}\.\d+\.\d+)') {
+    throw "Could not parse the Android Studio release version from '$releaseLabel'."
+  }
+  $releaseVersion = $Matches['release']
+
+  $downloadPage = (Invoke-WebRequest -Uri 'https://developer.android.com/studio' -UseBasicParsing).Content
+  $downloadMatch = [regex]::Match(
+    $downloadPage,
+    'https://edgedl\.me\.gvt1\.com/android/studio/install/(?<installerVersion>\d+(?:\.\d+)+)/(?<file>android-studio-[^"''<>/]+-windows\.exe)',
+    [Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+  if (-not $downloadMatch.Success) {
+    throw 'Could not find the stable Android Studio Windows installer on the official download page.'
+  }
+
+  $installerVersion = $downloadMatch.Groups['installerVersion'].Value
+  if (-not $installerVersion.StartsWith("$releaseVersion.")) {
+    throw "The stable feed reports '$releaseVersion', but the download page returned installer '$installerVersion'."
+  }
+  $url = [Net.WebUtility]::HtmlDecode($downloadMatch.Value)
+  $fileName = $downloadMatch.Groups['file'].Value
+  $version = $installerVersion
+
+  # build.txt records the build number, which the release version cannot
+  # express, so the install and detection scripts get it through their own
+  # placeholder rather than through <version>.
+  if ($powerShellInstallScript -notmatch '<buildnumber>' -or $detectionScript -notmatch '<buildnumber>') {
+    throw 'The Android Studio install and detection scripts must both contain the <buildnumber> placeholder.'
+  }
+  $powerShellInstallScript = $powerShellInstallScript.Replace('<buildnumber>', $buildNumber)
+  $detectionScript = $detectionScript.Replace('<buildnumber>', $buildNumber)
+powerShellInstallScript: |
+  # The Android Studio NSIS wrapper can return 1223 (ERROR_CANCELLED) after a
+  # successful silent install, so validate the exact installed build instead.
+  $process = Start-Process -FilePath '.\<filename>' -ArgumentList '/S' -Wait -PassThru
+  $expectedBuild = '<buildnumber>'
+  $buildFile = Join-Path $env:ProgramFiles 'Android\Android Studio\build.txt'
+  $installedBuild = if (Test-Path -LiteralPath $buildFile) {
+      (Get-Content -LiteralPath $buildFile -First 1 -ErrorAction SilentlyContinue).Trim()
+  }
+  if ($installedBuild -ne $expectedBuild) {
+      throw "Android Studio install failed (exit $($process.ExitCode)); expected '$expectedBuild' but found '$installedBuild'."
+  }
+powerShellUninstallScript: |
+  $installDirectory = Join-Path $env:ProgramFiles 'Android\Android Studio'
+  $uninstaller = Join-Path $installDirectory 'uninstall.exe'
+  if (-not (Test-Path -LiteralPath $uninstaller)) {
+      throw "Android Studio uninstaller was not found at '$uninstaller'."
+  }
+
+  $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+  if ($process.ExitCode -ne 0) {
+      throw "Android Studio uninstall failed with exit code $($process.ExitCode)."
+  }
+
+  # NSIS removes the application but leaves its shortcut and empty vendor root.
+  $startMenuDirectory = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Android Studio'
+  Remove-Item -LiteralPath $startMenuDirectory -Recurse -Force -ErrorAction SilentlyContinue
+
+  $androidRoot = Split-Path -Parent $installDirectory
+  if ((Test-Path -LiteralPath $androidRoot) -and
+      -not (Get-ChildItem -LiteralPath $androidRoot -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+      Remove-Item -LiteralPath $androidRoot -Force -ErrorAction SilentlyContinue
+  }
+iconFile: androidstudio.png
+id: androidstudio
+displayName: Android Studio
+publisher: Google LLC
+description: Android Studio is the official integrated development environment for building Android applications.
+fileType: exe
+detectionType: script
+detectionScript: |
+  $expectedBuild = '<buildnumber>'
+  $buildFile = Join-Path $env:ProgramFiles 'Android\Android Studio\build.txt'
+  if (Test-Path -LiteralPath $buildFile) {
+      $installedBuild = (Get-Content -LiteralPath $buildFile -First 1 -ErrorAction SilentlyContinue).Trim()
+      if ($installedBuild -eq $expectedBuild) {
+          Write-Output "Detected Android Studio $installedBuild"
+          exit 0
+      }
+  }
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+maximumInstallationTimeInMinutes: 60
+minOSVersion: W10_1607

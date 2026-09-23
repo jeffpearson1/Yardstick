@@ -1,0 +1,20 @@
+url: https://github.com/Romanitho/Winget-AutoUpdate
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "WAU\.msi$"
+  $versionRegex = "(\.{0,1}[0-9]{1,3}){3}"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $filename = $downloader.filename
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: wingetautoupdate.png
+id: wingetautoupdate
+displayName: Winget-AutoUpdate
+publisher: Romanitho
+description: Winget-AutoUpdate (WAU) is a tool that automatically keeps applications installed on a device up to date using the Windows Package Manager (winget).
+fileType: msi
+detectionType: msi

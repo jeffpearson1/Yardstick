@@ -1,0 +1,54 @@
+url: https://github.com/NickeManarin/ScreenToGif/releases
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  # ScreenToGif is a lightweight screen recorder and GIF converter
+  # Available as portable ZIP from GitHub releases
+  
+  # Get latest release info from GitHub API
+  $apiUrl = "https://api.github.com/repos/NickeManarin/ScreenToGif/releases/latest"
+  $release = Invoke-RestMethod $apiUrl -ErrorAction SilentlyContinue
+  
+  if (-not $release) {
+    throw "Could not retrieve ScreenToGif release information from GitHub"
+  }
+  
+  # Extract version from tag_name (e.g., "2.43.2")
+  $version = $release.tag_name
+  
+  # Find the portable x64 ZIP asset
+  $asset = $release.assets | Where-Object { $_.name -match "Portable.x64.zip$" } | Select-Object -First 1
+  
+  if (-not $asset) {
+    throw "Could not find ScreenToGif portable x64 release asset"
+  }
+  
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+  $registryDetectionValue = $version
+powerShellInstallScript: |
+  $installDir = "${env:LOCALAPPDATA}\ScreenToGif"
+  if (-not (Test-Path $installDir)) {
+    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  }
+  Expand-Archive -LiteralPath ".\<filename>" -DestinationPath $installDir -Force
+powerShellUninstallScript: |
+  $installDir = "${env:LOCALAPPDATA}\ScreenToGif"
+  if (Test-Path $installDir) {
+    Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+iconFile: screentogif.png
+id: screentogif
+displayName: ScreenToGif
+publisher: NickeManarin
+description: ScreenToGif is a lightweight application that allows you to record a selected area of your screen and save it as a GIF or MP4.
+detectionType: file
+fileDetectionPath: '%LOCALAPPDATA%\ScreenToGif'
+fileDetectionName: ScreenToGif.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

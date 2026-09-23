@@ -1,0 +1,186 @@
+# Ghostscript 10.01.0 and later CANNOT be installed silently with the vendor installer.
+# Artifex commit 63fa87d ("Windows Installer: Override /S setting.. effectively disabling
+# silent installs") added "SetSilent normal" to .onInit in psi/nsisinst.nsi, which overrides
+# /S and always shows the full wizard. The installer also ends with a modal "Installation
+# Complete" MessageBox in .onGUIEnd, so an unattended run hangs until it is killed - that is
+# exactly what happened when this recipe still used "<filename> /S".
+#
+# The supported workaround, and what this recipe does, is to expand the NSIS archive at
+# package-build time with 7-Zip and lay the file tree down ourselves, writing the same
+# registry values the vendor installer writes. The uninstaller is NOT affected by the bug
+# (Un.onInit has no SetSilent), but because we place the files ourselves we also remove them
+# ourselves rather than relying on uninstgs.exe.
+#
+# BUILD PREREQUISITE: 7-Zip must be installed on the machine that builds this package.
+url: https://github.com/ArtifexSoftware/ghostpdl-downloads/releases
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/ArtifexSoftware/ghostpdl-downloads/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $asset = $release.assets | Where-Object { $_.name -match '^gs(?<digits>\d+)w64\.exe$' } | Select-Object -First 1
+  if (-not $asset) { throw 'Could not find the 64-bit AGPL Ghostscript Windows installer asset.' }
+  if ($asset.name -notmatch '^gs(?<digits>\d+)w64\.exe$') { throw 'Unexpected Ghostscript installer file name.' }
+  $digits = $Matches['digits']
+  if ($digits.Length -lt 5) { throw "Unexpected Ghostscript version digits '$digits'." }
+  $major = [int]$digits.Substring(0, 2)
+  $minor = [int]$digits.Substring(2, 2)
+  $patch = [int]$digits.Substring(4)
+  $version = '{0}.{1}.{2}' -f $major, $minor, $patch
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+postDownloadScript: |
+  # NOTE: the harness and Yardstick run postDownloadScript BEFORE <token> expansion, so
+  # "<filename>" is NOT substituted here. Use $fileName, which preDownloadScript set and which
+  # is still in scope because both scripts are dot-sourced. Using <filename> made 7-Zip receive
+  # a path that does not exist and fail with exit code 2.
+  $installerName = $fileName
+  if (-not $installerName) {
+    $installerName = (Get-ChildItem -LiteralPath (Get-Location) -Filter 'gs*w64.exe' -File |
+      Select-Object -First 1 -ExpandProperty Name)
+  }
+  if (-not $installerName) { throw 'Could not determine the downloaded Ghostscript installer file name.' }
+  $installerPath = Join-Path (Get-Location) $installerName
+  if (-not (Test-Path -LiteralPath $installerPath)) { throw "Ghostscript installer not found at '$installerPath'." }
+
+  # Expand the NSIS archive next to the installer so the payload ships inside the package.
+  # 7-Zip does not auto-detect an NSIS archive inside a PE, so -tnsis is required.
+  $sevenZip = @(
+    (Join-Path $env:ProgramFiles '7-Zip\7z.exe'),
+    (Join-Path ${env:ProgramFiles(x86)} '7-Zip\7z.exe')
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+  if (-not $sevenZip) {
+    $command = Get-Command '7z.exe' -ErrorAction SilentlyContinue
+    if ($command) { $sevenZip = $command.Source }
+  }
+  if (-not $sevenZip) {
+    throw 'Ghostscript packaging requires 7-Zip on the build machine (Ghostscript 10.01+ cannot be installed silently, so its NSIS payload must be expanded at build time). Install 7-Zip and rebuild.'
+  }
+
+  $payloadDir = Join-Path (Get-Location) 'ghostscript-payload'
+  Remove-Item -LiteralPath $payloadDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
+
+  $sevenZipOutput = & $sevenZip x -tnsis "-o$payloadDir" $installerPath -y 2>&1
+  # 7-Zip returns 1 for warnings (the Ghostscript archive always reports "data after the end of
+  # archive" because of the Authenticode signature) and 2 or higher for real failures.
+  if ($LASTEXITCODE -gt 1) {
+    throw "7-Zip failed to expand the Ghostscript installer (exit $LASTEXITCODE): $($sevenZipOutput -join ' ')"
+  }
+
+  # $PLUGINSDIR holds NSIS runtime plug-ins only; it must not be deployed.
+  Remove-Item -LiteralPath (Join-Path $payloadDir '$PLUGINSDIR') -Recurse -Force -ErrorAction SilentlyContinue
+
+  if (-not (Test-Path -LiteralPath (Join-Path $payloadDir 'bin\gswin64c.exe'))) {
+    throw 'Expanded Ghostscript payload does not contain bin\gswin64c.exe.'
+  }
+powerShellInstallScript: |
+  $version = '<version>'
+  $payloadDir = Join-Path (Get-Location) 'ghostscript-payload'
+  $installDir = Join-Path $env:ProgramFiles "gs\gs$version"
+  if (-not (Test-Path -LiteralPath $payloadDir)) { throw "Ghostscript payload directory not found at '$payloadDir'." }
+
+  # The vendor installer chains the VC++ runtime; keep doing that. 3010 = reboot required,
+  # 1638 = a newer runtime is already present. Both are success for our purposes.
+  $vcredist = Join-Path $payloadDir 'vcredist_x64.exe'
+  if (Test-Path -LiteralPath $vcredist) {
+    $vc = Start-Process -FilePath $vcredist -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
+    if ($vc.ExitCode -notin 0, 1638, 3010) { throw "Ghostscript VC++ runtime install exited with $($vc.ExitCode)." }
+  }
+
+  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  foreach ($item in @('bin', 'lib', 'Resource', 'iccprofiles', 'doc', 'examples')) {
+    $source = Join-Path $payloadDir $item
+    if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $installDir -Recurse -Force }
+  }
+
+  # Reproduce the registry values the vendor installer writes. GS_DLL/GS_LIB are the real
+  # integration points that consumers such as ImageMagick and Ghostview read.
+  foreach ($vendor in 'GPL Ghostscript', 'Artifex\GPL Ghostscript') {
+    $key = "HKLM:\SOFTWARE\$vendor\$version"
+    New-Item -Path $key -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'GS_DLL' -Value (Join-Path $installDir 'bin\gsdll64.dll') -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'GS_LIB' -Value ("$installDir\bin;$installDir\lib;$installDir\fonts") -PropertyType String -Force | Out-Null
+  }
+
+  # The vendor uses the key name "GPL Ghostscript <version>" with DisplayName "GPL Ghostscript"
+  # (no version in the DisplayName). Keep that shape so detection and coexistence behave the
+  # same way as a vendor-installed copy.
+  $arpKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\GPL Ghostscript $version"
+  New-Item -Path $arpKey -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayName' -Value 'GPL Ghostscript' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayVersion' -Value $version -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'Publisher' -Value 'Artifex Software Inc.' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'InstallLocation' -Value $installDir -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoModify' -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoRepair' -Value 1 -PropertyType DWord -Force | Out-Null
+
+  $binPath = Join-Path $installDir 'bin'
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if (($machinePath -split ';') -notcontains $binPath) {
+    [Environment]::SetEnvironmentVariable('Path', (($machinePath.TrimEnd(';'), $binPath) -join ';'), 'Machine')
+  }
+powerShellUninstallScript: |
+  $version = '<version>'
+  $installDir = Join-Path $env:ProgramFiles "gs\gs$version"
+  $binPath = Join-Path $installDir 'bin'
+
+  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+  $gsRoot = Join-Path $env:ProgramFiles 'gs'
+  if ((Test-Path -LiteralPath $gsRoot) -and -not (Get-ChildItem -LiteralPath $gsRoot -Force -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $gsRoot -Force -ErrorAction SilentlyContinue
+  }
+
+  foreach ($key in @(
+      "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\GPL Ghostscript $version",
+      "HKLM:\SOFTWARE\GPL Ghostscript\$version",
+      "HKLM:\SOFTWARE\Artifex\GPL Ghostscript\$version")) {
+    Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $newPath = (($machinePath -split ';') | Where-Object { $_ -and ($_ -ne $binPath) }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+iconFile: ghostscript.png
+id: ghostscript
+displayName: Ghostscript
+publisher: Artifex Software Inc.
+description: Ghostscript is an interpreter for the PostScript language and PDF files, widely used for printing, format conversion, and as a rendering back end for other applications.
+fileType: exe
+detectionType: script
+detectionScript: |
+  # The vendor's DisplayName is the bare string "GPL Ghostscript" for every version - the
+  # version only appears in the key name and in DisplayVersion - so compare DisplayVersion.
+  $expectedText = '<version>'
+  $expectedParts = @($expectedText -split '\.')
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike '*Ghostscript*') { continue }
+
+      $foundText = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $foundParts = @($foundText -split '\.')
+      if ($foundParts.Count -lt 2) { continue }
+
+      $count = [Math]::Min([Math]::Min($expectedParts.Count, $foundParts.Count), 4)
+      $expected = $null
+      $found = $null
+      if ([version]::TryParse((($expectedParts[0..($count - 1)]) -join '.'), [ref]$expected) -and
+          [version]::TryParse((($foundParts[0..($count - 1)]) -join '.'), [ref]$found) -and
+          $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,53 @@
+url: https://github.com/mltframework/shotcut
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/mltframework/shotcut/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $version = $release.tag_name.TrimStart('v')
+  $asset = $release.assets | Where-Object { $_.name -match '^shotcut-win64-[0-9.]+\.exe$' } | Select-Object -First 1
+  if (-not $asset) { throw 'Could not find the Shotcut win64 installer.' }
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+  # shotcut.exe reports a 3-part file version, so padding to 4 parts would make
+  # the comparison fail (a missing revision sorts below '.0').
+  $fileDetectionVersion = [VersionPro]::new($version).ToString(3)
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'Shotcut*' -and $_.UninstallString } |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the Shotcut uninstaller registry entry.' }
+
+  # UninstallString may carry arguments (e.g. '"...uninstall.exe" /AllUsers'),
+  # so pull just the executable path out of it.
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "Shotcut uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  # Shotcut ships an Inno Setup installer (unins000.exe)
+  $process = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "Shotcut uninstaller exited with $($process.ExitCode)." }
+
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: shotcut.png
+id: shotcut
+displayName: Shotcut
+publisher: Meltytech, LLC
+description: Shotcut is a free, open-source, cross-platform video editor.
+detectionType: file
+fileDetectionPath: 'C:\Program Files\Shotcut'
+fileDetectionName: shotcut.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

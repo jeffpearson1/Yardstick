@@ -1,0 +1,62 @@
+url: https://openscad.org/downloads.html
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $releaseScript = Invoke-WebRequest -Uri 'https://openscad.org/inc/releases.js' -UseBasicParsing -ErrorAction Stop
+  $pattern = "setSnapshotFileInfo\('WIN64_RELEASE_INSTALLER',\s*'OpenSCAD\s+(?<version>[^']+)',\s*'[^']+',\s*'(?<download>https://files\.openscad\.org/[^']+Installer\.exe)'\);"
+  $match = [regex]::Match($releaseScript.Content, $pattern)
+  if (-not $match.Success) { throw 'Could not find the stable OpenSCAD Windows x64 installer in releases.js.' }
+  $version = $match.Groups['version'].Value
+  $url = $match.Groups['download'].Value
+  $fileName = [System.IO.Path]::GetFileName($url)
+installScript: <filename> /S
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'OpenSCAD*' -and $_.UninstallString } |
+    Select-Object -First 1
+
+  if ($app) {
+    # UninstallString may carry arguments (e.g. '"...uninstall.exe" /AllUsers'),
+    # so pull just the executable path out of it.
+    $raw = [string]$app.UninstallString
+    $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+      elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+      else { $raw.Trim('"') }
+  } else {
+    $exe = @(
+      'C:\Program Files\OpenSCAD\Uninstall.exe',
+      'C:\Program Files\OpenSCAD\uninstall.exe',
+      'C:\Program Files (x86)\OpenSCAD\Uninstall.exe',
+      'C:\Program Files (x86)\OpenSCAD\uninstall.exe'
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  }
+
+  if (-not $exe) { throw 'Could not find the OpenSCAD uninstaller registry entry or fallback path.' }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "OpenSCAD uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  Start-Process -FilePath $exe -ArgumentList '/S', "_?=$installDir" -Wait
+
+  # With _?= NSIS leaves the uninstaller folder, the ARP entry and the
+  # Start Menu shortcuts behind, so clean those up explicitly.
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $app.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+  Get-ChildItem -Path (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs') -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'OpenSCAD*' } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: openscad.png
+id: openscad
+displayName: OpenSCAD
+publisher: OpenSCAD
+description: OpenSCAD is a script-based solid 3D CAD modeler for creating precise models from programmatic descriptions.
+detectionType: file
+fileDetectionPath: 'C:\Program Files\OpenSCAD'
+fileDetectionName: openscad.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,79 @@
+url: https://claude.ai/api/desktop/win32/x64/msix/latest/redirect
+urlRedirects: false
+preDownloadScript: |
+  # Anthropic's official enterprise endpoint rejects HEAD requests, so resolve its
+  # 307 with a headers-only GET instead of Yardstick's generic redirect helper.
+  $handler = [System.Net.Http.HttpClientHandler]::new()
+  $handler.AllowAutoRedirect = $false
+  $client = [System.Net.Http.HttpClient]::new($handler)
+  $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $url)
+  $response = $null
+  try {
+      $response = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+      if ([int]$response.StatusCode -notin 301, 302, 303, 307, 308 -or -not $response.Headers.Location) {
+          throw "The official Claude endpoint returned HTTP $([int]$response.StatusCode) without a download redirect."
+      }
+      $url = [Uri]::new($request.RequestUri, $response.Headers.Location).AbsoluteUri
+  }
+  finally {
+      if ($response) { $response.Dispose() }
+      $request.Dispose()
+      $client.Dispose()
+      $handler.Dispose()
+  }
+
+  if ($url -notmatch '/win32/x64/(?<ver>[0-9]+(?:\.[0-9]+)+)/(?<file>Claude-[a-f0-9]+\.msix)$') {
+      throw "The official Claude download did not resolve to a versioned x64 MSIX: '$url'."
+  }
+  $version = $Matches['ver']
+  $fileName = $Matches['file']
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $package = Join-Path $PSScriptRoot '<filename>'
+  if (-not (Test-Path -LiteralPath $package)) {
+      throw "The Claude MSIX was not found at '$package'."
+  }
+
+  # Provision machine-wide rather than registering only the SYSTEM account. New
+  # and existing users then receive Claude, including its packaged Cowork service.
+  Add-AppxProvisionedPackage -Online -PackagePath $package -SkipLicense -Regions 'all' | Out-Null
+  exit 0
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'Stop'
+
+  Get-Process -Name 'Claude' -ErrorAction SilentlyContinue |
+      Stop-Process -Force -ErrorAction SilentlyContinue
+
+  # Remove registered copies first, then remove the machine-wide provisioning so
+  # Windows does not register Claude again for users who sign in later.
+  foreach ($package in @(Get-AppxPackage -AllUsers -Name 'Claude')) {
+      Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+  }
+  foreach ($package in @(Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq 'Claude')) {
+      Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -AllUsers -ErrorAction Stop | Out-Null
+  }
+  exit 0
+iconFile: claude.png
+id: claude
+displayName: Claude
+publisher: Anthropic, PBC
+description: |
+    **WARNING: This application has a dependency that WILL cause a restart on install if it does not already exist.**
+    
+    Claude is Anthropic's desktop application for AI chat, coding, file work, and agentic workflows.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  foreach ($package in @(Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq 'Claude')) {
+      $found = $null
+      if ([version]::TryParse([string]$package.Version, [ref]$found) -and $found -ge $expected) {
+          Write-Output 'Detected'
+          exit 0
+      }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2

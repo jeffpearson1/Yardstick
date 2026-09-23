@@ -1,0 +1,122 @@
+url: https://github.com/cytoscape/cytoscape/releases
+urlRedirects: false
+preDownloadScript: |
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/cytoscape/cytoscape/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  if ($release.prerelease -or $release.tag_name -match '(?i)(alpha|beta|rc)') { throw 'Latest Cytoscape release is a prerelease.' }
+
+  $version = $release.tag_name
+  $versionUnderscore = $version -replace '\.', '_'
+  $asset = $release.assets |
+    Where-Object { $_.name -match "^Cytoscape_$versionUnderscore`_windows_64bit\.exe$" } |
+    Select-Object -First 1
+  if (-not $asset) { throw 'Could not find the Cytoscape Windows 64-bit installer asset.' }
+
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+# PREREQUISITE: a Java 17 JDK must already be installed. Cytoscape's install4j media declares
+# javaMinVersion=17.0.2, javaMaxVersion=17 and jdkMode="jdk", and its JRE bundle is
+# bundleType="dynamic" (downloaded on demand) rather than embedded, so no Cytoscape asset ships
+# a runtime. In unattended (-q) mode install4j does not perform that download and aborts with
+# exit code 83 ("no suitable JRE could be found"). A newer JDK does NOT satisfy it: a machine
+# with only JDK 24 still fails. Deploy AmazonCorretto17 as an Intune dependency of this app.
+powerShellInstallScript: |
+  $installer = (Resolve-Path -LiteralPath '.\<filename>').ProviderPath
+  $installDir = Join-Path $env:ProgramFiles 'Cytoscape'
+
+  # install4j searches the registry and then JAVA_HOME. Point JAVA_HOME at a Java 17 JDK for
+  # the duration of this install so a newer default JDK on the machine cannot shadow it.
+  function Get-Jdk17Home {
+    $roots = @(
+      'HKLM:\SOFTWARE\JavaSoft\JDK',
+      'HKLM:\SOFTWARE\JavaSoft\Java Development Kit',
+      'HKLM:\SOFTWARE\Eclipse Adoptium\JDK',
+      'HKLM:\SOFTWARE\Amazon Corretto\JDK',
+      'HKLM:\SOFTWARE\Azul Systems\Zulu'
+    )
+    foreach ($root in $roots) {
+      foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+        if ($entry.PSChildName -notmatch '^17(\.|$)') { continue }
+        $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+        foreach ($name in 'JavaHome', 'Path') {
+          $home17 = [string]$props.$name
+          if ($home17 -and (Test-Path -LiteralPath (Join-Path $home17 'bin\javac.exe'))) { return $home17 }
+        }
+        # Adoptium nests the path one level deeper under a "hotspot\MSI" style subkey.
+        foreach ($child in @(Get-ChildItem -Path $entry.PSPath -Recurse -ErrorAction SilentlyContinue)) {
+          $home17 = [string](Get-ItemProperty -Path $child.PSPath -ErrorAction SilentlyContinue).Path
+          if ($home17 -and (Test-Path -LiteralPath (Join-Path $home17 'bin\javac.exe'))) { return $home17 }
+        }
+      }
+    }
+    foreach ($base in @("$env:ProgramFiles\Amazon Corretto", "$env:ProgramFiles\Eclipse Adoptium", "$env:ProgramFiles\Java", "$env:ProgramFiles\Zulu")) {
+      foreach ($dir in @(Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue)) {
+        if ($dir.Name -notmatch '(^|[^0-9])17[._]') { continue }
+        if (Test-Path -LiteralPath (Join-Path $dir.FullName 'bin\javac.exe')) { return $dir.FullName }
+      }
+    }
+    return $null
+  }
+
+  $jdk17 = Get-Jdk17Home
+  if (-not $jdk17) {
+    throw 'Cytoscape requires a Java 17 JDK (install4j javaMinVersion 17.0.2 / javaMaxVersion 17). None was found. Deploy AmazonCorretto17 first - a newer JDK such as 21 or 24 will NOT satisfy this installer.'
+  }
+  $env:JAVA_HOME = $jdk17
+
+  $process = Start-Process -FilePath $installer -ArgumentList '-q', '-overwrite', '-dir', "`"$installDir`"" -Wait -PassThru
+  if ($process.ExitCode -eq 83) {
+    throw "Cytoscape installer exited with 83 (no suitable JRE found) even though JDK 17 was located at '$jdk17'."
+  }
+  if ($process.ExitCode -ne 0) { throw "Cytoscape installer exited with $($process.ExitCode)." }
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'Cytoscape*' -and $_.UninstallString } |
+    Sort-Object DisplayVersion -Descending |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the Cytoscape uninstaller registry entry.' }
+
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "Cytoscape uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  $process = Start-Process -FilePath $exe -ArgumentList '-q' -Wait -PassThru
+  if ($process.ExitCode -ne 0) { throw "Cytoscape uninstaller exited with $($process.ExitCode)." }
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: cytoscape.png
+id: cytoscape
+displayName: Cytoscape
+publisher: Cytoscape Consortium
+description: Cytoscape is an open-source platform for visualizing molecular interaction networks and biological pathways.
+fileType: exe
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'Cytoscape*') { continue }
+      $text = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $found = $null
+      if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

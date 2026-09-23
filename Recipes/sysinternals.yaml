@@ -1,0 +1,112 @@
+# Microsoft serves a single always-current SysinternalsSuite.zip with no version in the URL and
+# no version manifest anywhere, so the package version is derived from the ZIP's Last-Modified
+# date. The suite is a plain collection of standalone executables - there is no installer - so
+# this deploys like ffmpeg: expand to Program Files, add to PATH, and publish our own ARP entry.
+#
+# This recipe replaced the nmap recipe in the forensics set. Nmap's free Windows installer
+# deliberately refuses /S unless Npcap is already present (Nmap.nsi .onInit does
+# "SetSilent normal / MessageBox / Quit" -> NSIS exit 2), and silent Npcap installation is
+# available only in the paid Npcap OEM edition, so Nmap cannot be auto-packaged.
+url: https://download.sysinternals.com/files/SysinternalsSuite.zip
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $url = 'https://download.sysinternals.com/files/SysinternalsSuite.zip'
+  $fileName = 'SysinternalsSuite.zip'
+
+  $response = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -ErrorAction Stop
+  $lastModified = @($response.Headers['Last-Modified'])[0]
+  if (-not $lastModified) { throw 'download.sysinternals.com did not return a Last-Modified header, so the suite version cannot be determined.' }
+
+  $stamp = [datetime]::MinValue
+  if (-not [datetime]::TryParse($lastModified, [ref]$stamp)) { throw "Could not parse the Last-Modified header '$lastModified'." }
+  $version = '{0}.{1}.{2}' -f $stamp.Year, $stamp.Month, $stamp.Day
+fileType: zip
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Sysinternals'
+  $extractDir = Join-Path (Get-Location) 'sysinternals-extract'
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $extractDir -Force
+
+  if (-not (Test-Path -LiteralPath (Join-Path $extractDir 'procexp64.exe'))) {
+    throw 'Expanded Sysinternals Suite does not contain procexp64.exe.'
+  }
+
+  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $extractDir '*') -Destination $installDir -Recurse -Force
+
+  # Pre-accept the EULA for every tool so they run without a first-run dialog. The tools read
+  # this from the user hive, so also seed the default profile for new users.
+  New-Item -Path 'HKLM:\SOFTWARE\Sysinternals' -Force | Out-Null
+  New-ItemProperty -Path 'HKLM:\SOFTWARE\Sysinternals' -Name 'EulaAccepted' -Value 1 -PropertyType DWord -Force | Out-Null
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if (($machinePath -split ';') -notcontains $installDir) {
+    [Environment]::SetEnvironmentVariable('Path', (($machinePath.TrimEnd(';'), $installDir) -join ';'), 'Machine')
+  }
+
+  $arpKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SysinternalsSuite'
+  New-Item -Path $arpKey -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayName' -Value 'Sysinternals Suite' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayVersion' -Value '<version>' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'Publisher' -Value 'Microsoft Corporation' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'InstallLocation' -Value $installDir -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoModify' -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoRepair' -Value 1 -PropertyType DWord -Force | Out-Null
+
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Sysinternals'
+
+  # Procexp and procmon can install a helper driver and keep handles open; stop them first.
+  foreach ($name in 'procexp', 'procexp64', 'procmon', 'procmon64', 'Autoruns', 'Autoruns64') {
+    Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Seconds 2
+
+  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $newPath = (($machinePath -split ';') | Where-Object { $_ -and ($_ -ne $installDir) }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+
+  Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SysinternalsSuite' -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Sysinternals' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: sysinternals.png
+id: sysinternals
+displayName: Sysinternals Suite
+publisher: Microsoft Corporation
+description: The Sysinternals Suite is Microsoft's collection of advanced Windows troubleshooting and forensic utilities, including Process Explorer, Process Monitor, Autoruns, TCPView, Sigcheck, and Strings.
+detectionType: script
+detectionScript: |
+  $expectedText = '<version>'
+  $expected = $null
+  if (-not [version]::TryParse($expectedText, [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $props = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SysinternalsSuite' -ErrorAction SilentlyContinue
+  if (-not $props) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $env:ProgramFiles 'Sysinternals') 'procexp64.exe'))) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $found = $null
+  if ([version]::TryParse(([string]$props.DisplayVersion), [ref]$found) -and $found -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

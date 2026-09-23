@@ -1,0 +1,45 @@
+url: https://downloads.jam-software.de/treesize_free/TreeSizeFreeSetup.exe
+urlRedirects: false
+preDownloadScript: |
+  $url = 'https://downloads.jam-software.de/treesize_free/TreeSizeFreeSetup.exe'
+  $fileName = 'TreeSizeFreeSetup.exe'
+  $staged = Join-Path $env:TEMP 'Yardstick-treesize-TreeSizeFreeSetup.exe'
+  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+  Invoke-WebRequest -Uri $url -OutFile $staged -UseBasicParsing -ErrorAction Stop
+  $raw = [string](Get-Item -LiteralPath $staged).VersionInfo.FileVersion
+  if ($raw -match '^\d+(?:\.\d+){1,3}') { $version = $Matches[0] }
+  else { throw "Could not read a TreeSize version from the signed installer (got '$raw')." }
+downloadScript: |
+  Move-Item -LiteralPath (Join-Path $env:TEMP 'Yardstick-treesize-TreeSizeFreeSetup.exe') -Destination (Join-Path $PWD $fileName) -Force
+fileType: exe
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /AllUsers
+powerShellUninstallScript: |
+  $uninstaller = Join-Path $env:ProgramFiles 'JAM Software\TreeSize Free\unins000.exe'
+  if (-not (Test-Path -LiteralPath $uninstaller)) { exit 0 }
+  $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+  if ($process.ExitCode -notin 0, 3010) { throw "TreeSize Free uninstaller exited with $($process.ExitCode)." }
+iconFile: treesize.png
+id: treesize
+displayName: TreeSize Free
+publisher: JAM Software
+description: TreeSize Free analyzes disk usage and visualizes which folders and files consume storage space.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'TreeSize Free*' } |
+    Select-Object -First 1
+  $found = $null
+  if ($app -and [version]::TryParse(([string]$app.DisplayVersion -replace '[^0-9.].*$',''), [ref]$found) -and $found -ge ([version]($expected.ToString(3)))) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

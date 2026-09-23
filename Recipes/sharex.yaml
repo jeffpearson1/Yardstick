@@ -1,0 +1,84 @@
+url: https://github.com/ShareX/ShareX/releases
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  # ShareX is a free and open-source program that lets you capture or record any area of your screen
+  # Use the setup installer for deployment
+  
+  # Get latest release info from GitHub API
+  $apiUrl = "https://api.github.com/repos/ShareX/ShareX/releases/latest"
+  $release = Invoke-RestMethod $apiUrl -ErrorAction SilentlyContinue
+  
+  if (-not $release) {
+    throw "Could not retrieve ShareX release information from GitHub"
+  }
+  
+  # Extract version from tag_name (e.g., "v21.0.0" -> "21.0.0")
+  $version = $release.tag_name -replace '^v', ''
+  
+  # Find the setup x64 EXE asset (preferred over portable)
+  $asset = $release.assets | Where-Object { $_.name -match "setup-x64.exe$" } | Select-Object -First 1
+  
+  if (-not $asset) {
+    throw "Could not find ShareX setup x64 release asset"
+  }
+  
+  $url = $asset.browser_download_url
+  $fileName = $asset.name
+  $registryDetectionValue = $version
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+powerShellUninstallScript: |
+  $uninstaller = Get-ChildItem -Path "${env:ProgramFiles}\ShareX" -Filter "unins*.exe" -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+
+  if (-not $uninstaller) {
+    $uninstallString = Get-ItemProperty -Path @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      ) -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -match "ShareX" } |
+      Select-Object -ExpandProperty UninstallString -First 1
+    if ($uninstallString) {
+      # UninstallString may carry arguments, so pull just the executable path out.
+      $exe = if ($uninstallString -match '^\s*"([^"]+)"') { $Matches[1] }
+        elseif ($uninstallString -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+        else { $uninstallString.Trim('"') }
+      $uninstaller = [PSCustomObject]@{ FullName = $exe }
+    }
+  }
+
+  if ($uninstaller) {
+    Start-Process -FilePath $uninstaller.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+  } else {
+    throw "Could not find ShareX uninstaller"
+  }
+iconFile: sharex.png
+id: sharex
+displayName: ShareX
+publisher: ShareX Developers
+description: ShareX is a lightweight open-source program for capturing, recording, and sharing screenshots and videos.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'ShareX*') { continue }
+      $text = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $found = $null
+      if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

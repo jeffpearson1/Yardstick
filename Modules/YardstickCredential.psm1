@@ -488,7 +488,7 @@ function Initialize-YardstickIntuneCredential {
       3. An interactive prompt, unless -NoPrompt is specified.
 
     Sets $Global:TenantID, $Global:ClientID and $Global:ClientSecret so
-    Connect-AutoMSIntuneGraph keeps working unchanged.
+    Connect-YardstickGraph keeps working unchanged.
 
     .PARAMETER Preferences
     Parsed preferences.yaml hashtable.

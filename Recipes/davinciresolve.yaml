@@ -1,0 +1,78 @@
+# Blackmagic Design gates Resolve downloads behind a registration POST form. Stage the
+# official Windows .zip or extracted .exe in <SoftwareDropbox>\davinciresolve.
+manualDownload: true
+manualDownloadFolder: davinciresolve
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  try {
+    $latest = Invoke-RestMethod -Uri 'https://www.blackmagicdesign.com/api/support/latest-stable-version/davinci-resolve/windows' -UseBasicParsing -ErrorAction Stop
+    $windows = $latest.windows
+    $version = '{0}.{1}.{2}.{3}' -f $windows.major, $windows.minor, $windows.releaseNum, $windows.build
+  } catch {
+    $version = $null
+  }
+
+  if (-not (Get-Variable -Name dropboxPath -ErrorAction SilentlyContinue)) { $dropboxPath = '<SoftwareDropbox>\davinciresolve' }
+  if (-not (Get-Variable -Name dropboxFiles -ErrorAction SilentlyContinue)) { $dropboxFiles = @() }
+
+  $installer = $dropboxFiles | Where-Object { $_.Extension -in '.zip', '.exe' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if (-not $installer) {
+    throw "No DaVinci Resolve .zip or .exe staged in $dropboxPath. Download manually from https://www.blackmagicdesign.com/products/davinciresolve (registration required)."
+  }
+
+  $fileName = $installer.Name
+  $url = $installer.FullName
+  if (-not $version -and $fileName -match 'DaVinci[_ ]Resolve[_ ](?<version>\d+(?:\.\d+){1,3})') {
+    $version = $matches['version']
+  }
+  if (-not $version) { throw "Could not determine DaVinci Resolve version for $fileName." }
+powerShellInstallScript: |
+  $payload = Resolve-Path -LiteralPath '.\<filename>'
+  $installer = $payload.ProviderPath
+  $extractDir = Join-Path $PWD '_davinciresolve_extract'
+
+  if ([IO.Path]::GetExtension($installer) -ieq '.zip') {
+    Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+    Expand-Archive -LiteralPath $installer -DestinationPath $extractDir -Force
+    $installer = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter '*.exe' |
+      Where-Object { $_.Name -match 'DaVinci.*Resolve.*Windows|DaVinci_Resolve.*Windows|ResolveInstaller' } |
+      Sort-Object Length -Descending |
+      Select-Object -ExpandProperty FullName -First 1
+  }
+
+  if (-not $installer) { throw 'Could not find DaVinci Resolve installer executable.' }
+  $process = Start-Process -FilePath $installer -ArgumentList '/i', '/q', '/norestart' -Wait -PassThru
+  if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) { throw "DaVinci Resolve installer exited with $($process.ExitCode)." }
+powerShellUninstallScript: |
+  $entry = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'DaVinci Resolve*' -and ($_.QuietUninstallString -or $_.UninstallString) } |
+    Select-Object -First 1
+
+  if (-not $entry) { exit 0 }
+  $command = if ($entry.QuietUninstallString) { $entry.QuietUninstallString } else { $entry.UninstallString }
+
+  if ($command -match '\{[0-9A-Fa-f-]{36}\}') {
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList '/x', $matches[0], '/qn', '/norestart' -Wait -PassThru
+  } else {
+    $exe = $command.Trim('"')
+    $process = Start-Process -FilePath $exe -ArgumentList '/q', '/norestart' -Wait -PassThru
+  }
+  if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) { throw "DaVinci Resolve uninstaller exited with $($process.ExitCode)." }
+iconFile: davinciresolve.png
+id: davinciresolve
+displayName: DaVinci Resolve
+publisher: Blackmagic Design
+description: DaVinci Resolve is professional video editing, color correction, visual effects, motion graphics, and audio post-production software.
+fileType: exe
+detectionType: file
+fileDetectionPath: C:\Program Files\Blackmagic Design\DaVinci Resolve
+fileDetectionName: Resolve.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 120
+
+

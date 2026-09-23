@@ -64,7 +64,7 @@ try {
         }
 
     # Long-ish dependent error to verify the scrollable code box on a successful row.
-    $longDepError = "The remote server returned an error: (504) Gateway Timeout. At line:1 char:1 + Add-IntuneWin32AppDependency -ID 00000000-aaaa-bbbb-cccc-111122223333 -Dependency ..."
+    $longDepError = "The remote server returned an error: (504) Gateway Timeout. At line:1 char:1 + Add-YardstickWin32AppDependency -ID 00000000-aaaa-bbbb-cccc-111122223333 -Dependency ..."
     Add-SuccessfulApplication `
         -ApplicationId "GoogleChrome" `
         -DisplayName "Google Chrome" `

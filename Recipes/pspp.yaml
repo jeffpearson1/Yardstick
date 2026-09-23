@@ -1,0 +1,95 @@
+url: https://caeis.etech.fh-augsburg.de/downloads/windows/latest-release/
+urlRedirects: false
+preDownloadScript: |
+  # Use the STABLE release directory, not pspp-win-daily. gnu.org/software/pspp/get.html says
+  # to take stable builds from latest-release; the daily directory holds "untested nightly
+  # builds" whose installer is named pspp-64bit-install.exe (unversioned). An earlier version
+  # of this recipe pulled a nightly, whose /S install exited 0 without installing anything.
+  # Skip the "debug" asset - it is the same product with symbols and roughly 3x the size.
+  $baseUrl = 'https://caeis.etech.fh-augsburg.de/downloads/windows/latest-release/'
+  $index = (Invoke-WebRequest -Uri $baseUrl -UseBasicParsing -ErrorAction Stop).Content
+
+  $candidates = foreach ($match in [regex]::Matches($index, 'href="(?<name>pspp-64bit-install-v(?<ver>\d+(?:-\d+)+)\.exe)"')) {
+    [PSCustomObject]@{
+      Name        = $match.Groups['name'].Value
+      VersionText = $match.Groups['ver'].Value -replace '-', '.'
+      Version     = [version]($match.Groups['ver'].Value -replace '-', '.')
+    }
+  }
+  $candidate = $candidates | Sort-Object Version -Descending | Select-Object -First 1
+  if (-not $candidate) { throw 'Could not find a stable PSPP 64-bit Windows installer in the latest-release directory.' }
+
+  $version = $candidate.VersionText
+  $fileName = $candidate.Name
+  $url = $baseUrl + $fileName
+installScript: <filename> /S
+powerShellUninstallScript: |
+  $app = Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like '*PSPP*' -and $_.UninstallString } |
+    Sort-Object DisplayVersion -Descending |
+    Select-Object -First 1
+
+  if (-not $app) { throw 'Could not find the PSPP uninstaller registry entry.' }
+
+  $raw = [string]$app.UninstallString
+  $exe = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+    else { $raw.Trim('"') }
+  if (-not (Test-Path -LiteralPath $exe)) { throw "PSPP uninstaller not found at '$exe'." }
+  $installDir = Split-Path -Parent $exe
+
+  Start-Process -FilePath $exe -ArgumentList '/S', "_?=$installDir" -Wait
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $app.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: pspp.png
+id: pspp
+displayName: GNU PSPP
+publisher: Free Software Foundation
+description: GNU PSPP is a free software application for statistical analysis of sampled data and a free replacement for IBM SPSS Statistics.
+fileType: exe
+detectionType: script
+detectionScript: |
+  # PSPP publishes its DisplayVersion with a git suffix, e.g. "2.1.1-g557d00", which
+  # [version]::TryParse rejects outright. Take only the leading numeric components, then
+  # compare both sides trimmed to the same number of components.
+  $expectedText = '<version>'
+  $expectedParts = @()
+  if ($expectedText -match '^\d+(?:\.\d+)*') { $expectedParts = @($Matches[0] -split '\.') }
+
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike '*PSPP*') { continue }
+      if (-not $expectedParts) {
+        Write-Output 'Detected'
+        exit 0
+      }
+
+      $foundParts = @()
+      if (([string]$props.DisplayVersion) -match '^\d+(?:\.\d+)*') { $foundParts = @($Matches[0] -split '\.') }
+      if (-not $foundParts) { continue }
+
+      $count = [Math]::Min([Math]::Min($expectedParts.Count, $foundParts.Count), 4)
+      $expected = $null
+      $found = $null
+      if ([version]::TryParse((($expectedParts[0..($count - 1)]) -join '.'), [ref]$expected) -and
+          [version]::TryParse((($foundParts[0..($count - 1)]) -join '.'), [ref]$found) -and
+          $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

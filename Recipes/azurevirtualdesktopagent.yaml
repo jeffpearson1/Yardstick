@@ -1,0 +1,23 @@
+# Microsoft requires the Azure Virtual Desktop Agent before the Bootloader for
+# Intune Remote Help unattended control. The fwlink resolves to a versioned MSI.
+url: https://go.microsoft.com/fwlink/?linkid=2310011
+urlRedirects: true
+preDownloadScript: |
+  if ($url -notmatch '/(?<file>Microsoft\.RDInfra\.RDAgent\.Installer-x64-(?<version>\d+(?:\.\d+){3})\.msi)(?:\?.*)?$') {
+    throw "Could not parse the Azure Virtual Desktop Agent version and filename from redirected URL '$url'."
+  }
+  $version = $Matches['version']
+  $fileName = $Matches['file']
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: azurevirtualdesktopagent.png
+id: azurevirtualdesktopagent
+displayName: Azure Virtual Desktop Agent
+publisher: Microsoft Corporation
+description: The Azure Virtual Desktop Agent provides the Remote Desktop Services infrastructure required for Intune Remote Help unattended control and must be deployed before the Agent Bootloader.
+fileType: MSI
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_1607

@@ -1,0 +1,53 @@
+url: https://github.com/BtbN/FFmpeg-Builds
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\VersionPro.psm1
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $candidates = foreach ($asset in $release.assets) {
+    if ($asset.name -match '^ffmpeg-n([0-9]+(?:\.[0-9]+)+)-latest-win64-gpl-\1\.zip$') {
+      [PSCustomObject]@{ Asset = $asset; Version = [version]$matches[1] }
+    }
+  }
+  $candidate = $candidates | Sort-Object Version -Descending | Select-Object -First 1
+  if (-not $candidate) { throw 'Could not find an FFmpeg win64 GPL ZIP asset in the BtbN release.' }
+  $version = $candidate.Version.ToString()
+  $url = $candidate.Asset.browser_download_url
+  $fileName = $candidate.Asset.name
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'FFmpeg'
+  $extractDir = Join-Path (Get-Location) 'ffmpeg-extract'
+  if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $extractDir -Force
+  $sourceBin = Get-ChildItem -Path $extractDir -Filter ffmpeg.exe -Recurse | Where-Object { $_.FullName -match '\\bin\\ffmpeg\.exe$' } | Select-Object -First 1
+  if (-not $sourceBin) { throw 'Could not locate ffmpeg.exe in the downloaded ZIP.' }
+  $sourceRoot = Split-Path (Split-Path $sourceBin.FullName -Parent) -Parent
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installDir -Recurse -Force
+  $binPath = Join-Path $installDir 'bin'
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if (($machinePath -split ';') -notcontains $binPath) {
+    [Environment]::SetEnvironmentVariable('Path', (($machinePath.TrimEnd(';'), $binPath) -join ';'), 'Machine')
+  }
+  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'FFmpeg'
+  $binPath = Join-Path $installDir 'bin'
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $newPath = (($machinePath -split ';') | Where-Object { $_ -and ($_ -ne $binPath) }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+iconFile: ffmpeg.png
+id: ffmpeg
+displayName: FFmpeg
+publisher: FFmpeg Project
+description: FFmpeg is a complete, cross-platform solution to record, convert, and stream audio and video.
+detectionType: file
+fileDetectionPath: 'C:\Program Files\FFmpeg\bin'
+fileDetectionName: ffmpeg.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
