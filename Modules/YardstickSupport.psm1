@@ -4122,8 +4122,19 @@ function Get-Secrets {
     param(
         [Parameter(Mandatory=$true)]
         [string]$VaultName,
-        [string]$SecretsDir = "$PSScriptRoot\..\Secrets"
+        [string]$SecretsDir
     )
+
+    if (-not $SecretsDir) {
+        $yardstickRoot = Split-Path -Parent $PSScriptRoot
+        $localSecrets = Join-Path $yardstickRoot 'Local\Secrets'
+        $legacySecrets = Join-Path $yardstickRoot 'Secrets'
+        $SecretsDir = if (Test-Path -LiteralPath $localSecrets -PathType Container) {
+            $localSecrets
+        } else {
+            $legacySecrets
+        }
+    }
     
     # Placeholder for secret retrieval logic
     # Implement actual secret retrieval from your secure vault here

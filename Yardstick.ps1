@@ -143,9 +143,12 @@ if ((-not $ApplicationId) -and (($All -eq $false) -and (!$Group))) {
 
 # Import preferences file:
 try {
-    $Prefs = Get-Content $PSScriptRoot\Preferences.yaml | ConvertFrom-Yaml
+    . (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
+    $ProjectLayout = Get-YardstickProjectLayout -ProjectRoot $PSScriptRoot
+    $PreferencesPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
+    $Prefs = Get-Content -LiteralPath $PreferencesPath | ConvertFrom-Yaml
 } catch {
-    Write-Error "Unable to open preferences.yaml!"
+    Write-Error "Unable to open Yardstick preferences: $($_.Exception.Message)"
     exit 1
 }
 

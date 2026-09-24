@@ -1,0 +1,29 @@
+url: https://www.notion.so/desktop/windows/download
+urlRedirects: true
+preDownloadScript: |
+  # Official version-neutral Notion desktop download. Never pin a version here.
+  # Yardstick resolves the 307 first, so $url is the versioned installer.
+  $fileName = [Uri]::UnescapeDataString([IO.Path]::GetFileName(([Uri]$url).AbsolutePath))
+  if ($fileName -notmatch '^Notion Setup (?<ver>[0-9]+(?:\.[0-9]+)+)\.exe$') {
+      throw "The official Notion download did not resolve to a versioned Windows installer: '$url'."
+  }
+  $version = $Matches['ver']
+downloadScript: |
+  Invoke-WebRequest -Uri $url -OutFile (Join-Path $PWD $fileName) -UseBasicParsing
+installScript: '"<filename>" /S'
+uninstallScript: '"%LocalAppData%\Programs\Notion\Uninstall Notion.exe" /S'
+iconFile: notion.png
+id: notion
+displayName: Notion
+publisher: Notion Labs, Inc.
+description: Notion is a collaborative workspace for notes, documents, projects, databases, and knowledge management.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\Programs\Notion'
+fileDetectionName: Notion.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

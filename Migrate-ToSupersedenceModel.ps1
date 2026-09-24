@@ -66,8 +66,10 @@ Import-Module "$PSScriptRoot\Modules\YardstickIntune.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
 
-# Load preferences (same location Yardstick.ps1 uses)
-$Prefs = Get-Content "$PSScriptRoot\preferences.yaml" | ConvertFrom-Yaml
+# Load preferences (same resolver Yardstick.ps1 uses)
+. (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
+$PreferencesPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
+$Prefs = Get-Content -LiteralPath $PreferencesPath | ConvertFrom-Yaml
 $Global:LogLocation = $PSScriptRoot
 $Global:LogFile = "SupersedenceMigration.log"
 $Recipes = $Prefs.Recipes

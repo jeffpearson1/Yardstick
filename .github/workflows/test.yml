@@ -25,7 +25,7 @@ jobs:
         run: |
           Import-Module Pester -MinimumVersion 5.0
           $config = New-PesterConfiguration
-          $config.Run.Path = "Tests/"
+          $config.Run.Path = "Tests/Unit/"
           $config.TestResult.Enabled = $true
           $config.TestResult.OutputPath = "testResults.xml"
           $config.Output.Verbosity = "Detailed"
@@ -99,4 +99,4 @@ jobs:
 
       - name: Validate all recipes
         shell: pwsh
-        run: pwsh -File Tests/Test-AllRecipes.ps1
+        run: pwsh -File Tests/Unit/Test-AllRecipes.ps1

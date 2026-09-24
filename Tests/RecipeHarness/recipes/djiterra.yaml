@@ -1,0 +1,42 @@
+url: https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/d/DJI/DJITerra
+urlRedirects: false
+preDownloadScript: |
+  # DJI's official DJI Terra download page is a client-rendered SPA that exposes neither a version
+  # nor an installer URL, and DJI publishes no update feed. Microsoft's winget-pkgs repository is
+  # the only machine-readable source. It is community-maintained (unofficial) and may lag the
+  # vendor, but the installer it points at is still DJI's own CDN.
+  $entries = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'Yardstick' }
+  $version = ($entries |
+      Where-Object { $_.type -eq 'dir' -and $_.name -match '^[0-9]+(\.[0-9]+)+$' } |
+      Sort-Object { [version]$_.name } -Descending |
+      Select-Object -First 1).name
+  if (-not $version) { throw 'No DJI Terra version was found in the winget-pkgs manifest index.' }
+  $manifest = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/d/DJI/DJITerra/$version/DJI.DJITerra.installer.yaml" -Headers @{ 'User-Agent' = 'Yardstick' }
+  if ($manifest -is [byte[]]) { $manifest = [System.Text.Encoding]::UTF8.GetString($manifest) }
+  $installer = [regex]::Match($manifest, '(?s)Architecture:\s*x64.*?InstallerUrl:\s*(?<url>\S+)')
+  if (-not $installer.Success) { throw "The winget-pkgs manifest for DJI Terra $version listed no x64 installer." }
+  $url = $installer.Groups['url'].Value
+  $fileName = [Uri]::UnescapeDataString([IO.Path]::GetFileName(([Uri]$url).AbsolutePath))
+  $registryDetectionValue = $version
+installScript: '"<filename>" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+uninstallScript: '"%ProgramFiles(x86)%\DJI Product\DJI Terra\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: djiterra.png
+id: djiterra
+displayName: DJI Terra
+publisher: SZ DJI Technology Co., Ltd.
+description: DJI Terra is a drone mapping and photogrammetry application for collecting, processing, and analyzing spatial data.
+# DJI Terra is a 32-bit-registered Inno package that installs to "Program Files (x86)\DJI Product".
+# File-version detection is not usable: DJI Terra.exe reports a ProductVersion of 1.1.0 regardless
+# of the release, so detection reads the Inno ARP DisplayVersion instead, which does track the
+# real version.
+detectionType: registry
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{3121DF3D-C549-42BF-AF01-168919638784}_is1'
+registryDetectionValueName: DisplayVersion
+registryDetectionValue:
+registryDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 60

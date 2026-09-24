@@ -1,0 +1,32 @@
+url: https://electron-dl.todoist.net/windows/latest.yml
+urlRedirects: false
+preDownloadScript: |
+  # Official Todoist electron-updater manifest. Never pin a version here.
+  $manifest = Invoke-RestMethod -Uri $url
+  if ($manifest -is [byte[]]) { $manifest = [System.Text.Encoding]::UTF8.GetString($manifest) }
+  if ($manifest -notmatch '(?m)^version:\s*(?<ver>[0-9]+(?:\.[0-9]+)+)\s*$') {
+      throw 'No Todoist version was found in the official update manifest.'
+  }
+  $version = $Matches['ver']
+  if ($manifest -notmatch '(?m)^path:\s*(?<file>Todoist-win32-[^\r\n]+\.exe)\s*$') {
+      throw 'No Todoist Windows installer was listed in the official update manifest.'
+  }
+  $fileName = $Matches['file'].Trim()
+  $url = "https://electron-dl.todoist.net/windows/$fileName"
+installScript: <filename> /S
+uninstallScript: '"%LocalAppData%\Programs\todoist\Uninstall Todoist.exe" /S'
+iconFile: todoist.png
+id: todoist
+displayName: Todoist
+publisher: Doist Inc.
+description: Todoist is a task-management application for personal planning and team collaboration.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\Programs\todoist'
+fileDetectionName: Todoist.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

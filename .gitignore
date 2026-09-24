@@ -1,52 +1,85 @@
-# Exclude all files that are not recipes
-/Apps/*
-/Published/*
-/BuildSpace/*
-/Icons/*
-/Recipes/Incomplete
-/Scripts/*
-/Temp/*
-/Tools/*
-/Support/*
-/Development/*
+# Generated and machine-local project state
+/Artifacts/
+/Local/
+/Apps/
+/Support/
 
-# Keep any empty directories
-!/Published/.gitkeep
-!/BuildSpace/.gitkeep
+# Retired pre-consolidation locations; ignore them if an older script recreates them
+/BuildSpace/
+/Published/
+/Temp/
+/Development/
+/Secrets/
+/[Pp]references.yaml
+
+# Recipe/runtime content intentionally maintained outside Git
+/Icons/*
 !/Icons/.gitkeep
+/Scripts/*
 !/Scripts/.gitkeep
 !/Scripts/AdobeDownloader.psm1
 !/Scripts/YardstickSupport.psm1
-!/Temp/.gitkeep
+/Tools/*
 !/Tools/.gitkeep
 
-# Exclude any files that might contain sensitive data
-/[Pp]references.yaml
+# Sensitive or site-specific recipe data
+/.env
+/.env.*
+!/.env.example
+*.pfx
+*.p12
+*.key
 /Recipes/*.common.yaml
 /Recipes/crowdstrikefalcon.yaml
-
-# Exclude development files
-/Yardstick_backup.ps1
+/Recipes/Incomplete/
 /Recipes/Disabled/*
-/Modules/YardstickSupportDev.psm1
+
+# Active recipe development is local until explicitly promoted
 /Recipes/Development/*
-/testResults.xml
 
-# Exclude miscellaneous editor files
-/.vscode
-/.DS_Store
-
-# Exclude log
-/*.log
-
-# Exclude anything in the secrets folder
-/Secrets/*
-
-# Exclude the notification sound
+# Development-only module variants and generated output
+/Modules/YardstickSupportDev.psm1
+/Yardstick_backup.ps1
+*.intunewin
+/testResults*.xml
+/*.trx
+*.log
+*.tmp
+*.bak
+*.swp
 /notificationSound.wav
+Architecture.md
 
+# Local test and harness output; the Tests source tree itself stays versioned
+/TestResults/
+/PesterResults/
+/coverage/
+/.coverage/
+/.cache/
+*.coverage
+*.coveragexml
+*.clixml
+/Tests/**/artifacts/
+/Tests/**/downloads/
+/Tests/**/logs/
+/Tests/**/temp/
+/Tests/**/tmp/
 
-# Exclude any dev files
-node_modules
-.codex*
-.codex-triage/*
+# Versioned development-only source remains in Git. Production exclusion for
+# .github, Config, Docs, Tests, README.md, and Publish-Yardstick.ps1 is enforced
+# by the explicit allowlist in Publish-Yardstick.ps1, not by this file.
+
+# Editors, dependencies, and local Codex scratch state
+/.vscode/
+/.idea/
+/.vs/
+/.DS_Store
+/Thumbs.db
+/Desktop.ini
+/node_modules/
+/.pnpm-store/
+/.codex-triage/
+/.codex-inspect-*
+/.codex/*
+!/.codex/skills/
+!/.codex/skills/**

@@ -1,0 +1,27 @@
+url: https://github.com/greenshot/greenshot
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloader = [GithubDownloader]::new($url, 'Greenshot-INSTALLER-.*-RELEASE\.exe$', '[0-9]+\.[0-9]+\.[0-9]+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.Filename
+  $fileDetectionVersion = Format-FileDetectionVersion $version
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+uninstallScript: '"%ProgramFiles%\Greenshot\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+iconFile: greenshot.png
+id: greenshot
+displayName: Greenshot
+publisher: Greenshot
+description: Greenshot is an open-source screenshot tool for capturing and annotating windows, regions, and full screens.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\Greenshot'
+fileDetectionName: Greenshot.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

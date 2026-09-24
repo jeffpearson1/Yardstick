@@ -1,0 +1,35 @@
+url: https://imagej.net/ij/download.html
+urlRedirects: false
+preDownloadScript: |
+  # Official ImageJ download page. Never pin a version here.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  $distro = [regex]::Match($html, 'href="(?<url>https://wsr\.imagej\.net/distros/win/ij(?<digits>\d+)-win-java8\.zip)"')
+  if (-not $distro.Success) { throw 'No ImageJ Windows Java 8 distribution was found on the official download page.' }
+  $url = $distro.Groups['url'].Value
+  # ImageJ compresses its version into the filename, e.g. ij154 -> 1.54.
+  $version = $distro.Groups['digits'].Value.Insert(1, '.')
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+powerShellInstallScript: |
+  $target = 'C:\Program Files\ImageJ'
+  $stage = Join-Path $env:TEMP 'Yardstick-ImageJ'
+  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $stage -Force
+  New-Item -ItemType Directory -Path $target -Force | Out-Null
+  Copy-Item -Path (Join-Path $stage 'ImageJ\*') -Destination $target -Recurse -Force
+  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  Remove-Item -LiteralPath 'C:\Program Files\ImageJ' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: imagej.png
+id: imagej
+displayName: ImageJ
+publisher: National Institutes of Health
+description: ImageJ is a public-domain Java image-processing and scientific image-analysis application.
+detectionType: file
+fileDetectionPath: C:\Program Files\ImageJ
+fileDetectionName: ImageJ.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

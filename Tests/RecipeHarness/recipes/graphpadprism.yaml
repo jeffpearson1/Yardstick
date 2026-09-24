@@ -1,0 +1,36 @@
+url: https://www.graphpad.com/updates
+urlRedirects: false
+preDownloadScript: |
+  # Official GraphPad updates page. Never pin a version here.
+  $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
+  if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
+  $version = [regex]::Match($html, 'Prism version is(?:<!--\s*-->|\s)*(?<ver>11\.[0-9]+(?:\.[0-9]+)?)', 'IgnoreCase').Groups['ver'].Value
+  if (-not $version) { throw 'No current Prism 11 version was found on the official updates page.' }
+  $url = 'https://cdn.graphpad.com/downloads/prism/11/InstallPrism11.msi'
+  $fileName = 'InstallPrism11.msi'
+postDownloadScript: |
+  # The published version (e.g. 11.0.2) is shorter than the MSI ProductVersion the detection rule needs.
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $database = $installer.OpenDatabase((Resolve-Path $fileName).Path, 0)
+  $view = $database.OpenView("SELECT Value FROM Property WHERE Property = 'ProductVersion'")
+  $view.Execute()
+  $record = $view.Fetch()
+  $fileDetectionVersion = [string]$record.StringData(1)
+  $view.Close()
+  foreach ($comObject in @($record, $view, $database, $installer)) {
+      if ($comObject) { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($comObject) }
+  }
+  [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+  if (-not $fileDetectionVersion) { throw 'Could not read ProductVersion from the Prism 11 MSI.' }
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: graphpadprism.png
+id: graphpadprism
+displayName: GraphPad Prism 11
+publisher: GraphPad Software LLC
+description: GraphPad Prism combines scientific graphing, nonlinear regression, statistics, and data organization for laboratory research.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,24 @@
+url: https://updates.maxqda.de/MAXQDA/MAXQDA_Setup.msi
+urlRedirects: false
+preDownloadScript: |
+  $releaseNotesUrl = 'https://www.maxqda.com/products/maxqda-release-notes'
+  $releaseNotes = Invoke-WebRequest -Uri $releaseNotesUrl -UseBasicParsing
+  $releaseText = [Net.WebUtility]::HtmlDecode([string]$releaseNotes.Content)
+  $versionMatch = [regex]::Match($releaseText, 'MAXQDA (?:Update )?([0-9]+(?:\.[0-9]+){1,2})', 'IgnoreCase')
+  if (-not $versionMatch.Success) {
+    throw "Could not discover the current MAXQDA version from $releaseNotesUrl"
+  }
+  $version = $versionMatch.Groups[1].Value
+fileName: MAXQDA_Setup.msi
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: maxqda.png
+id: maxqda
+displayName: MAXQDA
+publisher: VERBI Software GmbH
+description: MAXQDA is a qualitative and mixed-methods data analysis application for coding, interpreting, and visualizing research data.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
