@@ -41,6 +41,51 @@ These fields are not checked by the schema validator but are required at runtime
 - **`$fileName`** - Must be set in YAML, `preDownloadScript`, or `downloadScript`. Required for `.intunewin` packaging and placeholder replacement.
 - **`$url`** - Must be set in YAML, `preDownloadScript`, or `downloadScript` unless a `downloadScript` handles the download entirely.
 
+## Download Configuration
+
+These fields describe where the installer comes from. They are read by `Set-ScriptVariables` before any script block runs.
+
+**`url`** (string) - The download source.
+
+- Leave it empty when `preDownloadScript` constructs the URL from a version scrape.
+- Point it at a vendor landing page (rather than the artifact) when `preDownloadScript` scrapes that page - `$url` is just a starting value the script is free to overwrite.
+- Point it at the repository root (`https://github.com/<owner>/<repo>`) for recipes driven by `GithubDownloader`.
+- Omit it entirely for `manualDownload: true` recipes, which take their payload from the software dropbox.
+
+**`urlRedirects`** (boolean, default `false`) - Whether to resolve HTTP redirects before the recipe runs.
+
+Set it to `true` when the static `url` 302s to a versioned artifact, as Mozilla, Amazon Corretto, and Zoom do. `Get-RedirectedUrl` follows the redirect chain (retrying transient network faults) and assigns the **final** URL to `$url`. Because this happens in `Set-ScriptVariables`, `$url` already holds the resolved address by the time `preDownloadScript` executes, which is what lets these recipes parse the version straight out of the filename:
+
+```yaml
+url: https://download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=en-US
+urlRedirects: true
+preDownloadScript: |
+  $filename = $URL.split("/")[-1].replace("%20", " ")
+  $version = ($filename.split(" ")[-1] -Split "\.msi")[0]
+```
+
+Leave it `false` when you intend to scrape a landing page - resolving redirects on an HTML page accomplishes nothing and costs a request.
+
+See [Recipes/firefox.yaml](../Recipes/firefox.yaml) and [Recipes/amazoncorretto21.yaml](../Recipes/amazoncorretto21.yaml).
+
+**`fileName`** (string) - The name the downloaded file is saved as, and the value substituted for the `<filename>` placeholder. Set it statically only when the name never changes; otherwise set `$fileName` in `preDownloadScript` or `downloadScript`. If `postDownloadScript` replaces the payload (extracting an MSI out of a bootstrapper, for example), it must reassign `$fileName` to the new installer.
+
+**`version`** (string) - A static version. Almost always left empty in favor of setting `$version` in `preDownloadScript`, since vendors ship new releases. Useful for pinned or archival packages.
+
+### How the download actually happens
+
+Exactly one of three paths runs:
+
+1. **Default** - `Start-BitsTransfer` fetches `$url` to `$BuildSpace\$id\$version\$fileName`. Requires `$url` and `$fileName`.
+2. **`downloadScript`** - replaces the BITS transfer entirely; your script is responsible for placing the file in the working directory.
+3. **`manualDownload: true`** - the payload is copied from the software dropbox.
+
+If none of `url`, `downloadScript`, or `manualDownload` is present, the recipe fails.
+
+### Fields accepted but not used at runtime
+
+`fileType` and `softwareName` appear in many existing recipes and pass schema validation, but nothing in `Yardstick.ps1` or the modules reads them. They are effectively author-facing annotations. Setting them is harmless and keeps existing recipes consistent; do not expect either to change packaging or detection behavior.
+
 ## Script Blocks
 
 All script blocks execute with `-NoNewScope`, meaning they run directly in the caller's scope. This has two important implications:
@@ -603,7 +648,7 @@ msiexec /x {8A69D345-D564-463C-AFF1-A69D9E530F96} /qn /norestart
 
 ```yaml
 url: https://dl.google.com/chrome/install/googlechromestandaloneenterprise64.msi
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $VURL = "https://versionhistory.googleapis.com/v1/chrome/platforms/win64/channels/stable/versions/all/releases?filter=endtime=none&order_by=fraction%20desc"
   $Content = Invoke-WebRequest $VURL
@@ -628,7 +673,7 @@ scopeTags:
 
 ```yaml
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $html = Invoke-WebRequest "https://notepad-plus-plus.org/downloads/"
   $s = $($html.links | Select-String "Current Version") -replace ".{0,}Current Version "
@@ -657,7 +702,7 @@ scopeTags:
 
 ```yaml
 url: https://download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=en-US
-urlredirects: true
+urlRedirects: true
 preDownloadScript: |
   $filename = $URL.split("/")[-1].replace("%20", " ")
   $version = ($filename.split(" ")[-1] -Split "\.msi")[0]
@@ -681,7 +726,7 @@ scopeTags:
 
 ```yaml
 url: https://github.com/grizzlypeak3d/DJV
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   using module ".\Modules\Custom\GithubDownloader.psm1"
   $downloadFileRegex = "djv-.*amd64\.exe$"
@@ -710,7 +755,7 @@ registryDetectionMethod: version
 
 ```yaml
 url:
-urlredirects: false
+urlRedirects: false
 preDownloadScript: |
   $html = $(Invoke-WebRequest "https://www.python.org/downloads/windows/").Content
   $html -match "Latest Python 3 Release - Python 3\.[0-9]{1,3}\.[0-9]{1,3}" | Out-Null
@@ -766,7 +811,7 @@ detectionScript: |
 2. **Incorrect file detection version format** - Ensure it matches the actual file properties. Use `[VersionPro]::new($version).ToString(4)` to pad to 4-part format when needed.
 3. **Missing icon files** - Icons must exist in `Icons/` folder with the exact name referenced in `iconFile`.
 4. **Hardcoded paths** - Use `<filename>`, `<version>`, and `<productcode>` placeholders instead of hardcoding values in install/uninstall scripts.
-5. **Case sensitivity in YAML keys** - YAML keys are case-sensitive. Use the exact casing from this guide (e.g., `urlredirects` not `urlRedirects`, `fileDetectionMethod` not `filedetectionmethod`). The schema validator warns about casing mismatches.
+5. **Inconsistent casing in YAML keys** - Use the exact casing from this guide (e.g., `urlRedirects` not `urlredirects`, `fileDetectionMethod` not `filedetectionmethod`). Yardstick reads recipe fields out of a PowerShell hashtable, so a miscased key usually still resolves - but the schema validator warns about every casing mismatch, and the warning is there because the next reader cannot tell a typo from a working field.
 6. **Assuming `$fileDetectionVersion` is required** - It defaults to `$version` when not set. Only set it explicitly when the file version format differs from the application version.
 7. **Wrong detection type** - MSI packages should use `detectionType: msi` unless you need custom detection logic. MSI detection automatically extracts the ProductCode.
 8. **Unreplaced placeholders** - If any `<filename>`, `<version>`, or `<productcode>` placeholders remain in scripts after processing, the recipe will fail. Ensure the corresponding variables are set.
