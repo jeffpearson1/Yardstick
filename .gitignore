@@ -4,10 +4,12 @@
 /Apps/
 /Support/
 
-# Retired pre-consolidation locations; ignore them if an older script recreates them
-/BuildSpace/
-/Published/
-/Temp/
+/BuildSpace/*
+!/BuildSpace/.gitkeep
+/Published/*
+!/Published/.gitkeep
+/Temp/*
+!/Temp/.gitkeep
 /Development/
 /Secrets/
 /[Pp]references.yaml
