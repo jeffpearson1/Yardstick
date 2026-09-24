@@ -1,0 +1,34 @@
+url: https://static-cdn.descript.com/desktop/win32/x64/latest.yml
+urlRedirects: false
+preDownloadScript: |
+  # Official Descript electron-updater manifest. Never pin a version here.
+  $manifest = Invoke-RestMethod -Uri $url
+  if ($manifest -is [byte[]]) { $manifest = [System.Text.Encoding]::UTF8.GetString($manifest) }
+  if ($manifest -notmatch '(?m)^version:\s*(?<ver>[0-9]+(?:\.[0-9]+)+)\s*$') {
+      throw 'No Descript version was found in the official update manifest.'
+  }
+  $version = $Matches['ver']
+  if ($manifest -notmatch '(?m)^path:\s*(?<file>Descript Setup [^\r\n]+\.exe)\s*$') {
+      throw 'No Descript Windows installer was listed in the official update manifest.'
+  }
+  $fileName = $Matches['file'].Trim()
+  $url = 'https://static-cdn.descript.com/desktop/win32/x64/' + [Uri]::EscapeDataString($fileName)
+downloadScript: |
+  Invoke-WebRequest -Uri $url -OutFile (Join-Path $PWD $fileName) -UseBasicParsing
+installScript: '"<filename>" /S'
+uninstallScript: '"%LocalAppData%\Programs\Descript\Uninstall Descript.exe" /S'
+iconFile: descript.png
+id: descript
+displayName: Descript
+publisher: Descript, Inc.
+description: Descript is a collaborative audio and video editor with transcription, screen recording, and AI-assisted editing.
+detectionType: file
+fileDetectionPath: '%LocalAppData%\Programs\Descript'
+fileDetectionName: Descript.exe
+fileDetectionMethod: version
+fileDetectionVersion:
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

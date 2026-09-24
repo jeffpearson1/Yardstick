@@ -1,0 +1,131 @@
+#####################################
+# YARDSTICK CONFIG
+#####################################
+
+
+#####################################
+# DEFAULT FOLDER LOCATIONS
+#####################################
+Test: <REPLACE_WITH_YARDSTICK_ROOT>\Tests
+Buildspace: <REPLACE_WITH_YARDSTICK_ROOT>\Artifacts\BuildSpace
+Scripts: <REPLACE_WITH_YARDSTICK_ROOT>\Scripts
+Published: <REPLACE_WITH_YARDSTICK_ROOT>\Artifacts\Packages
+Recipes: <REPLACE_WITH_YARDSTICK_ROOT>\Recipes
+Icons: <REPLACE_WITH_YARDSTICK_ROOT>\Icons
+Tools: <REPLACE_WITH_YARDSTICK_ROOT>\Tools
+Temp: <REPLACE_WITH_YARDSTICK_ROOT>\Artifacts\Temp
+Secrets: <REPLACE_WITH_YARDSTICK_ROOT>\Local\Secrets
+Modules: <REPLACE_WITH_YARDSTICK_ROOT>\Modules
+# Manual-drop recipes (`manualDownload: true`) package whatever an operator has
+# staged in SoftwareDropbox\<recipe id>. Vendors that gate their installer behind
+# a signed-in, licensed download cannot be automated, so a human fetches the file
+# once and drops it here. After a successful upload Yardstick moves the payload to
+# SoftwareArchive\<recipe id>\<version>, which leaves the dropbox empty - that is
+# what makes the next run skip the recipe instead of republishing the same build.
+# Leave both blank if you have no manual-drop recipes.
+SoftwareDropbox:
+SoftwareArchive:
+# Optional. When set, every .intunewin file Yardstick uploads is copied here on a
+# background thread, into a subfolder named after the recipe id, under a file name
+# carrying the version and the time Intune finished publishing it. Leave blank or
+# omit the key entirely to disable backups. A network path is fine - the copy runs
+# off the main thread, and a backup failure never fails an application update.
+Backup:
+# How many .intunewin files to retain per recipe in the Backup folder - the newest
+# plus N-1 and N-2 by default. Set to 0 to keep every backup forever.
+backupVersionsToKeep: 3
+
+
+#####################################
+# INTUNE CONNECTION SETTINGS
+#####################################
+# TenantID, ClientId and ClientSecret are NOT stored here. They live in Windows
+# Credential Manager, encrypted for the account that runs Yardstick. Populate them
+# with:  .\Set-YardstickCredential.ps1
+# If the legacy TenantID/ClientId/ClientSecret keys are still present below,
+# Yardstick migrates them into Credential Manager on the next run and then asks you
+# to delete them from this file.
+#
+# Credential Manager target name used to store the app registration credentials.
+credentialTarget: "Yardstick:IntuneGraph"
+# Warn (and email the admin) when the client secret expires within this many days.
+credentialExpirationWarningDays: 30
+# Minimum hours between repeat expiration emails, so frequent runs do not spam.
+credentialExpirationEmailIntervalHours: 24
+# Leave unset to follow emailNotificationEnabled; set explicitly to send (or not
+# send) expiration alerts independently of the per-run application report.
+credentialExpirationEmailEnabled:
+
+
+#####################################
+# PACKAGED APPLICATION DEFAULTS
+#####################################
+defaultNumVersionsToKeep: 2
+# Whether the newest uploaded version declares Intune-native supersedence over
+# all kept older versions. Recipes can override with `supersedence`.
+defaultSupersedence: true
+# If true, supersedence uses "Replace" (Intune uninstalls the prior version
+# before installing the new one). If false, uses "Update" (in-place upgrade).
+# Recipes can override with `uninstallPreviousVersion`.
+defaultUninstallPreviousVersion: false
+# If true, Yardstick enables Intune's native auto-update
+# (settings.autoUpdateSettings.autoUpdateSupersededAppsState = enabled) on the
+# newest app's *available* assignments, so Intune pushes it to devices that
+# already have a superseded version installed. Intune only honours auto-update
+# for available assignments, so required-only recipes are unaffected. Recipes
+# can override with `autoUpdateOnAssignment` (accepted alias: `autoUpdate`).
+defaultAutoUpdate: true
+# Entra group IDs (device or user) that must never be auto-updated, even when
+# auto-update is on for the app. Assignments targeting one of these groups are
+# held at `notConfigured`, so adding a group here also turns off auto-update a
+# previous run had already enabled. Recipes ADD to this list with
+# `groupSkipAutoUpdates` - a recipe cannot remove a group listed here.
+defaultGroupsSkipAutoUpdates:
+  - Group IDs go here and will be excluded from supersedence auto-update
+# Master switch for the {DETECT} anchor behavior. When enabled, the first time
+# Yardstick updates a version-detection app under the new model, the oldest
+# surviving version is renamed "{DETECT} <DisplayName>" and preserved so it
+# continues to detect long-abandoned installs. The anchor is always a
+# supersedence target of the newest version, always with type "Update".
+useDetectAnchor: true
+defaultOwner:
+defaultMaximumInstallationTimeInMinutes: 60
+defaultMinOSVersion: W10_20H2
+defaultInstallExperience: system
+defaultRestartBehavior: suppress
+defaultAllowUserUninstall: true
+defaultIs32BitApp: false
+defaultArchitecture: none
+defaultRequiresApproval: false
+defaultDetectionScriptFileExtension: ps1
+defaultDetectionScriptRunAs32Bit: false
+defaultDetectionScriptEnforceSignatureCheck: false
+defaultDeadlineDateOffset: 0
+defaultAvailableDateOffset: 0
+defaultScopeTags:
+  - Scope Tags Go Here (Can be Multiple)
+defaultDeploymentGroups:
+  - Group IDs go here and will receive a default available deployment for testing purposes
+
+
+#####################################
+# EMAIL NOTIFICATION SETTINGS
+#####################################
+emailNotificationEnabled: false
+emailRecipient: "admin@yourorganization.com"
+# Address that receives operational alerts such as client secret expiration.
+# Falls back to emailRecipient when omitted.
+adminEmailRecipient: "admin@yourorganization.com"
+emailSubject: "Yardstick Application Update Report"
+emailSenderName: "Yardstick Automation"
+emailSendFromAddress: "noreply@yourorganization.com"
+
+#####################################
+# DEPENDENT LINK UPDATE SETTINGS
+#####################################
+dependentLinkUpdateEnabled: true
+dependentLinkUpdateRetryCount: 3
+dependentLinkUpdateRetryDelaySeconds: 5
+dependentLinkUpdateTimeoutSeconds: 60
+dependentApplicationBlacklist:
+  - "Example Dependent App Name to Exclude"

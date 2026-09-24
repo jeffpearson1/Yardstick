@@ -40,7 +40,9 @@ Write-Host -Init
 Write-Host "Starting Yardstick Email Notification Test"
 
 try {
-    $prefs = Get-Content "$PSScriptRoot\Preferences.yaml" | ConvertFrom-Yaml
+    . (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
+    $prefsPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
+    $prefs = Get-Content -LiteralPath $prefsPath | ConvertFrom-Yaml
     Write-Host "Preferences loaded successfully"
 
     if ($TestOutlook) {

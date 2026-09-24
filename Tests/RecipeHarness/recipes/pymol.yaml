@@ -1,0 +1,32 @@
+url: https://storage.googleapis.com/storage/v1/b/pymol-storage/o?prefix=installers/
+urlRedirects: false
+preDownloadScript: |
+  # Official PyMOL installer bucket listing. Never pin a version here.
+  $listing = Invoke-RestMethod -Uri $url
+  $latest = $listing.items |
+      Where-Object { $_.name -match '^installers/PyMOL-[0-9]+(\.[0-9]+)+-Windows-x86_64\.exe$' } |
+      Sort-Object { [version]([regex]::Match($_.name, 'PyMOL-(?<v>[0-9]+(\.[0-9]+)+)-Windows').Groups['v'].Value) } -Descending |
+      Select-Object -First 1
+  if (-not $latest) { throw 'No PyMOL Windows x86_64 installer was found in the official bucket listing.' }
+  $version = [regex]::Match($latest.name, 'PyMOL-(?<v>[0-9]+(\.[0-9]+)+)-Windows').Groups['v'].Value
+  $fileName = [IO.Path]::GetFileName($latest.name)
+  $url = "https://storage.googleapis.com/pymol-storage/$($latest.name)"
+installScript: <filename> /InstallationType=AllUsers /S /D=C:\Program Files\PyMOL
+uninstallScript: '"%ProgramFiles%\PyMOL\Uninstall-PyMOL.exe" /S'
+iconFile: pymol.png
+id: pymol
+displayName: PyMOL
+publisher: Schrödinger, LLC
+description: PyMOL is a molecular visualization system for viewing, analyzing, and presenting three-dimensional chemical structures.
+detectionType: file
+fileDetectionPath: '%ProgramFiles%\PyMOL'
+fileDetectionName: PyMOLWin.exe
+# PyMOLWin.exe ships with no version resource at all (the file/version probe reads back an
+# empty string), so version-based detection can never succeed. Detect on existence instead.
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_21H2
+
+

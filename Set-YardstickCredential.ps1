@@ -62,9 +62,10 @@ Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
 
 $Prefs = $null
-$prefsPath = Join-Path $PSScriptRoot 'Preferences.yaml'
+. (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
+$prefsPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
 if (Test-Path $prefsPath) {
-    $Prefs = Get-Content $prefsPath | ConvertFrom-Yaml
+    $Prefs = Get-Content -LiteralPath $prefsPath | ConvertFrom-Yaml
 }
 
 if (-not $Target) {

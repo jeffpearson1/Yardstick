@@ -38,9 +38,11 @@ Install-Module -Name Selenium -AllowPrerelease
 
 Most of this file should be fairly self-explanatory. Defaults do not necessarily have to be set, however recipes that don't contain all the values normally set by the defaults may fail to run correctly.
 
+The development project keeps its machine-local configuration at `Local\preferences.yaml`. Start by copying `Config\Preferences.example.yaml`; both `Local` and `Artifacts` are excluded from Git. See [the project layout](Docs/Architecture.md) for the development, test, artifact, and production boundaries.
+
 The TenantID, ClientID and ClientSecret are **not** stored in this file - see [Set the Intune credentials](#set-the-intune-credentials) below. `credentialTarget`, `credentialExpirationWarningDays`, `credentialExpirationEmailIntervalHours` and `adminEmailRecipient` tune where those credentials are stored and who is told when they are about to expire.
 
-`SoftwareDropbox` and `SoftwareArchive` support recipes for vendors whose installer is behind a signed-in, licensed download that cannot be automated. An operator stages the installer in a folder and Yardstick packages whatever is there. See [SoftwareDropbox-README.md](SoftwareDropbox-README.md). Leave both blank if you have no such recipes.
+`SoftwareDropbox` and `SoftwareArchive` support recipes for vendors whose installer is behind a signed-in, licensed download that cannot be automated. An operator stages the installer in a folder and Yardstick packages whatever is there. See [SoftwareDropbox.md](Docs/SoftwareDropbox.md). Leave both blank if you have no such recipes.
 
 Setting the optional `Backup` folder makes Yardstick keep a copy of every `.intunewin` file it uploads, so a bad release can be traced back to the exact package that shipped. Each recipe gets its own subfolder, and each file is named with the version and the time Intune finished publishing it. The newest three are retained (`backupVersionsToKeep`). The copy runs on a background thread while Yardstick carries on with supersedence and assignments, and a backup failure is reported without failing the application update. Leave `Backup` blank to turn this off.
 
@@ -54,7 +56,7 @@ Icons are not included for licensing reasons. Populate the icon cache folder wit
 
 The app registration credentials Yardstick uses to reach Microsoft Graph are held in
 Windows Credential Manager, encrypted for the account that runs Yardstick, rather than
-in plaintext in `preferences.yaml`. Store them once per machine:
+in plaintext in `Local\preferences.yaml`. Store them once per machine:
 
 ```powershell
 .\Set-YardstickCredential.ps1
@@ -72,7 +74,7 @@ Other useful invocations:
 .\Set-YardstickCredential.ps1 -Remove             # delete the stored credential
 ```
 
-If `preferences.yaml` still carries the legacy `TenantID` / `ClientId` / `ClientSecret`
+If `Local\preferences.yaml` still carries the legacy `TenantID` / `ClientId` / `ClientSecret`
 keys, the next Yardstick run migrates them into Credential Manager automatically and
 logs a reminder to delete them from the file. Running with `-NoInteractive` never
 prompts: an unattended run with no stored credential fails immediately with an
@@ -135,7 +137,7 @@ Yardstick uses Intune's native update path instead of a custom remediation. Afte
 * **Auto-update** (```autoUpdateSupersededAppsState```) is turned on for the new version's *available* assignments, so Intune pulls devices running a superseded version forward without any user action. Intune only supports auto-update for available assignments, so required-only recipes are unaffected. Specific device or user groups can opt out via ```defaultGroupsSkipAutoUpdates``` in ```preferences.yaml``` or ```groupSkipAutoUpdates``` in a recipe; assignments targeting those groups are held at ```notConfigured```.
 * **Required** assignments are moved onto the new version; **available** assignments are copied and left in place, because removing an available assignment destroys the on-device component Intune uses to auto-update. If the older version will not be superseded (```supersedence: false```), available assignments are moved instead, as in earlier releases.
 
-Defaults live in ```preferences.yaml``` (```defaultSupersedence```, ```defaultUninstallPreviousVersion```, ```defaultAutoUpdate```, ```useDetectAnchor```) and can be overridden per recipe. See [WritingRecipes.md](WritingRecipes.md) for details, including the `{DETECT}` anchor that keeps long-abandoned installs in scope.
+Defaults live in ```Local\preferences.yaml``` (```defaultSupersedence```, ```defaultUninstallPreviousVersion```, ```defaultAutoUpdate```, ```useDetectAnchor```) and can be overridden per recipe. See [WritingRecipes.md](Docs/WritingRecipes.md) for details, including the `{DETECT}` anchor that keeps long-abandoned installs in scope.
 
 Existing tenants can be migrated onto this model in one pass:
 

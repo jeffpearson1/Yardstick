@@ -1,0 +1,52 @@
+url: https://download.scdn.co/SpotifyFullSetup.exe
+urlRedirects: false
+preDownloadScript: |
+  # Spotify publishes no public version feed; www.spotify.com/download/windows exposes only this
+  # evergreen installer. Stage it once here, read its authoritative file version, and let
+  # downloadScript reuse the same file.
+  $staged = Join-Path $env:TEMP 'Yardstick-spotify-SpotifyFullSetup.exe'
+  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+  Invoke-WebRequest -Uri $url -OutFile $staged -UseBasicParsing
+  $info = (Get-Item -LiteralPath $staged).VersionInfo
+  $version = '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
+  if ($version -eq '0.0.0.0') { throw 'The Spotify installer reported no file version.' }
+  $fileName = 'SpotifyFullSetup.exe'
+downloadScript: |
+  Move-Item -LiteralPath (Join-Path $env:TEMP 'Yardstick-spotify-SpotifyFullSetup.exe') -Destination (Join-Path $PWD $fileName) -Force
+installScript: <filename> /silent
+powerShellUninstallScript: |
+  # SpotifyFullSetup.exe launches Spotify as soon as it finishes installing, and the uninstaller
+  # returns success while the running client still holds Spotify.exe open, so detection can still
+  # see the app afterwards. Stop the client first, then uninstall, then clear any remainder.
+  $ErrorActionPreference = 'SilentlyContinue'
+
+  foreach ($proc in @(Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue)) {
+      try { $proc.Kill(); $proc.WaitForExit(15000) } catch { }
+  }
+
+  $client = Join-Path $env:APPDATA 'Spotify\Spotify.exe'
+  if (Test-Path -LiteralPath $client) {
+      Start-Process -FilePath $client -ArgumentList '/uninstall', '/silent' -Wait -ErrorAction SilentlyContinue
+  }
+
+  foreach ($path in @(
+          (Join-Path $env:APPDATA 'Spotify')
+          (Join-Path $env:LOCALAPPDATA 'Spotify')
+          (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Spotify.lnk'))) {
+      Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  exit 0
+iconFile: spotify.png
+id: spotify
+displayName: Spotify
+publisher: Spotify AB
+description: Spotify is a desktop client for streaming music, podcasts, and other audio content.
+detectionType: file
+fileDetectionPath: '%AppData%\Spotify'
+fileDetectionName: Spotify.exe
+fileDetectionMethod: exists
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

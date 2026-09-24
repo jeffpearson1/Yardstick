@@ -1,0 +1,28 @@
+url:
+urlRedirects: false
+preDownloadScript: |
+  $downloadsUrl = 'https://www.geneious.com/download-previous-versions'
+  $downloads = Invoke-WebRequest -Uri $downloadsUrl -UseBasicParsing
+  $installerMatch = [regex]::Match(
+    [string]$downloads.Content,
+    'https://assets\.geneious\.com/installers/geneious/release/Geneious_Prime_win64_([0-9_]+)_with_jre\.msi',
+    'IgnoreCase'
+  )
+  if (-not $installerMatch.Success) {
+    throw "Could not discover the current Geneious Prime x64 MSI from $downloadsUrl"
+  }
+  $url = $installerMatch.Groups[0].Value
+  $version = $installerMatch.Groups[1].Value.Replace('_', '.')
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: geneious.png
+id: geneious
+displayName: Geneious Prime
+publisher: Biomatters Ltd
+description: Geneious Prime is an integrated desktop platform for molecular biology, sequence analysis, cloning, and bioinformatics workflows.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

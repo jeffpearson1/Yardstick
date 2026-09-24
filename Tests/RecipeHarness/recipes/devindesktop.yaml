@@ -1,0 +1,54 @@
+url: https://windsurf.com/api/windsurf/download-redirect?build=win32-x64-user&isNext=false
+urlRedirects: true
+preDownloadScript: |
+  # Official Devin Desktop (formerly Windsurf) download redirector. Never pin a version here.
+  # Yardstick resolves the 307 before this runs, so $url is the versioned installer.
+  if ($url -notmatch '/(?<file>(?:Devin|Windsurf)UserSetup-x64-(?<ver>[0-9]+(?:\.[0-9]+)+)\.exe)$') {
+      throw "The official Devin Desktop download redirect did not resolve to a Windows x64 user installer: '$url'."
+  }
+  $fileName = $Matches['file']
+  $version = $Matches['ver']
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /MERGETASKS=!runcode
+powerShellUninstallScript: |
+  # Accept either directory: OTA-upgraded machines keep the legacy Windsurf path.
+  $uninstallers = @(
+      (Join-Path $env:LOCALAPPDATA 'Programs\Devin\unins000.exe'),
+      (Join-Path $env:LOCALAPPDATA 'Programs\Windsurf\unins000.exe')
+  )
+  foreach ($uninstaller in $uninstallers) {
+      if (Test-Path -LiteralPath $uninstaller) {
+          Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+      }
+  }
+  exit 0
+iconFile: devindesktop.png
+id: devindesktop
+displayName: Devin Desktop
+publisher: Exafunction, Inc.
+description: Devin Desktop (formerly Windsurf) is an AI-assisted code editor for software development and agentic workflows.
+detectionType: script
+detectionScript: |
+  # Devin Desktop is the rebrand of Windsurf and reaches existing installs as an
+  # over-the-air update, so upgraded machines keep the legacy Windsurf directory
+  # while fresh installs use the Devin directory. Either one counts as installed.
+  $expected = [version]'<version>'
+  $candidates = @(
+      (Join-Path $env:LOCALAPPDATA 'Programs\Devin\Devin.exe'),
+      (Join-Path $env:LOCALAPPDATA 'Programs\Windsurf\Windsurf.exe')
+  )
+  foreach ($exe in $candidates) {
+      if (Test-Path -LiteralPath $exe) {
+          $raw = [string](Get-Item -LiteralPath $exe).VersionInfo.FileVersion
+          $match = [regex]::Match($raw, '^[0-9]+(\.[0-9]+){1,3}')
+          if ($match.Success -and ([version]$match.Value) -ge $expected) {
+              Write-Output 'Detected'
+              exit 0
+          }
+      }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

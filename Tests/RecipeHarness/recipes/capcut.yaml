@@ -1,0 +1,89 @@
+url: https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/b/ByteDance/CapCut
+urlRedirects: false
+preDownloadScript: |
+  # CapCut publishes no official version feed: capcut.com is a client-rendered SPA and its
+  # documented download endpoints return 404. Microsoft's winget-pkgs repository is the only
+  # machine-readable source. It is community-maintained (unofficial) and may lag the vendor,
+  # but the installer it points at is still ByteDance's own CDN.
+  $entries = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'Yardstick' }
+  $version = ($entries |
+      Where-Object { $_.type -eq 'dir' -and $_.name -match '^[0-9]+(\.[0-9]+)+$' } |
+      Sort-Object { [version]$_.name } -Descending |
+      Select-Object -First 1).name
+  if (-not $version) { throw 'No CapCut version was found in the winget-pkgs manifest index.' }
+  $manifest = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/b/ByteDance/CapCut/$version/ByteDance.CapCut.installer.yaml" -Headers @{ 'User-Agent' = 'Yardstick' }
+  if ($manifest -is [byte[]]) { $manifest = [System.Text.Encoding]::UTF8.GetString($manifest) }
+  $installer = [regex]::Match($manifest, '(?s)Architecture:\s*x64.*?InstallerUrl:\s*(?<url>\S+)')
+  if (-not $installer.Success) { throw "The winget-pkgs manifest for CapCut $version listed no x64 installer." }
+  $url = $installer.Groups['url'].Value
+  $fileName = [Uri]::UnescapeDataString([IO.Path]::GetFileName(([Uri]$url).AbsolutePath))
+# CapCut's installer is a custom ByteDance stub, not NSIS: /S is ignored and the wizard
+# appears. The documented silent switch is /silent_install=1.
+installScript: <filename> /silent_install=1
+powerShellUninstallScript: |
+  # CapCut ships no silent uninstall. uninst.exe always raises its wizard, and neither
+  # /silent_uninstall=1, /S, /quiet nor --uninstall suppresses it, so invoking it under
+  # Intune would hang forever waiting on a user. Remove the app's own footprint instead:
+  # it is a self-contained per-user install with no services, drivers or shared components.
+  $ErrorActionPreference = 'SilentlyContinue'
+
+  foreach ($name in 'CapCut', 'uninst', 'uninstshell', 'CapCutService', 'CapCutUpdater') {
+      foreach ($proc in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+          try { $proc.Kill(); $proc.WaitForExit(15000) } catch { }
+      }
+  }
+
+  $paths = @(
+      (Join-Path $env:LOCALAPPDATA 'CapCut')
+      (Join-Path $env:APPDATA 'CapCut')
+      (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\CapCut')
+      (Join-Path $env:USERPROFILE 'Desktop\CapCut.lnk')
+      (Join-Path $env:PUBLIC 'Desktop\CapCut.lnk')
+  )
+  foreach ($path in $paths) {
+      Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $keys = @(
+      'HKCU:\Software\Bytedance\CapCut'
+      'HKCU:\Software\Bytedance\CapCutInstaller'
+      'HKCU:\Software\Classes\capcut'
+      'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\CapCut'
+  )
+  foreach ($key in $keys) {
+      Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  # Some builds register ARP under a generated key name rather than "CapCut".
+  Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+      Where-Object { (Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'CapCut' } |
+      ForEach-Object { Remove-Item -LiteralPath $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
+
+  exit 0
+iconFile: capcut.png
+id: capcut
+displayName: CapCut
+publisher: Bytedance Pte. Ltd.
+description: CapCut is a desktop video editor with timeline, effects, captions, audio, and generative media tools.
+# CapCut.exe carries a placeholder file version of 1.0.0.000000 in every release, so file
+# version detection can never match. Read the per-user ARP entry instead, which does record
+# the real version.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $entries = Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue
+  foreach ($entry in $entries) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -ne 'CapCut') { continue }
+      $found = $null
+      if ([version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) {
+          Write-Output 'Detected'
+          exit 0
+      }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W10_20H2

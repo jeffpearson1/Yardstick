@@ -1,0 +1,42 @@
+url: https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/t/TechSmith/Snagit
+urlRedirects: false
+preDownloadScript: |
+  # TechSmith ships an evergreen snagit.msi but publishes no version feed, and the MSI is over
+  # 400 MB so it cannot be probed cheaply before download. Microsoft's winget-pkgs repository is
+  # the only machine-readable source. It is community-maintained (unofficial) and may lag the
+  # vendor, but the installer it points at is still TechSmith's own CDN.
+  # Snagit manifests are nested one level deeper, by release year.
+  $years = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'Yardstick' }
+  $year = ($years |
+      Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d{4}$' } |
+      Sort-Object { [int]$_.name } -Descending |
+      Select-Object -First 1).name
+  if (-not $year) { throw 'No Snagit release year was found in the winget-pkgs manifest index.' }
+  $entries = Invoke-RestMethod -Uri "$url/$year" -Headers @{ 'User-Agent' = 'Yardstick' }
+  $version = ($entries |
+      Where-Object { $_.type -eq 'dir' -and $_.name -match '^[0-9]+(\.[0-9]+)+$' } |
+      Sort-Object { [version]$_.name } -Descending |
+      Select-Object -First 1).name
+  if (-not $version) { throw "No Snagit $year version was found in the winget-pkgs manifest index." }
+  $manifest = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/t/TechSmith/Snagit/$year/$version/TechSmith.Snagit.$year.installer.yaml" -Headers @{ 'User-Agent' = 'Yardstick' }
+  if ($manifest -is [byte[]]) { $manifest = [System.Text.Encoding]::UTF8.GetString($manifest) }
+  $installer = [regex]::Match($manifest, '(?s)Architecture:\s*x64.*?InstallerUrl:\s*(?<url>\S+)')
+  if (-not $installer.Success) { $installer = [regex]::Match($manifest, 'InstallerUrl:\s*(?<url>\S+)') }
+  if (-not $installer.Success) { throw "The winget-pkgs manifest for Snagit $version listed no installer." }
+  # winget tracks the EXE installer; TechSmith publishes the matching MSI under a build number that
+  # is the version with its separators removed (26.2.2 -> 2622).
+  $build = $version -replace '\.', ''
+  $url = "https://download.techsmith.com/snagit/releases/$build/snagit.msi"
+  $fileName = 'snagit.msi'
+installScript: msiexec /i <filename> /qn /norestart TSC_DATA_STORE=0
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: snagit.png
+id: snagit
+displayName: Snagit 2026
+publisher: TechSmith Corporation
+description: Snagit captures, annotates, and shares screenshots, scrolling captures, and screen recordings.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

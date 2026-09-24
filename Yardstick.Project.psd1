@@ -1,0 +1,16 @@
+@{
+    RuntimeRoot         = '.'
+    RecipesPath         = 'Recipes'
+    DevelopmentRecipes = 'Recipes\Development'
+    IconsPath           = 'Icons'
+    HarnessPath         = 'Tests\RecipeHarness'
+    ArtifactsPath       = 'Artifacts'
+    HarnessArtifacts    = 'Artifacts\RecipeHarness'
+    BuildSpace          = 'Artifacts\BuildSpace'
+    Published           = 'Artifacts\Packages'
+    Temp                = 'Artifacts\Temp'
+    Preferences         = 'Local\preferences.yaml'
+    Secrets             = 'Local\Secrets'
+    Documentation       = 'Docs'
+    ProductionRoot      = 'G:\Intune\Yardstick'
+}

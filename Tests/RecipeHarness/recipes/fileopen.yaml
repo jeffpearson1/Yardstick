@@ -1,0 +1,36 @@
+url: https://plugin.fileopen.com/current/FileOpenInstaller64.msi
+urlRedirects: false
+preDownloadScript: |
+  # FileOpen ships an evergreen MSI and publishes only a build number on plugin.fileopen.com/all.aspx
+  # ("Windows Installers [1016]"), never the full product version. Stage the MSI once here, read its
+  # authoritative ProductVersion, and let downloadScript reuse the same file.
+  $staged = Join-Path $env:TEMP 'Yardstick-fileopen-FileOpenInstaller64.msi'
+  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+  Invoke-WebRequest -Uri $url -OutFile $staged -UseBasicParsing
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $database = $installer.OpenDatabase($staged, 0)
+  $view = $database.OpenView("SELECT Value FROM Property WHERE Property = 'ProductVersion'")
+  $view.Execute()
+  $record = $view.Fetch()
+  $version = [string]$record.StringData(1)
+  $view.Close()
+  foreach ($comObject in @($record, $view, $database, $installer)) {
+      if ($comObject) { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($comObject) }
+  }
+  [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+  if (-not $version) { throw 'Could not read ProductVersion from the FileOpen Client MSI.' }
+  $fileName = 'FileOpenInstaller64.msi'
+downloadScript: |
+  Move-Item -LiteralPath (Join-Path $env:TEMP 'Yardstick-fileopen-FileOpenInstaller64.msi') -Destination (Join-Path $PWD $fileName) -Force
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: fileopen.png
+id: fileopen
+displayName: FileOpen Client
+publisher: FileOpen Systems Inc.
+description: FileOpen Client enables authorized viewing of documents protected by FileOpen rights management.
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

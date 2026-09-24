@@ -1,0 +1,20 @@
+url:
+urlRedirects: false
+version: 1.0.0
+fileName: labfixture.exe
+downloadScript: |
+  Copy-Item -LiteralPath "$YardstickDevPath\Yardstick.ps1" -Destination (Join-Path $BuildSpace "$id\$version\$fileName")
+installScript: <filename> /quiet
+uninstallScript: <filename> /uninstall /quiet
+iconFile: 7zip.png
+id: labfixture
+displayName: Yardstick Recipe Lab Fixture
+publisher: Yardstick Recipe Lab
+description: Harmless fixture used to validate the isolated recipe lab pipeline.
+detectionType: file
+fileDetectionPath: 'C:\Program Files\Yardstick Recipe Lab'
+fileDetectionName: labfixture.exe
+fileDetectionMethod: exists
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
