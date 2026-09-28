@@ -579,7 +579,10 @@ function Resolve-YardstickIntuneWinAppUtil {
     $downloadPath = "$toolPath.download"
     $downloadUri = 'https://raw.githubusercontent.com/microsoft/Microsoft-Win32-Content-Prep-Tool/1d6cfcbdf8c28edc596337031f74df951f38f718/IntuneWinAppUtil.exe'
     try {
-        Invoke-WebRequest -Uri $downloadUri -OutFile $downloadPath -UseBasicParsing -ErrorAction Stop
+        # -TimeoutSec explicitly: module session state does not inherit the runner's
+        # global PSDefaultParameterValues. It bounds the wait for response headers
+        # only, so it cannot truncate the download itself.
+        Invoke-WebRequest -Uri $downloadUri -OutFile $downloadPath -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
         $actualHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
         if ($actualHash -ne $expectedHash) { throw "Downloaded IntuneWinAppUtil.exe failed SHA-256 validation." }
         Move-Item -LiteralPath $downloadPath -Destination $toolPath -Force
@@ -596,7 +599,11 @@ function New-YardstickWin32AppPackage {
         [Parameter(Mandatory)][string]$SetupFile,
         [Parameter(Mandatory)][string]$OutputFolder,
         [switch]$Force,
-        [string]$IntuneWinAppUtilPath
+        [string]$IntuneWinAppUtilPath,
+        # 0 waits indefinitely, which is what -Wait used to do. Callers should pass
+        # the packagingTimeoutMinutes preference instead.
+        [ValidateRange(0, 1440)]
+        [int]$TimeoutMinutes = 30
     )
     if (-not (Test-Path -LiteralPath $SourceFolder -PathType Container)) { throw "Source folder does not exist: $SourceFolder" }
     if (-not (Test-Path -LiteralPath (Join-Path $SourceFolder $SetupFile) -PathType Leaf)) { throw "Setup file '$SetupFile' does not exist in '$SourceFolder'." }
@@ -611,7 +618,21 @@ function New-YardstickWin32AppPackage {
     $arguments = @('-c', ('"{0}"' -f $SourceFolder), '-s', ('"{0}"' -f $SetupFile), '-o', ('"{0}"' -f $OutputFolder), '-q')
     # Give the tool its own console. Shared via -NoNewWindow, its progress-bar cursor
     # writes can leave our console handle unusable and every later Write-Host throws.
-    $process = Start-Process -FilePath $IntuneWinAppUtilPath -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
+    #
+    # -PassThru without -Wait, then an explicit bounded WaitForExit: IntuneWinAppUtil
+    # compresses large payloads and has been seen to sit on a locked source file, and
+    # a plain -Wait gives the runner no way out of that.
+    $process = Start-Process -FilePath $IntuneWinAppUtilPath -ArgumentList $arguments -PassThru -WindowStyle Hidden
+    if ($TimeoutMinutes -gt 0) {
+        if (-not $process.WaitForExit($TimeoutMinutes * 60 * 1000)) {
+            try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {
+                Write-YardstickIntuneLog "Could not kill the stalled IntuneWinAppUtil.exe (PID $($process.Id)): $($_.Exception.Message)"
+            }
+            throw "IntuneWinAppUtil.exe did not finish within $TimeoutMinutes minute(s) and was terminated."
+        }
+    } else {
+        $process.WaitForExit()
+    }
     if ($process.ExitCode -ne 0) { throw "IntuneWinAppUtil.exe exited with code $($process.ExitCode)." }
     if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw "IntuneWinAppUtil.exe did not create the expected package: $packagePath" }
     return [pscustomobject]@{ Name = [io.path]::GetFileName($packagePath); Path = $packagePath }
@@ -827,12 +848,17 @@ function Invoke-YardstickBlobRequestWithRetry {
         [hashtable]$Headers = @{},
         [string]$ContentType = 'application/octet-stream',
         [string]$Label = 'blob request',
-        [int]$MaximumRetryCount = 5
+        [int]$MaximumRetryCount = 5,
+        # Deliberately generous. Unlike a GET, a PUT sends its whole body before
+        # response headers arrive, so this timeout does bound the upload itself -
+        # 10 minutes for an 8 MB block is a floor of roughly 0.1 Mbps, which no
+        # working connection will hit, while still cutting loose a dead socket.
+        [int]$TimeoutSec = 600
     )
     for ($attempt = 0; $attempt -le $MaximumRetryCount; $attempt++) {
         try {
             $separator = if ($UploadUri.Uri.Contains('?')) { '&' } else { '?' }
-            Invoke-WebRequest -Method $Method -Uri "$($UploadUri.Uri)$separator$Query" -Body $Body -Headers $Headers -ContentType $ContentType -UseBasicParsing -ErrorAction Stop | Out-Null
+            Invoke-WebRequest -Method $Method -Uri "$($UploadUri.Uri)$separator$Query" -Body $Body -Headers $Headers -ContentType $ContentType -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
             return $UploadUri
         } catch {
             $status = $null
@@ -875,6 +901,11 @@ function Send-YardstickIntuneContentBlob {
     $stream = [io.file]::OpenRead($resolvedPath)
     $blockIds = [collections.generic.list[string]]::new()
     $renewAt = Get-YardstickUploadUriRenewalTime -UploadUri $UploadUri
+    # Uploading a multi-gigabyte package can legitimately outlast the watchdog's
+    # whole stage budget, so report each committed block as progress. Resolved
+    # once, and guarded: this module is imported on its own by the unit tests, and
+    # each module gets its own session state rather than seeing YardstickSupport's.
+    $reportProgress = Get-Command Update-YardstickWatchdogProgress -ErrorAction SilentlyContinue
     try {
         $index = 0
         $buffer = [byte[]]::new($ChunkSize)
@@ -899,6 +930,7 @@ function Send-YardstickIntuneContentBlob {
             if ($sent.Uri -ne $UploadUri.Uri) { $renewAt = Get-YardstickUploadUriRenewalTime -UploadUri $sent }
             $UploadUri = $sent
             $index++
+            if ($reportProgress) { & $reportProgress }
         }
     } finally {
         $stream.Dispose()

@@ -65,7 +65,10 @@ function Connect-YardstickGraph {
     }
 
     $tokenUri = "https://login.microsoftonline.com/$([uri]::EscapeDataString($TenantID))/oauth2/v2.0/token"
-    $tokenResponse = Invoke-RestMethod -Uri $tokenUri -Method Post -ContentType 'application/x-www-form-urlencoded' -Body @{
+    # Explicit rather than inherited: each module has its own session state, so the
+    # $Global:PSDefaultParameterValues the runner sets for recipes is not visible
+    # here. Without this, an unresponsive identity endpoint hangs the run forever.
+    $tokenResponse = Invoke-RestMethod -Uri $tokenUri -Method Post -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 60 -Body @{
         client_id     = $ClientID
         client_secret = $ClientSecret
         scope         = 'https://graph.microsoft.com/.default'
@@ -184,6 +187,11 @@ function Invoke-YardstickGraphRequest {
                     Headers     = $headers
                     Method      = $Method
                     ErrorAction = 'Stop'
+                    # Module session state does not see the runner's global
+                    # PSDefaultParameterValues, so bound this here. A Graph call
+                    # that never answers is retried as transient below rather than
+                    # stalling the run.
+                    TimeoutSec  = 120
                 }
                 if ($null -ne $Body) {
                     $params.ContentType = 'application/json'

@@ -27,7 +27,7 @@ class GithubDownloader {
 
     [void] Update() {
         $releaseEndpoint = "https://api.github.com/repos/$(($this.URL -replace "https://github.com/|/releases").trimEnd("/"))/releases"
-        $releaseResponse = Invoke-RestMethod $releaseEndpoint
+        $releaseResponse = Invoke-RestMethod $releaseEndpoint -TimeoutSec 120
         $releaseLatest = ($releaseResponse | Where-Object Prerelease -eq $this.Prerelease | Sort-Object published_at -Descending)[0]
         if ($null -ne $this.VersionRegex) {
             $releaseLatest.tag_name -match "$($this.VersionRegex)"

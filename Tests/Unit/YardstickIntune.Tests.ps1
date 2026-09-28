@@ -380,3 +380,107 @@ Describe 'Yardstick Intune content upload' {
         }
     }
 }
+
+Describe 'Yardstick Intune packaging timeout' {
+    # IntuneWinAppUtil.exe compresses large payloads and has been seen to sit on a
+    # locked source file. Start-Process -Wait gave the runner no way out of that,
+    # which is one of the paths the 2026-09-25 hang could have taken.
+    #
+    # The fake process is built inline rather than in a BeforeAll helper: the
+    # Start-Process mock runs inside the module's session state, which cannot see
+    # functions defined in the test file's scope.
+    BeforeAll {
+        $Global:FakePackagingProcess = {
+            param([bool]$Finishes, [int]$ExitCode = 0)
+            $process = [pscustomobject]@{ Id = 4242; ExitCode = $ExitCode }
+            $process | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value {
+                param($milliseconds)
+                $Global:WaitForExitMilliseconds = $milliseconds
+                return $Finishes
+            }.GetNewClosure()
+            return $process
+        }
+    }
+
+    It 'kills IntuneWinAppUtil.exe and fails the recipe when it overruns' {
+        InModuleScope YardstickIntune {
+            Mock Test-Path { $true }
+            Mock Start-Process { & $Global:FakePackagingProcess -Finishes $false }
+            Mock Stop-Process {}
+            Mock Write-YardstickIntuneLog {}
+
+            { New-YardstickWin32AppPackage -SourceFolder 'C:\src' -SetupFile 'setup.exe' `
+                -OutputFolder 'C:\out' -IntuneWinAppUtilPath 'C:\tool.exe' -Force -TimeoutMinutes 30 } |
+                Should -Throw -ExpectedMessage '*did not finish within 30 minute*'
+
+            Should -Invoke Stop-Process -Times 1
+        }
+    }
+
+    It 'does not pass -Wait, which is what made the old call unbounded' {
+        InModuleScope YardstickIntune {
+            Mock Test-Path { $true }
+            Mock Start-Process { & $Global:FakePackagingProcess -Finishes $true }
+
+            New-YardstickWin32AppPackage -SourceFolder 'C:\src' -SetupFile 'setup.exe' `
+                -OutputFolder 'C:\out' -IntuneWinAppUtilPath 'C:\tool.exe' -Force -TimeoutMinutes 30 | Out-Null
+
+            Should -Invoke Start-Process -Times 1 -ParameterFilter { -not $Wait -and $PassThru }
+        }
+    }
+
+    It 'converts the budget from minutes to milliseconds' {
+        InModuleScope YardstickIntune {
+            Mock Test-Path { $true }
+            Mock Start-Process { & $Global:FakePackagingProcess -Finishes $true }
+
+            New-YardstickWin32AppPackage -SourceFolder 'C:\src' -SetupFile 'setup.exe' `
+                -OutputFolder 'C:\out' -IntuneWinAppUtilPath 'C:\tool.exe' -Force -TimeoutMinutes 30 | Out-Null
+        }
+        $Global:WaitForExitMilliseconds | Should -Be 1800000
+    }
+
+    It 'still reports a nonzero exit code from a process that did finish' {
+        InModuleScope YardstickIntune {
+            Mock Test-Path { $true }
+            Mock Start-Process { & $Global:FakePackagingProcess -Finishes $true -ExitCode 3 }
+            Mock Stop-Process {}
+
+            { New-YardstickWin32AppPackage -SourceFolder 'C:\src' -SetupFile 'setup.exe' `
+                -OutputFolder 'C:\out' -IntuneWinAppUtilPath 'C:\tool.exe' -Force -TimeoutMinutes 30 } |
+                Should -Throw -ExpectedMessage '*exited with code 3*'
+
+            Should -Invoke Stop-Process -Times 0 -Because 'the process ended on its own'
+        }
+    }
+
+    It 'waits indefinitely only when explicitly told to' {
+        InModuleScope YardstickIntune {
+            Mock Test-Path { $true }
+            Mock Start-Process { & $Global:FakePackagingProcess -Finishes $true }
+            Mock Stop-Process {}
+
+            New-YardstickWin32AppPackage -SourceFolder 'C:\src' -SetupFile 'setup.exe' `
+                -OutputFolder 'C:\out' -IntuneWinAppUtilPath 'C:\tool.exe' -Force -TimeoutMinutes 0 | Out-Null
+
+            Should -Invoke Stop-Process -Times 0
+        }
+    }
+}
+
+Describe 'Yardstick Intune blob upload timeout' {
+    It 'bounds the block PUT, which sends its body before any response header arrives' {
+        InModuleScope YardstickIntune {
+            $captured = $null
+            Mock Invoke-WebRequest { $script:captured = $TimeoutSec }
+
+            $uri = [pscustomobject]@{ Uri = 'https://blob/one?sig=abc' }
+            Invoke-YardstickBlobRequestWithRetry -Method Put -UploadUri $uri -FileResource 'files/1' `
+                -Query 'comp=block&blockid=x' -Body ([byte[]]@(1, 2, 3)) | Out-Null
+
+            # Generous on purpose: 10 minutes for an 8 MB block is a floor of about
+            # 0.1 Mbps, which no working connection will hit.
+            $script:captured | Should -Be 600
+        }
+    }
+}

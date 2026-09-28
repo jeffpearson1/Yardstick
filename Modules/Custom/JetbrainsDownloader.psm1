@@ -1,5 +1,8 @@
 $JetbrainsXMLURL = "https://www.jetbrains.com/updates/updates.xml"
-$JetbrainsXML = [xml](Invoke-WebRequest -Uri $JetbrainsXMLURL).Content
+# -TimeoutSec explicitly: this runs at Import-Module time, before the runner has
+# set its global default and before the stage watchdog exists, so an unresponsive
+# jetbrains.com would hang the whole run at startup with nothing in the log.
+$JetbrainsXML = [xml](Invoke-WebRequest -Uri $JetbrainsXMLURL -TimeoutSec 120).Content
 
 
 function Get-JetbrainsAppLatestVersion {
@@ -171,7 +174,7 @@ function Test-JetbrainsDownloadUrl {
     )
     
     try {
-        $response = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -ErrorAction Stop
+        $response = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
         return $response.StatusCode -eq 200
     }
     catch {

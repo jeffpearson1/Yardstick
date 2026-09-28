@@ -152,6 +152,16 @@ try {
     exit 1
 }
 
+# Run-safety timeouts. These are read before anything else touches the network on
+# purpose: every value here exists to stop the runner waiting forever, so they have
+# to be in force for the whole run, not just the recipe loop.
+$Script:WebRequestTimeoutSeconds = Get-YardstickTimeoutPreference -Value $Prefs.webRequestTimeoutSeconds -Default 120 -Name 'webRequestTimeoutSeconds' -AllowZero
+$Script:RecipeStageTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.recipeStageTimeoutMinutes -Default 60 -Name 'recipeStageTimeoutMinutes' -AllowZero
+$Script:PackagingTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.packagingTimeoutMinutes -Default 30 -Name 'packagingTimeoutMinutes'
+$Script:BitsStallTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.bitsStallTimeoutMinutes -Default 15 -Name 'bitsStallTimeoutMinutes'
+
+Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
+
 # Validate prerequisites before importing external modules
 $prereqResult = Test-Prerequisites -ToolsPath $Prefs.Tools
 foreach ($w in $prereqResult.Warnings) { Write-Log "WARNING: $w" }
@@ -1243,14 +1253,20 @@ try {
 }
 Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences $Prefs -NoEmail:$NoEmail | Out-Null
 
+# Last line of defence against a hung run. Everything below reports its stage to
+# this; if one of them stops reporting for recipeStageTimeoutMinutes, the watchdog
+# writes the diagnosis to the log and ends the process.
+Start-YardstickWatchdog -TimeoutMinutes $Script:RecipeStageTimeoutMinutes
+
 # Main processing loop
 foreach ($AppId_Processing in $Applications) {
     Write-Log "Starting update for $AppId_Processing..."
+    Set-YardstickWatchdogStage -AppId $AppId_Processing -Stage 'Starting up'
     Set-Location $PSScriptRoot
-    
+
     # Initialize variables for tracking
     $CurrentDisplayName = $AppId_Processing
-    
+
     try {
         # Refresh token if necessary
         Connect-YardstickGraph
@@ -1258,6 +1274,11 @@ foreach ($AppId_Processing in $Applications) {
         # Undo any folder variable the previous recipe overwrote before anything
         # in this iteration reads one.
         Restore-RunnerPathVariable
+
+        # Likewise re-assert the web timeout defaults. A recipe is free to reassign
+        # $PSDefaultParameterValues, and one that does would otherwise leave every
+        # recipe after it able to hang indefinitely again.
+        Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
 
         # Clear the temp file. -LiteralPath and a top-level enumeration on purpose:
         # Get-ChildItem $Temp -Exclude ".gitkeep" -Recurse quietly returns nothing
@@ -1365,6 +1386,7 @@ foreach ($AppId_Processing in $Applications) {
         # Run the pre-download script
         if ($Script:PreDownloadScript) {
             Write-Log "Running pre-download script..."
+            Set-YardstickWatchdogStage -Stage 'Pre-Download Script'
             try {
                 # Pre-download scripts are almost all version probes against a vendor
                 # endpoint, so a dropped or timed-out connection fails a recipe that
@@ -1479,6 +1501,7 @@ foreach ($AppId_Processing in $Applications) {
 
         # Download the new installer
         Write-Log "Starting download..."
+        Set-YardstickWatchdogStage -Stage 'Download'
         if ($Script:Url) {
             Write-Log "URL: $($Script:Url)"
         }
@@ -1511,7 +1534,11 @@ foreach ($AppId_Processing in $Applications) {
             Pop-Location
         } else {
             try {
-                Start-BitsTransfer -Source "$($Script:Url)" -Destination "$BuildSpace\$Script:Id\$Script:Version\$Script:FileName"
+                # Bounded by a stall timeout rather than a plain Start-BitsTransfer,
+                # which blocks the runner with no way to give up.
+                Invoke-YardstickBitsDownload -Source "$($Script:Url)" `
+                    -Destination "$BuildSpace\$Script:Id\$Script:Version\$Script:FileName" `
+                    -StallTimeoutMinutes $Script:BitsStallTimeoutMinutes
                 Write-Log "File downloaded successfully using BITS transfer."
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error downloading file: $_" -FailureStage "Download"
@@ -1524,6 +1551,7 @@ foreach ($AppId_Processing in $Applications) {
         # Run the post-download script
         if ($Script:PostDownloadScript) {
             Write-Log "Running post download script..."
+            Set-YardstickWatchdogStage -Stage 'Post-Download Script'
             Push-Location $BuildSpace\$Script:Id\$Script:Version
             try {
                 Invoke-Command -ScriptBlock $Script:PostDownloadScript -NoNewScope
@@ -1572,7 +1600,8 @@ foreach ($AppId_Processing in $Applications) {
         # Generate the .intunewin file
         Set-Location $PSScriptRoot
         Write-Log "Generating .intunewin file..."
-        $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force
+        Set-YardstickWatchdogStage -Stage 'Packaging'
+        $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force -TimeoutMinutes $Script:PackagingTimeoutMinutes
 
         # Upload .intunewin file to Intune
         # Detection Types
@@ -1593,6 +1622,7 @@ foreach ($AppId_Processing in $Applications) {
 
         # Create the Intune App
         Write-Log "Uploading $Script:DisplayName to Intune..."
+        Set-YardstickWatchdogStage -Stage 'Upload'
         Connect-YardstickGraph
         try {
             if ($Script:AllowUserUninstall) {
@@ -1690,6 +1720,7 @@ foreach ($AppId_Processing in $Applications) {
     # Run the post-run script
     if ($Script:PostRunScript) {
         Write-Log "Running post run script..."
+        Set-YardstickWatchdogStage -Stage 'Post-Run Script'
         try {
             Invoke-Command -ScriptBlock $Script:PostRunScript -NoNewScope
             Write-Log "Post run script ran successfully."
@@ -1705,6 +1736,13 @@ foreach ($AppId_Processing in $Applications) {
     # above, which is where the time actually goes.
     Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
 }
+
+# The watchdog stops at the end of the loop, not at the end of the script. What
+# follows is the email report, which can sit on a Read-Host waiting for an
+# operator to approve sending - killing a run for being slow to answer a prompt is
+# exactly the behaviour nobody wants. Everything past here is either bounded
+# already or deliberately interactive.
+Stop-YardstickWatchdog
 
 # Final drain. This has to happen before the email report is built, because
 # Wait-YardstickBackup is what records each app's backup status on it - and
@@ -1755,6 +1793,10 @@ if (-not $NoEmail) {
 
 # Clean up
 Invoke-Cleanup
+
+# Belt and braces: the email block above can return early, skipping this far, and
+# a watchdog thread left running would keep the process alive.
+Stop-YardstickWatchdog
 
 # Return to the original directory
 Set-Location $PSScriptRoot

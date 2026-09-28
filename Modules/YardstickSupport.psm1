@@ -974,6 +974,512 @@ function Start-YardstickBackup {
 }
 
 
+#####################################################################
+# RUN SAFETY - nothing in Yardstick may wait forever
+#####################################################################
+# A 2026-09-25 run sat for two hours inside a single recipe's pre-download script,
+# because Invoke-WebRequest's default -TimeoutSec is 0, meaning indefinite, and the
+# vendor host accepted the TCP connection and then never answered. The functions
+# below bound every operation that can block the runner: HTTP calls, BITS
+# downloads, and - as a last resort when something blocks in a way none of those
+# cover - the run itself.
+
+
+function Get-YardstickTimeoutPreference {
+    <#
+    .SYNOPSIS
+    Reads an optional integer timeout out of preferences.yaml.
+
+    .DESCRIPTION
+    ConvertFrom-Yaml yields $null for an absent key and "" for a present-but-empty
+    one; both mean "use the default". `-as [int]` cannot tell either of those from a
+    deliberate 0, which is why this does not just use it.
+
+    An explicit 0 is honoured only when -AllowZero is passed, i.e. only where 0 has
+    a defined meaning (disable the bound). Everywhere else a 0 falls back to the
+    default, so a stray blank key cannot silently remove a timeout.
+
+    .PARAMETER Value
+    The raw value from the preferences hashtable.
+
+    .PARAMETER Default
+    The value to use when the key is absent, blank, or unusable.
+
+    .PARAMETER Name
+    The preference key name, used only in the warning text.
+
+    .PARAMETER AllowZero
+    Treat an explicit 0 as meaningful rather than falling back to -Default.
+
+    .OUTPUTS
+    Int32.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        $Value,
+
+        [Parameter(Mandatory)]
+        [int]$Default,
+
+        [string]$Name = 'timeout',
+
+        [switch]$AllowZero
+    )
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $Default }
+
+    $parsed = $Value -as [int]
+    if ($null -eq $parsed -or $parsed -lt 0) {
+        Write-Log "WARNING: Preference '$Name' is set to '$Value', which is not a valid number of units. Using $Default instead."
+        return $Default
+    }
+
+    if ($parsed -eq 0 -and -not $AllowZero) { return $Default }
+
+    return $parsed
+}
+
+
+function Set-YardstickWebRequestTimeout {
+    <#
+    .SYNOPSIS
+    Applies a default -TimeoutSec to every Invoke-WebRequest/Invoke-RestMethod call.
+
+    .DESCRIPTION
+    Recipes run through Invoke-Command -NoNewScope, so a $Global:PSDefaultParameterValues
+    entry reaches them: of the 161 recipes that make web calls, only two pass their
+    own -TimeoutSec, and patching the rest by hand would not stop the next one being
+    written without it. A recipe that does pass -TimeoutSec still wins, because an
+    explicit argument always beats a default.
+
+    This bounds the wait for response *headers*, not the response body - verified
+    against a server that sent headers immediately then dribbled a body for twelve
+    seconds, which -TimeoutSec 4 happily accepted. So this cannot truncate a large
+    but healthy -OutFile download; it only ends the case that actually hangs, where
+    the far end never answers at all.
+
+    Module code does NOT see this. Each module has its own session state with its
+    own $PSDefaultParameterValues, so YardstickGraph and YardstickIntune pass
+    -TimeoutSec explicitly instead.
+
+    Call this again at the top of each recipe iteration: a recipe is free to
+    reassign $PSDefaultParameterValues, and without re-asserting, one careless
+    recipe would un-bound every recipe after it.
+
+    .PARAMETER TimeoutSeconds
+    Seconds to wait for response headers. 0 or less removes the defaults, restoring
+    PowerShell's indefinite behaviour.
+    #>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [int]$TimeoutSeconds
+    )
+
+    if ($null -eq $Global:PSDefaultParameterValues) {
+        $Global:PSDefaultParameterValues = @{}
+    }
+
+    foreach ($key in 'Invoke-WebRequest:TimeoutSec', 'Invoke-RestMethod:TimeoutSec') {
+        if ($TimeoutSeconds -le 0) {
+            $Global:PSDefaultParameterValues.Remove($key)
+        } else {
+            $Global:PSDefaultParameterValues[$key] = $TimeoutSeconds
+        }
+    }
+}
+
+
+function Invoke-YardstickBitsDownload {
+    <#
+    .SYNOPSIS
+    Downloads a file over BITS with a stall timeout.
+
+    .DESCRIPTION
+    Start-BitsTransfer in its default synchronous form blocks the calling thread
+    with no way to give up, which makes it one of the few places the runner can
+    hang outright. This runs the same transfer asynchronously and watches
+    BytesTransferred instead.
+
+    The bound is a *stall* timeout, not a total one: the transfer is abandoned only
+    if it moves zero bytes for the whole window. A 2 GB payload on a slow link is
+    never punished for being slow, while a connection that dies mid-transfer - or
+    one that never gets past Connecting - is cut loose.
+
+    .PARAMETER Source
+    URL to download.
+
+    .PARAMETER Destination
+    Full path to write to.
+
+    .PARAMETER StallTimeoutMinutes
+    Minutes of zero progress before the transfer is abandoned. 0 disables the bound.
+
+    .PARAMETER PollSeconds
+    How often to sample BytesTransferred.
+
+    .OUTPUTS
+    None. Throws if the transfer fails or stalls.
+    #>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [string]$Destination,
+
+        [int]$StallTimeoutMinutes = 15,
+
+        [ValidateRange(1, 300)]
+        [int]$PollSeconds = 5
+    )
+
+    $job = Start-BitsTransfer -Source $Source -Destination $Destination -Asynchronous -ErrorAction Stop
+    try {
+        $lastBytes = [int64]-1
+        $lastProgress = Get-Date
+
+        while ($true) {
+            $state = [string]$job.JobState
+
+            if ($state -eq 'Transferred') { break }
+            if ($state -eq 'Error') {
+                throw "BITS transfer of '$Source' failed: $($job.ErrorDescription)"
+            }
+
+            $bytes = [int64]$job.BytesTransferred
+            if ($bytes -gt $lastBytes) {
+                $lastBytes = $bytes
+                $lastProgress = Get-Date
+                # A multi-gigabyte download can outlast the watchdog's whole stage
+                # budget while working perfectly. Report the progress so the budget
+                # means "stalled", not "slow".
+                Update-YardstickWatchdogProgress
+            } elseif ($StallTimeoutMinutes -gt 0 -and
+                      ((Get-Date) - $lastProgress).TotalMinutes -ge $StallTimeoutMinutes) {
+                throw ("BITS transfer of '$Source' moved no data for $StallTimeoutMinutes minute(s) " +
+                       "(state '$state', $bytes of $([int64]$job.BytesTotal) bytes). Abandoning the download.")
+            }
+
+            Start-Sleep -Seconds $PollSeconds
+        }
+
+        # Only this moves the payload out of its temporary BITS file and into
+        # $Destination, so it has to happen before the finally block lets go.
+        Complete-BitsTransfer -BitsJob $job
+        $job = $null
+    } finally {
+        # Reached on stall, on error, and on Ctrl-C. A BITS job left behind keeps
+        # retrying in the background for days under its own service.
+        if ($job) { Remove-BitsTransfer -BitsJob $job -ErrorAction SilentlyContinue }
+    }
+}
+
+
+function Test-YardstickWatchdogExpired {
+    <#
+    .SYNOPSIS
+    Decides whether the current recipe stage has overrun its budget.
+
+    .DESCRIPTION
+    Split out from the watchdog thread so the decision can be tested without
+    threads, clocks, or killing a process.
+
+    .PARAMETER State
+    The shared watchdog state, or a snapshot of it. Only StageStarted is read.
+
+    .PARAMETER Now
+    The current time, passed in so tests can control it.
+
+    .PARAMETER TimeoutMinutes
+    The budget. 0 or less means the watchdog is disabled and this always returns
+    false.
+
+    .OUTPUTS
+    Boolean.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$State,
+
+        [Parameter(Mandatory)]
+        [datetime]$Now,
+
+        [Parameter(Mandatory)]
+        [int]$TimeoutMinutes
+    )
+
+    if ($TimeoutMinutes -le 0) { return $false }
+
+    $started = $State['StageStarted'] -as [datetime]
+    if ($null -eq $started) { return $false }
+
+    return (($Now - $started).TotalMinutes -ge $TimeoutMinutes)
+}
+
+
+function Start-YardstickWatchdog {
+    <#
+    .SYNOPSIS
+    Starts the thread that kills the run if a recipe stage stops making progress.
+
+    .DESCRIPTION
+    The backstop for anything the per-operation timeouts do not cover - a native
+    call that blocks, a Selenium session that never returns, an unbounded
+    Start-BitsTransfer inside a recipe.
+
+    This has to be a thread job rather than a timer. Register-ObjectEvent handlers
+    run on the main runspace's event queue, which does not drain while the main
+    thread is blocked - exactly the situation the watchdog exists for. A thread job
+    runs on a real separate thread in the same process, so it keeps ticking, and
+    because it shares the process it can end it.
+
+    As with Start-YardstickBackup, the thread runspace inherits nothing from its
+    parent, so the scriptblock re-imports this module by absolute path and takes
+    everything else through -ArgumentList. The state hashtable is passed by
+    reference and is genuinely shared: a thread job lives in the same AppDomain.
+
+    On expiry the thread logs which application and stage is stuck and for how long,
+    then calls [Environment]::Exit so the run ends with a nonzero code the scheduler
+    can see. Write-Log closes the file after every line, and the main thread is by
+    definition not logging when this fires, so the diagnosis lands on disk.
+
+    .PARAMETER TimeoutMinutes
+    Minutes a single stage may go without progress. 0 or less disables the watchdog.
+
+    .PARAMETER PollSeconds
+    How often the thread checks.
+
+    .PARAMETER ExitCode
+    Process exit code used when the watchdog fires.
+
+    .PARAMETER LogLocation
+    Folder holding the log; the thread needs its own copy for Write-Log.
+
+    .PARAMETER LogFile
+    Log file name; the thread needs its own copy for Write-Log.
+
+    .PARAMETER ModulePath
+    Path to this module, re-imported inside the thread.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '',
+        Justification = 'The thread job scriptblock declares its own param() block and is fed by -ArgumentList, which is deliberate: $using: would silently capture whatever happens to be in scope instead.')]
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [int]$TimeoutMinutes,
+
+        [ValidateRange(1, 3600)]
+        [int]$PollSeconds = 30,
+
+        [int]$ExitCode = 2,
+
+        [string]$LogLocation = $Global:LogLocation,
+
+        [string]$LogFile = $Global:LogFile,
+
+        [string]$ModulePath = $PSCommandPath
+    )
+
+    if ($TimeoutMinutes -le 0) {
+        Write-Log "Stage watchdog is disabled (recipeStageTimeoutMinutes is 0)."
+        return
+    }
+
+    Stop-YardstickWatchdog
+
+    # Explicit rather than relying on auto-loading, so a scheduled task running
+    # with $PSModuleAutoLoadingPreference = 'None' fails here with a clear message.
+    Import-Module Microsoft.PowerShell.ThreadJob -ErrorAction Stop
+
+    $state = [hashtable]::Synchronized(@{
+        AppId        = '(startup)'
+        Stage        = 'Starting up'
+        StageStarted = Get-Date
+        WarnedFor    = $null
+        Stop         = $false
+    })
+    $Script:YardstickWatchdogState = $state
+
+    $Script:YardstickWatchdogJob = Start-ThreadJob -Name 'YardstickWatchdog' `
+        -ArgumentList $ModulePath, $state, $TimeoutMinutes, $PollSeconds, $ExitCode, $LogLocation, $LogFile `
+        -ScriptBlock {
+            param($ModulePath, $State, $TimeoutMinutes, $PollSeconds, $ExitCode, $LogLocation, $LogFile)
+            $ErrorActionPreference = 'Stop'
+            Import-Module $ModulePath -Force
+            $Global:LogLocation = $LogLocation
+            $Global:LogFile = $LogFile
+
+            while (-not $State['Stop']) {
+                Start-Sleep -Seconds $PollSeconds
+                if ($State['Stop']) { break }
+
+                # Snapshot first: the main thread can move to the next stage between
+                # reads, and reporting one app's name against another's clock would
+                # send whoever reads the log after the wrong recipe.
+                $stage = [string]$State['Stage']
+                $appId = [string]$State['AppId']
+                $started = $State['StageStarted']
+                $snapshot = @{ StageStarted = $started }
+                $now = Get-Date
+
+                if (Test-YardstickWatchdogExpired -State $snapshot -Now $now -TimeoutMinutes $TimeoutMinutes) {
+                    $minutes = [math]::Round(($now - $started).TotalMinutes, 1)
+                    Write-Log "#######################################################"
+                    Write-Log "WATCHDOG: no progress for $minutes minutes (limit $TimeoutMinutes). Ending the run."
+                    Write-Log "WATCHDOG: application '$appId' is stuck in stage '$stage'."
+                    Write-Log "WATCHDOG: that stage began at $(Get-Date $started -Format 'MM/dd/yyyy HH:mm:ss')."
+                    Write-Log "WATCHDOG: raise recipeStageTimeoutMinutes in preferences.yaml if this app is legitimately slow."
+                    Write-Log "#######################################################"
+                    Start-Sleep -Milliseconds 500
+                    [Environment]::Exit($ExitCode)
+                }
+
+                # One warning per stage, halfway through the budget, so a run that is
+                # merely slow leaves a trail before anything is killed.
+                if ((($now - $started).TotalMinutes -ge ($TimeoutMinutes / 2)) -and
+                    ($State['WarnedFor'] -ne $started)) {
+                    $State['WarnedFor'] = $started
+                    $minutes = [math]::Round(($now - $started).TotalMinutes, 1)
+                    Write-Log "WARNING: '$appId' has been in stage '$stage' for $minutes minutes (watchdog limit $TimeoutMinutes)."
+                }
+            }
+        }
+
+    Write-Log "Stage watchdog started: a recipe stage may run $TimeoutMinutes minutes without progress before the run is ended."
+}
+
+
+function Set-YardstickWatchdogStage {
+    <#
+    .SYNOPSIS
+    Tells the watchdog which application and stage the runner is on, and resets its
+    clock.
+
+    .DESCRIPTION
+    The budget is per stage rather than per recipe. That is deliberately more
+    forgiving - a genuinely long recipe that keeps moving through stages never
+    trips it - and it is what lets the diagnosis name the exact point of the stall
+    instead of just the application.
+
+    Safe to call when no watchdog is running; it simply does nothing.
+
+    .PARAMETER AppId
+    Recipe id currently being processed. Omit to keep the current one.
+
+    .PARAMETER Stage
+    Human-readable stage name, quoted verbatim into the watchdog's log output.
+    #>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [string]$AppId,
+
+        [Parameter(Mandatory)]
+        [string]$Stage
+    )
+
+    $state = $Script:YardstickWatchdogState
+    if (-not $state) { return }
+
+    if (-not [string]::IsNullOrWhiteSpace($AppId)) { $state['AppId'] = $AppId }
+    $state['Stage'] = $Stage
+    $state['StageStarted'] = Get-Date
+}
+
+
+function Update-YardstickWatchdogProgress {
+    <#
+    .SYNOPSIS
+    Tells the watchdog the current stage is still moving, without changing which
+    stage it is.
+
+    .DESCRIPTION
+    Two stages can legitimately outlast the whole budget on one pass: downloading
+    and uploading a large package. clion was 1.6 GB last run, and at 60 minutes a
+    link slower than about 0.5 Mbit/s would have the watchdog kill a download that
+    was working perfectly. That is a worse failure than the hang it exists to
+    prevent, because it would hit good runs.
+
+    So the long-running loops call this every time bytes actually move. The budget
+    then means "no progress for N minutes" rather than "no stage change for N
+    minutes", which is the thing actually worth killing a run over.
+
+    Callers outside YardstickSupport must guard with Get-Command - each module has
+    its own session state, and the unit tests import modules individually.
+
+    Safe to call when no watchdog is running; it simply does nothing.
+    #>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param()
+
+    $state = $Script:YardstickWatchdogState
+    if (-not $state) { return }
+
+    # Resetting StageStarted also re-arms the half-budget warning, which is keyed
+    # on this timestamp.
+    $state['StageStarted'] = Get-Date
+}
+
+
+function Get-YardstickWatchdogState {
+    <#
+    .SYNOPSIS
+    Returns the shared watchdog state, or $null when no watchdog is running.
+
+    .DESCRIPTION
+    The same object the watchdog thread reads. Exposed for tests and for anything
+    that wants to know what stage the runner believes it is on.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    return $Script:YardstickWatchdogState
+}
+
+
+function Stop-YardstickWatchdog {
+    <#
+    .SYNOPSIS
+    Stops the watchdog thread at the end of a run.
+
+    .DESCRIPTION
+    Signals the thread to stop and cleans up the job. Does not wait a full poll
+    interval for the thread to notice - the process is ending anyway, and a run
+    should not spend 30 seconds on teardown.
+
+    Safe to call when no watchdog is running.
+    #>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param()
+
+    if ($Script:YardstickWatchdogState) {
+        $Script:YardstickWatchdogState['Stop'] = $true
+    }
+
+    if ($Script:YardstickWatchdogJob) {
+        $null = Wait-Job -Job $Script:YardstickWatchdogJob -Timeout 2 -ErrorAction SilentlyContinue
+        Stop-Job -Job $Script:YardstickWatchdogJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $Script:YardstickWatchdogJob -Force -ErrorAction SilentlyContinue
+    }
+
+    $Script:YardstickWatchdogState = $null
+    $Script:YardstickWatchdogJob = $null
+}
+
+
 
 function Get-YardstickBackupInFlight {
     <#
