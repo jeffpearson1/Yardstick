@@ -421,3 +421,86 @@ Describe "Module web calls are bounded" {
         $offenders -join ', ' | Should -BeNullOrEmpty -Because 'module web calls cannot inherit the runner global default and would hang the run'
     }
 }
+
+
+Describe "Main processing loop control flow" {
+    # Yardstick.ps1 sets $ErrorActionPreference = 'Stop' at the top, which makes
+    # Write-Error a TERMINATING error. Every per-stage failure handler in the main
+    # loop was written as `Add-FailedApplication; Write-Error; continue`, so the
+    # Write-Error threw, the continue never ran, and control landed in the outer
+    # catch - which recorded the same failure a second time under "General
+    # Processing" and logged "Unexpected error processing <app>" instead of the
+    # real cause. The loop is top-level script code and cannot be executed here,
+    # so assert its shape.
+    BeforeAll {
+        $script:YardstickPath = "$PSScriptRoot\..\..\Yardstick.ps1"
+        $script:YardstickAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $script:YardstickPath, [ref]$null, [ref]$null)
+
+        # The main loop is the foreach over $Applications.
+        $script:MainLoop = $script:YardstickAst.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+            $node.Condition.Extent.Text -match '\$Applications\b'
+        }, $true)
+    }
+
+    It "finds the main processing loop" {
+        $script:MainLoop | Should -Not -BeNullOrEmpty
+    }
+
+    It "sets ErrorActionPreference to Stop, which is what makes Write-Error terminating" {
+        # If this ever stops being true the rest of this Describe is moot rather
+        # than wrong, but the next reader deserves to know which assumption moved.
+        $assignment = $script:YardstickAst.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $node.Left.Extent.Text -eq '$ErrorActionPreference'
+        }, $true)
+
+        $assignment | Should -Not -BeNullOrEmpty
+        $assignment.Right.Extent.Text | Should -Match "'Stop'|`"Stop`""
+    }
+
+    It "uses no Write-Error inside the main loop" {
+        $offenders = $script:MainLoop.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'Write-Error'
+        }, $true)
+
+        ($offenders | ForEach-Object { "line $($_.Extent.StartLineNumber)" }) -join ', ' |
+            Should -BeNullOrEmpty -Because 'Write-Error throws under ErrorActionPreference Stop, making the `continue` after it unreachable'
+    }
+
+    It "runs the per-recipe cleanup in a finally, so a `continue` cannot skip it" {
+        # `continue` from inside a try still runs its finally. Without one, every
+        # handler that skips to the next recipe would also skip the post-run
+        # script - which is a recipe's cleanup hook, and revokes an OAuth token
+        # for at least one recipe - and the backup drain.
+        $tryStatement = $script:MainLoop.Body.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.TryStatementAst]
+        }, $false)
+
+        $tryStatement | Should -Not -BeNullOrEmpty
+        $tryStatement.Finally | Should -Not -BeNullOrEmpty -Because 'the outer try needs a finally for the cleanup to survive a continue'
+
+        $finallyText = $tryStatement.Finally.Extent.Text
+        $finallyText | Should -Match 'PostRunScript'
+        $finallyText | Should -Match 'Wait-YardstickBackup'
+    }
+
+    It "clears PostRunScript each iteration so an early skip cannot run the previous recipe's hook" {
+        # The configuration and recipe-validation handlers skip out before
+        # Set-ScriptVariables runs, and the finally fires on those paths too.
+        $reset = $script:MainLoop.Body.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $node.Left.Extent.Text -eq '$Script:PostRunScript' -and
+            $node.Right.Extent.Text -eq '$null'
+        }, $true)
+
+        $reset | Should -Not -BeNullOrEmpty
+    }
+}

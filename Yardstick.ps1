@@ -1267,6 +1267,12 @@ foreach ($AppId_Processing in $Applications) {
     # Initialize variables for tracking
     $CurrentDisplayName = $AppId_Processing
 
+    # Set-ScriptVariables nulls this for a recipe without a postRunScript, but the
+    # configuration and validation failures below skip out before it ever runs. The
+    # finally block still fires on those paths, so without this the previous
+    # recipe's cleanup hook would run against this one.
+    $Script:PostRunScript = $null
+
     try {
         # Refresh token if necessary
         Connect-YardstickGraph
@@ -1298,7 +1304,7 @@ foreach ($AppId_Processing in $Applications) {
             $Parameters = Get-Content "$AppName" | ConvertFrom-Yaml
         } catch {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Unable to open parameters file for $AppId_Processing" -FailureStage "Configuration"
-            Write-Error "Unable to open parameters file for $AppId_Processing"
+            Write-Log "ERROR: Unable to open parameters file for $AppId_Processing"
             continue
         }
 
@@ -1308,7 +1314,7 @@ foreach ($AppId_Processing in $Applications) {
                 $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $Recipes
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Failed to resolve base recipe: $_" -FailureStage "Configuration"
-                Write-Error "Failed to resolve base recipe for ${ApplicationId}: $_"
+                Write-Log "ERROR: Failed to resolve base recipe for ${AppId_Processing}: $_"
                 continue
             }
         }
@@ -1319,7 +1325,7 @@ foreach ($AppId_Processing in $Applications) {
         if (-not $validation.IsValid) {
             $errorMsg = "Recipe validation failed: $($validation.Errors -join '; ')"
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage $errorMsg -FailureStage "Recipe Validation"
-            Write-Error "[Recipe $AppId_Processing] $errorMsg"
+            Write-Log "ERROR: [Recipe $AppId_Processing] $errorMsg"
             continue
         }
 
@@ -1371,7 +1377,7 @@ foreach ($AppId_Processing in $Applications) {
                 $DropboxPayload = Get-YardstickDropboxPayload -DropboxRoot $Script:SoftwareDropbox -Folder $Script:ManualDownloadFolder
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage "$_" -FailureStage "Manual Drop"
-                Write-Error "$_"
+                Write-Log "ERROR: [Manual Drop $AppId_Processing] $_"
                 continue
             }
             if (-not $DropboxPayload) {
@@ -1406,7 +1412,7 @@ foreach ($AppId_Processing in $Applications) {
                 Write-Log "Pre-download script ran successfully."
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running pre-download PowerShell script: $_" -FailureStage "Pre-Download Script"
-                Write-Error "Error while running pre-download PowerShell script"
+                Write-Log "ERROR: Error while running pre-download PowerShell script: $_"
                 continue
             }
         } else {
@@ -1432,7 +1438,7 @@ foreach ($AppId_Processing in $Applications) {
         if (-not $versionValidation.IsValid) {
             $versionErrorMsg = "Version validation failed: $($versionValidation.Errors -join '; ')"
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage $versionErrorMsg -FailureStage "Version Validation"
-            Write-Error "[Version Check $AppId_Processing] $versionErrorMsg"
+            Write-Log "ERROR: [Version Check $AppId_Processing] $versionErrorMsg"
             continue
         }
 
@@ -1507,7 +1513,7 @@ foreach ($AppId_Processing in $Applications) {
         }
         if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript)) -and (-not ($Script:ManualDownload))) {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "URL is empty - cannot continue" -FailureStage "Download"
-            Write-Error "URL is empty - cannot continue."
+            Write-Log "ERROR: URL is empty - cannot continue."
             continue
         }
         
@@ -1517,7 +1523,7 @@ foreach ($AppId_Processing in $Applications) {
                 Copy-Item -Path (Join-Path $dropboxPath '*') -Destination . -Recurse -Force
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error copying staged payload from $dropboxPath : $_" -FailureStage "Download"
-                Write-Error "Error copying staged payload from $dropboxPath : $_"
+                Write-Log "ERROR: Error copying staged payload from $dropboxPath : $_"
                 continue
             }
         } elseif ($Script:DownloadScript) {
@@ -1527,8 +1533,8 @@ foreach ($AppId_Processing in $Applications) {
                 Write-Log "Download script ran successfully."
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running download PowerShell script: $_" -FailureStage "Download Script"
-                Write-Error "Error while running download PowerShell script: $_"
-                Write-Error "Script Contents: $Script:DownloadScript"
+                Write-Log "ERROR: Error while running download PowerShell script: $_"
+                Write-Log "Script Contents: $Script:DownloadScript"
                 continue
             }
             Pop-Location
@@ -1542,7 +1548,7 @@ foreach ($AppId_Processing in $Applications) {
                 Write-Log "File downloaded successfully using BITS transfer."
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error downloading file: $_" -FailureStage "Download"
-                Write-Error "Error downloading file: $_"
+                Write-Log "ERROR: Error downloading file: $_"
                 continue
             }
         }
@@ -1558,7 +1564,7 @@ foreach ($AppId_Processing in $Applications) {
                 Write-Log "Post download script ran successfully."
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post download PowerShell script: $_" -FailureStage "Post-Download Script"
-                Write-Error "Error while running post download PowerShell script: $_"
+                Write-Log "ERROR: Error while running post download PowerShell script: $_"
                 continue
             }
             Pop-Location
@@ -1570,7 +1576,7 @@ foreach ($AppId_Processing in $Applications) {
             Write-Log "Product Code: $ProductCode"
             if (-not $ProductCode) {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not determine MSI Product Code from $Script:FileName" -FailureStage "MSI Product Code Retrieval"
-                Write-Error "Could not determine MSI Product Code from $Script:FileName"
+                Write-Log "ERROR: Could not determine MSI Product Code from $Script:FileName"
                 continue
             }
         }
@@ -1584,7 +1590,7 @@ foreach ($AppId_Processing in $Applications) {
             $Script:PowerShellUninstallScript -match "<filename>|<productcode>|<version>" -or
             $Script:DetectionScript -match "<filename>|<productcode>|<version>") {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in scripts." -FailureStage "Placeholder Replacement"
-            Write-Error "One or more placeholder strings were not replaced in scripts."
+            Write-Log "ERROR: One or more placeholder strings were not replaced in scripts."
             continue
         }
 
@@ -1607,7 +1613,7 @@ foreach ($AppId_Processing in $Applications) {
         # Detection Types
         if (!(Test-Path "$($Icons)\$($Script:IconFile)")) {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Icon file $($Script:IconFile) not found in Icons folder." -FailureStage "Icon Retrieval"
-            Write-Error "Icon file $($Script:IconFile) not found in Icons folder."
+            Write-Log "ERROR: Icon file $($Script:IconFile) not found in Icons folder."
             continue
         }
         $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
@@ -1643,7 +1649,7 @@ foreach ($AppId_Processing in $Applications) {
             $UploadedAt = Get-Date
         } catch {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
-            Write-Error "Failed to upload application to Intune: $_"
+            Write-Log "ERROR: Failed to upload application to Intune: $_"
             continue
         }
 
@@ -1716,25 +1722,35 @@ foreach ($AppId_Processing in $Applications) {
         if (-not((Get-Location).Path -eq $PSScriptRoot)) {
             Set-Location $PSScriptRoot
         }
-    }
-    # Run the post-run script
-    if ($Script:PostRunScript) {
-        Write-Log "Running post run script..."
-        Set-YardstickWatchdogStage -Stage 'Post-Run Script'
-        try {
-            Invoke-Command -ScriptBlock $Script:PostRunScript -NoNewScope
-            Write-Log "Post run script ran successfully."
-        } catch {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post run PowerShell script: $_" -FailureStage "Post-Run Script"
-            Write-Error "Error while running post run PowerShell script: $_"
-        }
-    }
+    } finally {
+        # In a finally because the stage handlers above skip to the next recipe with
+        # `continue`, which leaves the try without ever entering the catch. The
+        # post-run script is a recipe's cleanup hook - crowdstrikefalcon revokes its
+        # OAuth token there - so it has to run on the failure path too, and the
+        # backup drain has to happen before the next iteration starts deleting
+        # .intunewin files.
 
-    # Drain this app's backup before moving on, so at most one copy is ever in
-    # flight and an abrupt exit in the next iteration cannot orphan it. The
-    # thread still ran concurrently with all the supersedence and assignment work
-    # above, which is where the time actually goes.
-    Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
+        # Run the post-run script
+        if ($Script:PostRunScript) {
+            Write-Log "Running post run script..."
+            Set-YardstickWatchdogStage -Stage 'Post-Run Script'
+            try {
+                Invoke-Command -ScriptBlock $Script:PostRunScript -NoNewScope
+                Write-Log "Post run script ran successfully."
+            } catch {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post run PowerShell script: $_" -FailureStage "Post-Run Script"
+                # Write-Log, not Write-Error: $ErrorActionPreference is 'Stop', so a
+                # Write-Error here would throw out of the finally and kill the run.
+                Write-Log "ERROR: Error while running post run PowerShell script: $_"
+            }
+        }
+
+        # Drain this app's backup before moving on, so at most one copy is ever in
+        # flight and an abrupt exit in the next iteration cannot orphan it. The
+        # thread still ran concurrently with all the supersedence and assignment work
+        # above, which is where the time actually goes.
+        Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
+    }
 }
 
 # The watchdog stops at the end of the loop, not at the end of the script. What
