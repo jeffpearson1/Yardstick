@@ -40,7 +40,10 @@ Available in all script blocks: `$BuildSpace`, `$Temp`, `$Scripts`, `$Published`
 `$Backup`, `$Recipes`, `$Icons`, `$Tools`, `$Secrets`. Plus, for manual-download
 recipes, `$dropboxPath` and `$dropboxFiles`.
 
-`postRunScript` runs outside the try/catch — errors there do not fail the recipe.
+`postRunScript` runs in the main loop's `finally`, inside its own try/catch —
+errors there do not fail the recipe. Because it is in a `finally` it also runs
+when the recipe was skipped or failed earlier, so write it to tolerate a recipe
+that never got as far as downloading anything.
 
 ## Choosing where the version comes from
 
