@@ -4591,9 +4591,6 @@ $(if ($RunParameters) { @"
             Write-Log "Email report sent successfully to the following email addresses:"
             Write-Log ($Preferences.emailRecipient -join ", ")
         }
-        
-        Write-Log "Email report sent successfully to the following email addresses:"
-        Write-Log ($Preferences.emailRecipient -join ", ")
 
         # Clean up COM objects
         $mail = $null
