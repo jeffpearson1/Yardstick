@@ -288,16 +288,124 @@ Describe 'Yardstick Intune content upload' {
                     Should -Throw '*Block 1 of 3 failed*'
             }
         }
+
+        # Both of today's rejections landed within eleven seconds of the SAS
+        # being minted, on the first or second block. That is the stored access
+        # policy not having propagated to Azure Storage yet, not a policy the
+        # service dropped, and renewing that early is what walks the file into a
+        # state it can never be renewed out of.
+        It 'replays a freshly minted signature instead of renewing it' {
+            InModuleScope YardstickIntune -Parameters @{ SasBody = $Script:SasRejectionBody } {
+                param($SasBody)
+                $Script:calls = 0
+                Mock Invoke-WebRequest {
+                    $Script:calls++
+                    if ($Script:calls -eq 1) { throw (New-HttpErrorRecord -StatusCode 403 -Body $SasBody) }
+                }
+                Mock Update-YardstickIntuneUploadUri { throw 'should not have renewed' }
+                Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
+
+                $fresh = [pscustomobject]@{ Uri = 'https://blob/fresh?sig=x'; ExpiresAt = $null; IssuedAt = [datetime]::UtcNow }
+                $result = Invoke-YardstickBlobRequestWithRetry -Method Put -UploadUri $fresh -FileResource 'files/1' `
+                    -Query 'comp=block&blockid=AAA' -Body ([byte[]](1, 2, 3)) -Label 'Block 1 of 2'
+
+                $result.Uri | Should -Be 'https://blob/fresh?sig=x'
+                $Script:calls | Should -Be 2
+                Should -Invoke Update-YardstickIntuneUploadUri -Times 0 -Exactly
+            }
+        }
+
+        It 'renews once a signature is old enough for the rejection to be real' {
+            InModuleScope YardstickIntune -Parameters @{ SasBody = $Script:SasRejectionBody } {
+                param($SasBody)
+                Mock Invoke-WebRequest {
+                    if ($Uri -like 'https://blob/aged*') { throw (New-HttpErrorRecord -StatusCode 403 -Body $SasBody) }
+                }
+                Mock Update-YardstickIntuneUploadUri {
+                    [pscustomobject]@{ Uri = 'https://blob/fresh?sig=new'; ExpiresAt = $null; IssuedAt = [datetime]::UtcNow }
+                }
+                Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
+
+                $aged = [pscustomobject]@{ Uri = 'https://blob/aged?sig=old'; ExpiresAt = $null; IssuedAt = [datetime]::UtcNow.AddMinutes(-10) }
+                $result = Invoke-YardstickBlobRequestWithRetry -Method Put -UploadUri $aged -FileResource 'files/1' `
+                    -Query 'comp=block&blockid=AAA' -Body ([byte[]](1, 2, 3)) -Label 'Block 1 of 2'
+
+                $result.Uri | Should -Be 'https://blob/fresh?sig=new'
+                Should -Invoke Update-YardstickIntuneUploadUri -Times 1 -Exactly
+            }
+        }
+
+        It 'gives up replaying and renews once the propagation budget is spent' {
+            InModuleScope YardstickIntune -Parameters @{ SasBody = $Script:SasRejectionBody } {
+                param($SasBody)
+                Mock Invoke-WebRequest {
+                    if ($Uri -like 'https://blob/fresh*') { throw (New-HttpErrorRecord -StatusCode 403 -Body $SasBody) }
+                }
+                Mock Update-YardstickIntuneUploadUri {
+                    [pscustomobject]@{ Uri = 'https://blob/renewed?sig=new'; ExpiresAt = $null; IssuedAt = [datetime]::UtcNow }
+                }
+                Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
+
+                $fresh = [pscustomobject]@{ Uri = 'https://blob/fresh?sig=x'; ExpiresAt = $null; IssuedAt = [datetime]::UtcNow }
+                $result = Invoke-YardstickBlobRequestWithRetry -Method Put -UploadUri $fresh -FileResource 'files/1' `
+                    -Query 'comp=block&blockid=AAA' -Body ([byte[]](1, 2, 3)) -Label 'Block 1 of 2'
+
+                $result.Uri | Should -Be 'https://blob/renewed?sig=new'
+                # Two replays of the original signature, then a renewal.
+                Should -Invoke Update-YardstickIntuneUploadUri -Times 1 -Exactly
+            }
+        }
     }
 
     Context 'renewing the upload signature' {
-        It 'retries a failed renewal and succeeds on the second attempt' {
+        # renewUpload only starts from a *Success state. A renewal that ran and
+        # failed leaves the file in a terminal non-Success state, so the service
+        # answers every further renewUpload with 400 and no retry can ever win.
+        # This used to be coded the other way round - three attempts on the
+        # assumption that re-POSTing restarts the state machine - which is what
+        # cost firefox.arm64 a finished package on 2026-09-29.
+        It 'stops immediately when a renewal has already failed in the service' {
             InModuleScope YardstickIntune {
-                $Script:waits = 0
                 Mock Invoke-YardstickGraphRequest {}
+                Mock Wait-YardstickIntuneFileProcessing { throw "Intune file operation 'azureStorageUriRenewal' failed." }
+                Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
+
+                { Update-YardstickIntuneUploadUri -FileResource 'files/1' } |
+                    Should -Throw '*can no longer be renewed*'
+                Should -Invoke Wait-YardstickIntuneFileProcessing -Times 1 -Exactly
+                Should -Invoke Start-Sleep -Times 0 -Exactly
+            }
+        }
+
+        It 'stops immediately when the service refuses to start another renewal' {
+            InModuleScope YardstickIntune {
+                Mock Invoke-YardstickGraphRequest {
+                    throw "SAS renewal can not be started until status for SAS request or prior a renewal has transitioned to 'Success'."
+                }
+                Mock Wait-YardstickIntuneFileProcessing {}
+                Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
+
+                { Update-YardstickIntuneUploadUri -FileResource 'files/1' } |
+                    Should -Throw '*can no longer be renewed*'
+                Should -Invoke Invoke-YardstickGraphRequest -Times 1 -Exactly
+            }
+        }
+
+        It 'still retries a renewal that never reached the service' {
+            InModuleScope YardstickIntune {
+                # A dropped connection on the POST leaves the state machine
+                # untouched, so asking again really is a fresh start.
+                $Script:posts = 0
+                Mock Invoke-YardstickGraphRequest {
+                    $Script:posts++
+                    if ($Script:posts -eq 1) { throw 'The underlying connection was closed.' }
+                }
                 Mock Wait-YardstickIntuneFileProcessing {
-                    $Script:waits++
-                    if ($Script:waits -eq 1) { throw "Intune file operation 'azureStorageUriRenewal' failed." }
                     [pscustomobject]@{ azureStorageUri = 'https://blob/fresh?sig=new'; azureStorageUriExpirationDateTime = $null }
                 }
                 Mock Write-YardstickIntuneLog {}
@@ -306,23 +414,7 @@ Describe 'Yardstick Intune content upload' {
                 $result = Update-YardstickIntuneUploadUri -FileResource 'files/1'
 
                 $result.Uri | Should -Be 'https://blob/fresh?sig=new'
-                $Script:waits | Should -Be 2
-                # Each attempt must re-POST renewUpload; the service state machine
-                # only restarts when it is asked again.
-                Should -Invoke Invoke-YardstickGraphRequest -Times 2 -Exactly
-            }
-        }
-
-        It 'still throws when every renewal attempt fails' {
-            InModuleScope YardstickIntune {
-                Mock Invoke-YardstickGraphRequest {}
-                Mock Wait-YardstickIntuneFileProcessing { throw "Intune file operation 'azureStorageUriRenewal' failed." }
-                Mock Write-YardstickIntuneLog {}
-                Mock Start-Sleep {}
-
-                { Update-YardstickIntuneUploadUri -FileResource 'files/1' } |
-                    Should -Throw "*azureStorageUriRenewal*"
-                Should -Invoke Wait-YardstickIntuneFileProcessing -Times 3 -Exactly
+                $Script:posts | Should -Be 2
             }
         }
 
@@ -336,6 +428,115 @@ Describe 'Yardstick Intune content upload' {
 
                 Update-YardstickIntuneUploadUri -FileResource 'files/1' | Out-Null
                 Should -Invoke Invoke-YardstickGraphRequest -Times 1 -Exactly
+            }
+        }
+    }
+
+    Context 'recovering a dead upload location' {
+        # The point of the retry: an upload signature that can never be renewed
+        # used to take the whole app down with it, discarding a package that had
+        # already been downloaded, repackaged and encrypted. A content version is
+        # cheap, and only the committed one is ever referenced.
+        BeforeEach {
+            # Written out here rather than inside InModuleScope: $TestDrive only
+            # resolves in the test's own scope, and Add-YardstickWin32App does a
+            # real Get-Item on whatever Expand-YardstickWin32AppContent returns.
+            # It also sweeps that file's *parent* in its finally, exactly as it
+            # does for the real per-package temp directory, so the payload needs
+            # a directory of its own - returning one at the TestDrive root makes
+            # the call delete TestDrive out from under the next test.
+            $extractRoot = Join-Path $TestDrive 'extract'
+            New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+            $Payload = Join-Path $extractRoot 'payload.bin'
+            [io.file]::WriteAllBytes($Payload, [byte[]]::new(8))
+
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                # Get-YardstickWin32AppMetadata returns the package's detection.xml
+                # as an XmlDocument, and New-YardstickWin32AppBody types its
+                # -Metadata parameter [xml], so the stand-in has to be real XML
+                # rather than a pscustomobject shaped like it.
+                Mock Get-YardstickWin32AppMetadata {
+                    [xml]@'
+<ApplicationInfo>
+  <FileName>payload.intunewin</FileName>
+  <UnencryptedContentSize>100</UnencryptedContentSize>
+  <EncryptionInfo>
+    <EncryptionKey>k</EncryptionKey>
+    <MacKey>m</MacKey>
+    <InitializationVector>iv</InitializationVector>
+    <Mac>mac</Mac>
+    <ProfileIdentifier>p</ProfileIdentifier>
+    <FileDigest>d</FileDigest>
+    <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+  </EncryptionInfo>
+</ApplicationInfo>
+'@
+                }
+                Mock New-YardstickWin32AppBody { @{} }
+                Mock Expand-YardstickWin32AppContent { $Payload }.GetNewClosure()
+                Mock Wait-YardstickIntuneFileProcessing {
+                    [pscustomobject]@{ azureStorageUri = 'https://blob/one?sig=x'; azureStorageUriExpirationDateTime = $null }
+                }
+                Mock Get-YardstickWin32App { [pscustomobject]@{ id = 'app-1' } }
+                Mock Remove-YardstickWin32App {}
+                Mock Write-YardstickIntuneLog {}
+            }
+        }
+
+        It 'starts over on a fresh content version when the signature dies' {
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                $Script:versions = 0
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -like '*contentVersions') {
+                        $Script:versions++
+                        return [pscustomobject]@{ id = "v$Script:versions" }
+                    }
+                    [pscustomobject]@{ id = 'file-1' }
+                }
+                $Script:sends = 0
+                Mock Send-YardstickIntuneContentBlob {
+                    $Script:sends++
+                    if ($Script:sends -eq 1) {
+                        throw 'The upload signature can no longer be renewed and this content file is unusable.'
+                    }
+                }
+
+                $app = Add-YardstickWin32App -FilePath $Payload `
+                    -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                    -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                    -DetectionRule @{} -RequirementRule @{}
+
+                $app.id | Should -Be 'app-1'
+                $Script:sends | Should -Be 2
+                # A second content version, not a second file under the dead one.
+                $Script:versions | Should -Be 2
+                Should -Invoke Remove-YardstickWin32App -Times 0 -Exactly
+            }
+        }
+
+        It 'gives up and removes the incomplete app when the retry also fails' {
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -like '*contentVersions') { return [pscustomobject]@{ id = 'v1' } }
+                    [pscustomobject]@{ id = 'file-1' }
+                }
+                $Script:sends = 0
+                Mock Send-YardstickIntuneContentBlob {
+                    $Script:sends++
+                    throw 'The upload signature can no longer be renewed and this content file is unusable.'
+                }
+
+                { Add-YardstickWin32App -FilePath $Payload `
+                        -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                        -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                        -DetectionRule @{} -RequirementRule @{} } |
+                    Should -Throw '*can no longer be renewed*'
+
+                $Script:sends | Should -Be 2
+                Should -Invoke Remove-YardstickWin32App -Times 1 -Exactly
             }
         }
     }

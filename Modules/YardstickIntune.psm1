@@ -727,6 +727,11 @@ function ConvertTo-YardstickUploadUri {
     return [pscustomobject]@{
         Uri       = [string](Get-YardstickPropertyValue $File 'azureStorageUri')
         ExpiresAt = $expiresAt
+        # Stamped on receipt rather than read from the service, which publishes
+        # no issue time. Only ever used to judge whether a rejection arrived too
+        # soon after minting to be a genuine expiry, so seconds of skew between
+        # this and the service's own clock do not matter.
+        IssuedAt  = [datetime]::UtcNow
     }
 }
 
@@ -756,18 +761,43 @@ function Get-YardstickUploadUriRenewalTime {
     return $renewAt
 }
 
+function Test-YardstickTerminalRenewalFailure {
+    <#
+    .SYNOPSIS
+    True when an upload signature can never be renewed again.
+
+    .DESCRIPTION
+    renewUpload only starts when the file's uploadState is one of the *Success
+    states. Once a renewal lands on azureStorageUriRenewalFailed - or times out
+    in the service - the state is terminal and is not Success, so every further
+    renewUpload comes back 400 "SAS renewal can not be started until status for
+    SAS request or prior a renewal has transitioned to 'Success'". Waiting does
+    not clear it either, because only a renewal could move the state and
+    renewals are precisely what is blocked.
+
+    Seen on 2026-09-29: firefox.arm64 renewed once, got Failed, then spent two
+    more attempts collecting that 400 before discarding a packaged upload.
+    #>
+    param([Parameter(Mandatory)][string]$Message)
+    return ($Message -match "Intune file operation 'azureStorageUriRenewal' (failed|timed out)") -or
+           ($Message -match 'SAS renewal can not be started')
+}
+
 function Update-YardstickIntuneUploadUri {
     <#
     .SYNOPSIS
     Renews the Azure upload signature for an Intune content file.
 
     .DESCRIPTION
-    Renewal occasionally comes back azureStorageUriRenewalFailed for no reason
-    the service explains. Re-POSTing renewUpload restarts the service-side state
-    machine, so a second attempt is meaningful - and worth it, because the
-    alternative is throwing away an upload that has already spent minutes
-    packaging and transferring. Only the renewal is replayed; blocks already
-    staged against the blob are untouched.
+    Retries exist for a renewal that never reached the service-side state
+    machine - a dropped connection, a 5xx from Graph - where re-POSTing
+    renewUpload is genuinely a fresh start. A renewal that ran and *failed* is
+    not that: it leaves the file permanently unrenewable, so it is reported
+    immediately rather than retried. Recovering from that needs a new upload
+    location, which is the caller's job.
+
+    Only the renewal is replayed; blocks already staged against the blob are
+    untouched.
     #>
     param(
         [Parameter(Mandatory)][string]$FileResource,
@@ -780,9 +810,13 @@ function Update-YardstickIntuneUploadUri {
             $file = Wait-YardstickIntuneFileProcessing -Resource $FileResource -Stage 'azureStorageUriRenewal'
             return ConvertTo-YardstickUploadUri -File $file
         } catch {
+            $detail = "$_"
+            if (Test-YardstickTerminalRenewalFailure -Message $detail) {
+                throw "The upload signature can no longer be renewed and this content file is unusable: $detail"
+            }
             if ($attempt -ge $MaximumAttempts) { throw }
             $delay = $backoff[[math]::Min($attempt - 1, $backoff.Count - 1)]
-            Write-YardstickIntuneLog "Upload signature renewal failed on attempt $attempt of ${MaximumAttempts}: $_. Retrying in $delay second(s)."
+            Write-YardstickIntuneLog "Upload signature renewal failed on attempt $attempt of ${MaximumAttempts}: $detail. Retrying in $delay second(s)."
             Start-Sleep -Seconds $delay
         }
     }
@@ -849,12 +883,21 @@ function Invoke-YardstickBlobRequestWithRetry {
         [string]$ContentType = 'application/octet-stream',
         [string]$Label = 'blob request',
         [int]$MaximumRetryCount = 5,
+        # Intune's SAS is backed by a stored access policy, and Azure Storage
+        # does not always see that policy the instant Intune mints the URI. A
+        # rejection this soon after issuance is propagation lag, not a dropped
+        # policy, and replaying the same signature costs one request. Renewing
+        # instead is what put the 2026-09-29 firefox.arm64 upload into a state
+        # it could never be renewed out of.
+        [timespan]$SasPropagationWindow = [timespan]::FromSeconds(90),
+        [int]$MaximumSasReplays = 2,
         # Deliberately generous. Unlike a GET, a PUT sends its whole body before
         # response headers arrive, so this timeout does bound the upload itself -
         # 10 minutes for an 8 MB block is a floor of roughly 0.1 Mbps, which no
         # working connection will hit, while still cutting loose a dead socket.
         [int]$TimeoutSec = 600
     )
+    $sasReplays = 0
     for ($attempt = 0; $attempt -le $MaximumRetryCount; $attempt++) {
         try {
             $separator = if ($UploadUri.Uri.Contains('?')) { '&' } else { '?' }
@@ -879,8 +922,22 @@ function Invoke-YardstickBlobRequestWithRetry {
             $statusText = if ($status) { "HTTP $status" } else { 'no response' }
             Write-YardstickIntuneLog "$Label failed ($statusText) on attempt $($attempt + 1) of $($MaximumRetryCount + 1): $detail"
             if ($sasRejected) {
-                Write-YardstickIntuneLog "Azure rejected the upload signature. Renewing it and replaying $Label."
-                $UploadUri = Update-YardstickIntuneUploadUri -FileResource $FileResource
+                # IssuedAt is read defensively: an upload URI built before this
+                # field existed, or by a caller that hand-rolls the object, just
+                # falls through to the renewal path as it always did.
+                $issuedAt = Get-YardstickPropertyValue $UploadUri 'IssuedAt'
+                $age = if ($issuedAt) { [datetime]::UtcNow - $issuedAt } else { $null }
+                if ($age -and $age -lt $SasPropagationWindow -and $sasReplays -lt $MaximumSasReplays) {
+                    $sasReplays++
+                    $pause = 3 * $sasReplays
+                    Write-YardstickIntuneLog "The upload signature is only $([int]$age.TotalSeconds)s old, so this is most likely a stored access policy that has not propagated. Replaying $Label in $pause second(s) without renewing."
+                    Start-Sleep -Seconds $pause
+                } else {
+                    Write-YardstickIntuneLog "Azure rejected the upload signature. Renewing it and replaying $Label."
+                    $UploadUri = Update-YardstickIntuneUploadUri -FileResource $FileResource
+                    # The replay budget is per signature, not per request.
+                    $sasReplays = 0
+                }
             } else {
                 Start-Sleep -Seconds ([math]::Min(30, [math]::Pow(2, $attempt + 1)))
             }
@@ -1072,7 +1129,6 @@ function Add-YardstickWin32App {
         }
         $body = New-YardstickWin32AppBody @bodyParameters -Metadata $metadata
         $app = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource 'deviceAppManagement/mobileApps' -Body $body
-        $contentVersion = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions" -Body @{}
         $expandedContent = Expand-YardstickWin32AppContent -FilePath $FilePath -FileName ([string]$applicationInfo.FileName)
         $encryptedSize = (Get-Item -LiteralPath $expandedContent).Length
         $fileBody = [ordered]@{
@@ -1083,11 +1139,31 @@ function Add-YardstickWin32App {
             manifest      = $null
             isDependency  = $false
         }
-        $fileResource = "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions/$($contentVersion.id)/files"
-        $contentFile = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource $fileResource -Body $fileBody
-        $contentFileResource = "$fileResource/$($contentFile.id)"
-        $contentFile = Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'azureStorageUriRequest'
-        Send-YardstickIntuneContentBlob -FilePath $expandedContent -UploadUri (ConvertTo-YardstickUploadUri -File $contentFile) -FileResource $contentFileResource
+        # A content file whose signature reaches a terminal non-Success state can
+        # never be renewed, so there is nothing left to rescue at the block
+        # level - the only way forward is a fresh upload location. Content
+        # versions are independent and only the one named by
+        # committedContentVersion is ever referenced, so starting a new one is
+        # cheaper and less ambiguous than leaving a half-dead file entry beside a
+        # live one. The re-upload costs bandwidth; the alternative is discarding a
+        # package that already survived download, packaging and encryption.
+        $contentVersion = $null
+        $contentFileResource = $null
+        $uploadAttempts = 2
+        for ($uploadAttempt = 1; ; $uploadAttempt++) {
+            try {
+                $contentVersion = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions" -Body @{}
+                $fileResource = "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions/$($contentVersion.id)/files"
+                $contentFile = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource $fileResource -Body $fileBody
+                $contentFileResource = "$fileResource/$($contentFile.id)"
+                $contentFile = Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'azureStorageUriRequest'
+                Send-YardstickIntuneContentBlob -FilePath $expandedContent -UploadUri (ConvertTo-YardstickUploadUri -File $contentFile) -FileResource $contentFileResource
+                break
+            } catch {
+                if ($uploadAttempt -ge $uploadAttempts) { throw }
+                Write-YardstickIntuneLog "Content upload failed on attempt $uploadAttempt of ${uploadAttempts}: $_. Starting over against a fresh content version."
+            }
+        }
         $encryptionInfo = $applicationInfo.EncryptionInfo
         $commitBody = [ordered]@{
             fileEncryptionInfo = [ordered]@{
