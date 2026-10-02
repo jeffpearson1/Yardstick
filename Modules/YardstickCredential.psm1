@@ -19,9 +19,14 @@ The client secret's expiration is discovered from Microsoft Graph when the app
 registration has Application.Read.All, matching the secret to its
 passwordCredential by hint. When Graph cannot be queried, the expiration entered
 at setup time is used instead.
+
+An optional SMTP account for emailDeliveryMethod 'smtp' is stored the same way,
+under `smtpCredentialTarget` (default "Yardstick:Smtp"), with the SMTP user name
+as the credential user name and the password as the blob.
 #>
 
 $Script:DefaultCredentialTarget = 'Yardstick:IntuneGraph'
+$Script:DefaultSmtpCredentialTarget = 'Yardstick:Smtp'
 $Script:DefaultExpirationWarningDays = 30
 $Script:DefaultNotificationIntervalHours = 24
 
@@ -746,7 +751,8 @@ function Send-YardstickCredentialExpiryEmail {
     Emails the Yardstick administrator that the Intune client secret is expiring.
 
     .DESCRIPTION
-    Uses the same Outlook COM path as Send-YardstickEmailReport. Sending is gated
+    Delivers through the same transport as Send-YardstickEmailReport (Outlook COM,
+    or SMTP when emailDeliveryMethod is 'smtp'). Sending is gated
     on credentialExpirationEmailEnabled when present, otherwise on
     emailNotificationEnabled.
 
@@ -817,6 +823,24 @@ function Send-YardstickCredentialExpiryEmail {
 "@
 
     try {
+        $method = if (Get-Command -Name Get-YardstickEmailDeliveryMethod -ErrorAction SilentlyContinue) {
+            Get-YardstickEmailDeliveryMethod -Preferences $Preferences
+        } elseif ($Preferences.emailDeliveryMethod) {
+            ([string]$Preferences.emailDeliveryMethod).Trim().ToLowerInvariant()
+        } else {
+            'outlook'
+        }
+
+        if ($method -eq 'smtp') {
+            if (-not (Get-Command -Name Send-YardstickSmtpMessage -ErrorAction SilentlyContinue)) {
+                Write-CredentialLog "SMTP delivery requires YardstickSupport.psm1; cannot send the credential expiration notice." -Warning
+                return $false
+            }
+            Send-YardstickSmtpMessage -Preferences $Preferences -To $recipients -Subject "Yardstick: $headline" -HtmlBody $body
+            Write-CredentialLog "Credential expiration notice sent via SMTP to $($recipients -join ', ')."
+            return $true
+        }
+
         if ((Get-Command -Name Test-OutlookAvailability -ErrorAction SilentlyContinue) -and -not (Test-OutlookAvailability)) {
             Write-CredentialLog "Outlook is not available; cannot send the credential expiration notice." -Warning
             return $false
@@ -845,6 +869,163 @@ function Send-YardstickCredentialExpiryEmail {
 }
 
 
+function Get-YardstickSmtpCredentialTarget {
+    <#
+    .SYNOPSIS
+    Resolves the Credential Manager target name for the SMTP credential from preferences.
+
+    .PARAMETER Preferences
+    Parsed preferences.yaml hashtable. Optional.
+    #>
+    param(
+        $Preferences
+    )
+
+    if ($Preferences -and -not [string]::IsNullOrWhiteSpace([string]$Preferences.smtpCredentialTarget)) {
+        return [string]$Preferences.smtpCredentialTarget
+    }
+    return $Script:DefaultSmtpCredentialTarget
+}
+
+
+function Get-YardstickSmtpCredential {
+    <#
+    .SYNOPSIS
+    Reads the stored SMTP credential from Windows Credential Manager.
+
+    .PARAMETER Target
+    Credential Manager target name. Defaults to "Yardstick:Smtp".
+
+    .OUTPUTS
+    PSCredential, or $null when no SMTP credential is stored.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Target = $Script:DefaultSmtpCredentialTarget
+    )
+
+    Initialize-YardstickCredentialType
+
+    $userName = $null
+    $password = $null
+    if (-not [YardstickCredentialNative]::Read($Target, [ref]$userName, [ref]$password)) {
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($userName) -or [string]::IsNullOrEmpty($password)) {
+        return $null
+    }
+
+    $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+    return [System.Management.Automation.PSCredential]::new($userName.Trim(), $securePassword)
+}
+
+
+function Set-YardstickSmtpCredential {
+    <#
+    .SYNOPSIS
+    Writes the SMTP credential to Windows Credential Manager.
+
+    .PARAMETER Target
+    Credential Manager target name.
+
+    .PARAMETER UserName
+    SMTP account user name.
+
+    .PARAMETER Password
+    SMTP account password. Accepts a String or SecureString.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [string]$Target = $Script:DefaultSmtpCredentialTarget,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$UserName,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNull()]
+        $Password
+    )
+
+    Initialize-YardstickCredentialType
+
+    $plainPassword = ConvertTo-PlainSecret $Password
+    if ([string]::IsNullOrEmpty($plainPassword)) {
+        throw "Password cannot be empty."
+    }
+
+    if ($PSCmdlet.ShouldProcess($Target, "Write Yardstick SMTP credential to Windows Credential Manager")) {
+        [YardstickCredentialNative]::Write($Target, $UserName.Trim(), $plainPassword, "Yardstick SMTP credentials")
+        Write-CredentialLog "Stored SMTP credentials in Windows Credential Manager under target '$Target'."
+    }
+}
+
+
+function Remove-YardstickSmtpCredential {
+    <#
+    .SYNOPSIS
+    Deletes the stored SMTP credential from Windows Credential Manager.
+
+    .PARAMETER Target
+    Credential Manager target name.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [string]$Target = $Script:DefaultSmtpCredentialTarget
+    )
+
+    Initialize-YardstickCredentialType
+
+    if ($PSCmdlet.ShouldProcess($Target, "Delete Yardstick SMTP credential from Windows Credential Manager")) {
+        if ([YardstickCredentialNative]::Delete($Target)) {
+            Write-CredentialLog "Removed SMTP credentials stored under target '$Target'."
+            return $true
+        }
+        Write-CredentialLog "No SMTP credentials were stored under target '$Target'."
+        return $false
+    }
+}
+
+
+function Register-YardstickSmtpCredential {
+    <#
+    .SYNOPSIS
+    Prompts for the SMTP account credentials and stores them securely.
+
+    .DESCRIPTION
+    Only needed when the SMTP server requires authentication. Without a stored
+    credential, Yardstick relays anonymously. The password is collected as a
+    SecureString so it never appears in the console or in PSReadLine history.
+
+    .PARAMETER Target
+    Credential Manager target name.
+
+    .OUTPUTS
+    The stored PSCredential.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Target = $Script:DefaultSmtpCredentialTarget
+    )
+
+    Write-Host ""
+    Write-Host "SMTP credentials will be stored in Windows Credential Manager under target '$Target'," -ForegroundColor Cyan
+    Write-Host "encrypted for the current Windows user. Nothing is written to preferences.yaml." -ForegroundColor Cyan
+    Write-Host ""
+
+    $userInput = Read-Host "SMTP user name"
+    if ([string]::IsNullOrWhiteSpace($userInput)) { throw "An SMTP user name is required." }
+
+    $securePassword = Read-Host "SMTP password" -AsSecureString
+    if (-not $securePassword -or $securePassword.Length -eq 0) { throw "An SMTP password is required." }
+
+    Set-YardstickSmtpCredential -Target $Target -UserName $userInput -Password $securePassword
+    Write-Host ""
+
+    return Get-YardstickSmtpCredential -Target $Target
+}
+
+
 Export-ModuleMember -Function @(
     'Get-YardstickCredentialTarget',
     'Get-YardstickIntuneCredential',
@@ -855,5 +1036,10 @@ Export-ModuleMember -Function @(
     'Update-YardstickSecretExpiration',
     'Test-YardstickSecretExpiration',
     'Send-YardstickCredentialExpiryEmail',
-    'Get-YardstickAdminEmailRecipient'
+    'Get-YardstickAdminEmailRecipient',
+    'Get-YardstickSmtpCredentialTarget',
+    'Get-YardstickSmtpCredential',
+    'Set-YardstickSmtpCredential',
+    'Remove-YardstickSmtpCredential',
+    'Register-YardstickSmtpCredential'
 )

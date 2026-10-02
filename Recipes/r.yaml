@@ -2,39 +2,146 @@ url: $URL/release.html
 urlRedirects: false
 preDownloadScript: |
   $URL = "https://ftp.osuosl.org/pub/cran/bin/windows/base/"
-  $Content = Invoke-WebRequest -Uri $URL
+  # -UseBasicParsing or this prompts about script execution and dies in any
+  # non-interactive host.
+  $Content = Invoke-WebRequest -Uri $URL -UseBasicParsing
   $Content.content -match "R-([0-9]{1,2}\.){2}[0-9]{1,2}-win\.exe" | Out-Null
   $filename = $matches[0]
   $version = $filename.split("-")[1]
   $url = "https://ftp.osuosl.org/pub/cran/bin/windows/base/$filename"
   $fileDetectionPath = "C:\Program Files\R\R-$version\bin"
-  $uninstallScript = "`"%ProgramFiles%\R\R-$version\unins000.exe`" /VERYSILENT /NORESTART"
-powerShellInstallScript: |
-  $rDirectories = Get-ChildItem "C:\Program Files\R" -Directory
-  foreach ($directory in $rDirectories) {
-      if (Test-Path "$($directory.FullName)\unins000.exe") {
-          Write-Output "Uninstalling R version: $($directory.Name)"
-          Start-Process -FilePath "$($directory.FullName)\unins000.exe" -ArgumentList "/VERYSILENT /NORESTART" -Wait
-      }
+# R ships an Inno Setup installer. /SUPPRESSMSGBOXES is the documented companion
+# to /VERYSILENT, and /ALLUSERS is accepted because the installer sets
+# PrivilegesRequiredOverridesAllowed=commandline - it pins per-machine mode
+# explicitly instead of inferring it from running as SYSTEM.
+# Removing the previous version is Intune's job now (uninstallPreviousVersion
+# below), not this script's.
+installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS
+powerShellUninstallScript: |
+ $ErrorActionPreference = 'Continue'
+  $rVersion = '<version>'
+  $appRoot = Join-Path $env:ProgramFiles "R\R-$rVersion"
+  $arpName = "R for Windows $rVersion" + '_is1'
+  $arpKeys = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$arpName",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$arpName"
+  )
+
+  # R versions install side by side, so every process check and every cleanup
+  # below is scoped to this version's directory. Killing or deleting anything
+  # broader would take out an R the user still has deployed.
+  foreach ($process in @(Get-Process -Name 'Rgui', 'Rterm', 'Rscript', 'R' -ErrorAction SilentlyContinue)) {
+    if ($process.Path -and $process.Path.StartsWith("$appRoot\", [StringComparison]::OrdinalIgnoreCase)) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
   }
-  Write-Output "All R versions have been uninstalled."
-  Write-Output "Installing new version..."
-  Start-Process -FilePath "$PSScriptRoot\<filename>" -ArgumentList "/VERYSILENT /NORESTART" -Wait
-  if ($?) {
-      Write-Output "New version of R has been installed successfully."
+
+  # Prefer the registered uninstall command over the on-disk path, so a
+  # non-default install directory still uninstalls.
+  $uninstaller = $null
+  foreach ($key in $arpKeys) {
+    $props = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+    if (-not $props) { continue }
+    $command = [string]($props.QuietUninstallString, $props.UninstallString | Where-Object { $_ } | Select-Object -First 1)
+    if (-not $command) { continue }
+    # The command may be quoted and may carry its own arguments; take the exe.
+    $uninstaller = if ($command -match '^\s*"([^"]+)"') { $Matches[1] }
+      elseif ($command -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+      else { $command.Trim('"') }
+    break
+  }
+  if (-not $uninstaller -or -not (Test-Path -LiteralPath $uninstaller)) {
+    $uninstaller = Join-Path $appRoot 'unins000.exe'
+  }
+
+  if (Test-Path -LiteralPath $uninstaller) {
+    Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -ErrorAction Stop | Out-Null
+
+    # An Inno uninstaller relaunches itself from %TEMP% so it can delete its own
+    # unins000.exe, which makes the exit of the process we started a poor signal
+    # for "the uninstall is done". Poll the two things that actually prove it
+    # completed; otherwise the cleanup below races the uninstaller and deletes
+    # files out from under it.
+    $deadline = (Get-Date).AddMinutes(10)
+    do {
+      Start-Sleep -Seconds 5
+      $stillRegistered = @($arpKeys | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0
+      $stillOnDisk = Test-Path -LiteralPath (Join-Path $appRoot 'bin\R.exe')
+    } while (($stillRegistered -or $stillOnDisk) -and ((Get-Date) -lt $deadline))
+
+    if ($stillRegistered -or $stillOnDisk) {
+      throw "R $rVersion uninstaller did not finish within 10 minutes (registered=$stillRegistered onDisk=$stillOnDisk)."
+    }
   } else {
-      Write-Output "Failed to install the new version of R."
+    Write-Output "No uninstaller found for R $rVersion; cleaning up any leftovers."
   }
+
+  # Inno removes only what it installed, and only removes a directory once it is
+  # empty. On a clean install it does tidy up fully - including "C:\Program
+  # Files\R" - but anything written into the tree after install (packages added
+  # to the system library, regenerated doc/html indexes) strands the whole
+  # versioned directory. Everything below is machine-wide application state.
+  # Per-user data - Documents\R\win-library, %LOCALAPPDATA%\R, %APPDATA%\R - is
+  # deliberately left alone: those are the user's packages and settings.
+  Remove-Item -LiteralPath $appRoot -Recurse -Force -ErrorAction SilentlyContinue
+  $rParent = Join-Path $env:ProgramFiles 'R'
+  if ((Test-Path -LiteralPath $rParent) -and
+      -not (Get-ChildItem -LiteralPath $rParent -Force -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $rParent -Force -ErrorAction SilentlyContinue
+  }
+
+  $startMenuGroup = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\R"
+  Remove-Item -LiteralPath (Join-Path $startMenuGroup "R $rVersion.lnk") -Force -ErrorAction SilentlyContinue
+  if ((Test-Path -LiteralPath $startMenuGroup) -and
+      -not (Get-ChildItem -LiteralPath $startMenuGroup -Force -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $startMenuGroup -Force -ErrorAction SilentlyContinue
+  }
+  $commonDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+  if ($commonDesktop) {
+    Remove-Item -LiteralPath (Join-Path $commonDesktop "R $rVersion.lnk") -Force -ErrorAction SilentlyContinue
+  }
+
+  foreach ($coreRoot in @('HKLM:\SOFTWARE\R-core', 'HKLM:\SOFTWARE\WOW6432Node\R-core')) {
+    if (-not (Test-Path -LiteralPath $coreRoot)) { continue }
+    foreach ($flavour in 'R', 'R64') {
+      $flavourKey = Join-Path $coreRoot $flavour
+      if (-not (Test-Path -LiteralPath $flavourKey)) { continue }
+      Remove-Item -LiteralPath (Join-Path $flavourKey $rVersion) -Recurse -Force -ErrorAction SilentlyContinue
+      # Only clear the "current R" pointers when they still name the version
+      # being removed - if a side-by-side R owns them now, RStudio needs them.
+      $props = Get-ItemProperty -LiteralPath $flavourKey -ErrorAction SilentlyContinue
+      if ($props.InstallPath -eq $appRoot) {
+        Remove-ItemProperty -LiteralPath $flavourKey -Name 'InstallPath' -Force -ErrorAction SilentlyContinue
+      }
+      if ($props.'Current Version' -eq $rVersion) {
+        Remove-ItemProperty -LiteralPath $flavourKey -Name 'Current Version' -Force -ErrorAction SilentlyContinue
+      }
+      $key = Get-Item -LiteralPath $flavourKey -ErrorAction SilentlyContinue
+      if ($key -and $key.SubKeyCount -eq 0 -and $key.ValueCount -eq 0) {
+        Remove-Item -LiteralPath $flavourKey -Force -ErrorAction SilentlyContinue
+      }
+    }
+    $core = Get-Item -LiteralPath $coreRoot -ErrorAction SilentlyContinue
+    if ($core -and $core.SubKeyCount -eq 0 -and $core.ValueCount -eq 0) {
+      Remove-Item -LiteralPath $coreRoot -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  foreach ($key in $arpKeys) {
+    Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  exit 0
 iconFile: r.png
 id: r
-displayName: R for Windows
+displayName: TEST 9-30-26 - R for Windows
 publisher: R Core Team
 description: R is a free software environment for statistical computing and graphics.
-dependentApplicationBlacklist:
- - "RStudio"
 detectionType: file
 fileDetectionName: R.exe
 fileDetectionMethod: exists
+# Each published version detects only its own "R-<version>\bin\R.exe", so
+# "Replace" supersedence removes exactly the version it is replacing.
+uninstallPreviousVersion: true
 scopeTags:
   - scopeTag1
   - scopeTag2

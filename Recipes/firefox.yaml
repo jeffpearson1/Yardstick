@@ -3,6 +3,7 @@ urlRedirects: true
 preDownloadScript: |
   $filename = $URL.split("/")[-1].replace("%20", " ")
   $version = ($filename.split(" ")[-1] -Split "\.msi")[0]
+  $registryDetectionValue = $version
 installScript: msiexec /i "<filename>" /qn /norestart
 uninstallScript: |
   "%ProgramFiles%\Mozilla Firefox\uninstall\helper.exe" -ms
@@ -12,8 +13,10 @@ displayName: Mozilla Firefox
 publisher: The Mozilla Foundation
 description: Mozilla Firefox is a free and open-source web browser developed by the Mozilla Foundation and its subsidiary, the Mozilla Corporation.
 detectionType: registry
-registryDetectionMethod: exists
-registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> (x64 en-US)'
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual
 scopeTags:
   - scopeTag1
   - scopeTag2

@@ -4094,18 +4094,113 @@ function Test-OutlookAvailability {
 }
 
 
+function Get-YardstickEmailDeliveryMethod {
+    <#
+    .SYNOPSIS
+    Resolves the configured email delivery method.
+
+    .OUTPUTS
+    The lowercased emailDeliveryMethod preference, or 'outlook' when it is unset.
+    #>
+    param($Preferences)
+
+    if (-not $Preferences -or [string]::IsNullOrWhiteSpace([string]$Preferences.emailDeliveryMethod)) {
+        return 'outlook'
+    }
+    return ([string]$Preferences.emailDeliveryMethod).Trim().ToLowerInvariant()
+}
+
+
+function Send-YardstickSmtpMessage {
+    <#
+    .SYNOPSIS
+    Sends an HTML email through an SMTP server using Send-MailMessage.
+
+    .DESCRIPTION
+    Reads smtpServer, smtpPort (default 25) and smtpUseSsl from preferences, and
+    sends from emailSendFromAddress, displayed as emailSenderName when set. When an
+    SMTP credential is stored in Windows Credential Manager (see
+    Set-YardstickCredential.ps1 -Smtp) it is used to authenticate; otherwise the
+    message is relayed anonymously. Errors are thrown to the caller.
+
+    .PARAMETER Preferences
+    Hashtable containing SMTP and email configuration preferences.
+
+    .PARAMETER To
+    One or more recipient addresses.
+
+    .PARAMETER Subject
+    Message subject.
+
+    .PARAMETER HtmlBody
+    HTML message body.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        $Preferences,
+
+        [Parameter(Mandatory=$true)]
+        [string[]]$To,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Subject,
+
+        [Parameter(Mandatory=$true)]
+        [string]$HtmlBody
+    )
+
+    if (-not $Preferences.smtpServer) {
+        throw "smtpServer is not configured in preferences."
+    }
+    if (-not $Preferences.emailSendFromAddress) {
+        throw "emailSendFromAddress is not configured in preferences."
+    }
+
+    $from = if ($Preferences.emailSenderName) {
+        "$($Preferences.emailSenderName) <$($Preferences.emailSendFromAddress)>"
+    } else {
+        [string]$Preferences.emailSendFromAddress
+    }
+    $port = if (($Preferences.smtpPort -as [int]) -gt 0) { [int]$Preferences.smtpPort } else { 25 }
+
+    $mailParams = @{
+        SmtpServer = [string]$Preferences.smtpServer
+        Port       = $port
+        From       = $from
+        To         = $To
+        Subject    = $Subject
+        Body       = $HtmlBody
+        BodyAsHtml = $true
+        Encoding   = [System.Text.Encoding]::UTF8
+        UseSsl     = [bool]$Preferences.smtpUseSsl
+    }
+
+    # The SMTP credential lives in YardstickCredential.psm1, which is not always loaded.
+    if (Get-Command -Name Get-YardstickSmtpCredential -ErrorAction SilentlyContinue) {
+        $credential = Get-YardstickSmtpCredential -Target (Get-YardstickSmtpCredentialTarget -Preferences $Preferences)
+        if ($credential) {
+            $mailParams.Credential = $credential
+        }
+    }
+
+    # Send-MailMessage is marked obsolete in PowerShell 7 and warns on every call.
+    Send-MailMessage @mailParams -ErrorAction Stop -WarningAction SilentlyContinue
+}
+
+
 function Send-YardstickEmailReport {
     <#
     .SYNOPSIS
-    Sends an email report of application processing results using Outlook COM.
-    
+    Sends an email report of application processing results.
+
     .DESCRIPTION
     Creates and sends an email summary of successful and failed application
-    updates using Microsoft Outlook's COM interface.
-    
+    updates. Delivery follows emailDeliveryMethod: Microsoft Outlook's COM
+    interface by default, or Send-MailMessage when set to 'smtp'.
+
     .PARAMETER Preferences
     Hashtable containing email configuration preferences.
-    
+
     .PARAMETER RunParameters
     String describing the parameters used for this Yardstick run.
     #>
@@ -4115,7 +4210,8 @@ function Send-YardstickEmailReport {
 
         [string]$RunParameters = "",
 
-        # When set, the email is opened in Outlook for visual inspection instead of being sent.
+        # When set, the email is opened for visual inspection instead of being sent -
+        # in Outlook, or in the default browser for SMTP delivery.
         [switch]$Preview,
 
         # Optional path. If provided, the rendered HTML body is also written to this file
@@ -4138,12 +4234,20 @@ function Send-YardstickEmailReport {
         }
     }
     
-    # Check if Outlook is available
-    if (-not (Test-OutlookAvailability)) {
+    $method = Get-YardstickEmailDeliveryMethod -Preferences $Preferences
+
+    if ($method -eq 'smtp') {
+        foreach ($setting in @('smtpServer', 'emailSendFromAddress')) {
+            if (-not $Preferences[$setting]) {
+                Write-Log "WARNING: Email setting '$setting' is required for SMTP delivery. Skipping email notification."
+                return
+            }
+        }
+    } elseif (-not (Test-OutlookAvailability)) {
         Write-Log "WARNING: Outlook is not available. Cannot send email notification."
         return
     }
-    
+
     # Initialize tracking arrays if they don't exist
     if (-not $Script:SuccessfulApplications) {
         $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
@@ -4154,40 +4258,36 @@ function Send-YardstickEmailReport {
     
     try {
         Write-Log "Creating email report for Yardstick run"
-        
-        # Create Outlook application and mail item
-        $outlook = New-Object -ComObject "Outlook.Application"
-        $mail = $outlook.CreateItem(0)  # 0 = olMailItem
-        
-        # Set email properties
-        $mail.To = ($Preferences.emailRecipient -join "; ")
 
-        $mail.Subject = $Preferences.emailSubject
-        if ($Preferences.emailSendFromAddress) {
-            $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
-        }
-        
         # Load branding logo. Use a cid: reference for the email itself (Outlook
         # desktop does not render base64 data URIs reliably) and a base64 data URI
         # for the HtmlOutputPath so the standalone file stays self-contained.
+        # Send-MailMessage cannot set a Content-ID on an attachment, and many
+        # clients block data URIs, so SMTP reports go out without the logo.
         $logoHtml = ""
         $logoHtmlForBrowser = ""
         $logoCid = "yardstick-logo"
         $logoPath = $null
-        try {
-            $candidatePath = Join-Path $PSScriptRoot "..\Branding\yardstick_logo_white_text_transparent_bg.png"
-            if (Test-Path $candidatePath) {
-                $logoPath = (Resolve-Path $candidatePath).Path
-                $logoBytes = [System.IO.File]::ReadAllBytes($logoPath)
-                $logoBase64 = [System.Convert]::ToBase64String($logoBytes)
-                $logoHtml = "<img src=`"cid:$logoCid`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
-                $logoHtmlForBrowser = "<img src=`"data:image/png;base64,$logoBase64`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
-            } else {
-                Write-Log "WARNING: Branding logo not found at $candidatePath"
+        if ($method -ne 'smtp') {
+            try {
+                $candidatePath = Join-Path $PSScriptRoot "..\Branding\yardstick_logo_white_text_transparent_bg.png"
+                if (Test-Path $candidatePath) {
+                    $logoPath = (Resolve-Path $candidatePath).Path
+                    $logoBytes = [System.IO.File]::ReadAllBytes($logoPath)
+                    $logoBase64 = [System.Convert]::ToBase64String($logoBytes)
+                    $logoHtml = "<img src=`"cid:$logoCid`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
+                    $logoHtmlForBrowser = "<img src=`"data:image/png;base64,$logoBase64`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
+                } else {
+                    Write-Log "WARNING: Branding logo not found at $candidatePath"
+                }
+            } catch {
+                Write-Log "WARNING: Failed to embed branding logo: $($_.Exception.Message)"
             }
-        } catch {
-            Write-Log "WARNING: Failed to embed branding logo: $($_.Exception.Message)"
         }
+
+        # Without a logo, drop its cell rather than leave an empty 195px gap.
+        $logoCell = if ($logoHtml) { "<td class=`"header-logo-cell`" style=`"width:195px; padding:15px 15px 15px 15px; vertical-align:middle; border:0;`">$logoHtml</td>" } else { "" }
+        $headerTextPadding = if ($logoHtml) { "15px 15px 15px 0" } else { "15px" }
 
         # Build email body
         $emailBody = @"
@@ -4361,8 +4461,8 @@ function Send-YardstickEmailReport {
 <body bgcolor="#e9ecef" style="background-color:#e9ecef;">
     <table class="header" cellpadding="0" cellspacing="0" border="0" style="width:100%; background-color:#0078d4; color:white; border-radius:5px; border-collapse:collapse;">
         <tr>
-            <td class="header-logo-cell" style="width:195px; padding:15px 15px 15px 15px; vertical-align:middle; border:0;">$logoHtml</td>
-            <td class="header-text-cell" style="padding:15px 15px 15px 0; vertical-align:middle; border:0;">
+            $logoCell
+            <td class="header-text-cell" style="padding:$headerTextPadding; vertical-align:middle; border:0;">
                 <p style="margin:0 0 6px 0; padding:0; font-size:18pt; font-weight:bold; line-height:1.1; color:white;">Application Update Report</p>
                 <p style="margin:0; padding:0; line-height:1.2; color:white;">Run Time: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss tt")</p>
 $(if ($RunParameters) { @"
@@ -4551,6 +4651,50 @@ $(if ($RunParameters) { @"
 </html>
 "@
 
+        if ($HtmlOutputPath) {
+            try {
+                $htmlForFile = $emailBody
+                if ($logoHtmlForBrowser -and $logoHtml) {
+                    $htmlForFile = $htmlForFile.Replace($logoHtml, $logoHtmlForBrowser)
+                }
+                Set-Content -Path $HtmlOutputPath -Value $htmlForFile -Encoding UTF8
+                Write-Log "Rendered email HTML written to $HtmlOutputPath"
+            } catch {
+                Write-Log "WARNING: Failed to write rendered HTML to $HtmlOutputPath`: $_"
+            }
+        }
+
+        if ($method -eq 'smtp') {
+            if ($Preview) {
+                # SMTP has no compose window to display, so preview in the browser.
+                $previewPath = $HtmlOutputPath
+                if (-not $previewPath) {
+                    $previewPath = Join-Path ([System.IO.Path]::GetTempPath()) "YardstickEmailPreview.html"
+                    Set-Content -Path $previewPath -Value $emailBody -Encoding UTF8
+                }
+                Invoke-Item -LiteralPath $previewPath
+                Write-Log "Email opened in the default browser for preview (not sent): $previewPath"
+            } else {
+                Send-YardstickSmtpMessage -Preferences $Preferences -To $Preferences.emailRecipient `
+                    -Subject $Preferences.emailSubject -HtmlBody $emailBody
+                Write-Log "Email report sent successfully via SMTP to the following email addresses:"
+                Write-Log ($Preferences.emailRecipient -join ", ")
+            }
+            return
+        }
+
+        # Create Outlook application and mail item
+        $outlook = New-Object -ComObject "Outlook.Application"
+        $mail = $outlook.CreateItem(0)  # 0 = olMailItem
+
+        # Set email properties
+        $mail.To = ($Preferences.emailRecipient -join "; ")
+
+        $mail.Subject = $Preferences.emailSubject
+        if ($Preferences.emailSendFromAddress) {
+            $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
+        }
+
         # Set email body and send (or open for preview)
         $mail.HTMLBody = $emailBody
 
@@ -4567,19 +4711,6 @@ $(if ($RunParameters) { @"
                 # works for inline rendering even if the attachment is visible in the attachment list.
             } catch {
                 Write-Log "WARNING: Failed to attach logo with CID: $($_.Exception.Message)"
-            }
-        }
-
-        if ($HtmlOutputPath) {
-            try {
-                $htmlForFile = $emailBody
-                if ($logoHtmlForBrowser -and $logoHtml) {
-                    $htmlForFile = $htmlForFile.Replace($logoHtml, $logoHtmlForBrowser)
-                }
-                Set-Content -Path $HtmlOutputPath -Value $htmlForFile -Encoding UTF8
-                Write-Log "Rendered email HTML written to $HtmlOutputPath"
-            } catch {
-                Write-Log "WARNING: Failed to write rendered HTML to $HtmlOutputPath`: $_"
             }
         }
 

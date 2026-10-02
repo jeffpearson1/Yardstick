@@ -22,9 +22,15 @@
     Connect to Graph and refresh the recorded client secret expiration date. Requires
     the app registration to hold Application.Read.All.
 
+.PARAMETER Smtp
+    Work with the SMTP account credential used when emailDeliveryMethod is 'smtp',
+    instead of the Intune credential. Combine with -Show or -Remove. Only needed when
+    the SMTP server requires authentication; without it Yardstick relays anonymously.
+
 .PARAMETER Target
     Override the Credential Manager target name. Defaults to the `credentialTarget`
-    preference, or "Yardstick:IntuneGraph".
+    preference, or "Yardstick:IntuneGraph" (with -Smtp: the `smtpCredentialTarget`
+    preference, or "Yardstick:Smtp").
 
 .EXAMPLE
     .\Set-YardstickCredential.ps1
@@ -35,6 +41,10 @@
 
 .EXAMPLE
     .\Set-YardstickCredential.ps1 -RefreshExpiration
+
+.EXAMPLE
+    .\Set-YardstickCredential.ps1 -Smtp
+    Prompts for the SMTP user name and password, and stores them securely.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Set')]
 param(
@@ -46,6 +56,11 @@ param(
 
     [Parameter(ParameterSetName = 'Refresh')]
     [switch]$RefreshExpiration,
+
+    [Parameter(ParameterSetName = 'Set')]
+    [Parameter(ParameterSetName = 'Show')]
+    [Parameter(ParameterSetName = 'Remove')]
+    [switch]$Smtp,
 
     [string]$Target
 )
@@ -66,6 +81,37 @@ $Prefs = $null
 $prefsPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
 if (Test-Path $prefsPath) {
     $Prefs = Get-Content -LiteralPath $prefsPath | ConvertFrom-Yaml
+}
+
+if ($Smtp) {
+    if (-not $Target) {
+        $Target = Get-YardstickSmtpCredentialTarget -Preferences $Prefs
+    }
+
+    switch ($PSCmdlet.ParameterSetName) {
+        'Show' {
+            $credential = Get-YardstickSmtpCredential -Target $Target
+            if (-not $credential) {
+                Write-Host "No SMTP credentials are stored under target '$Target'." -ForegroundColor Yellow
+                exit 1
+            }
+            [PSCustomObject]@{
+                Target   = $Target
+                UserName = $credential.UserName
+                Password = '********'
+            } | Format-List
+        }
+
+        'Remove' {
+            Remove-YardstickSmtpCredential -Target $Target | Out-Null
+        }
+
+        default {
+            Register-YardstickSmtpCredential -Target $Target | Out-Null
+            Write-Host "SMTP credentials stored. Run .\Test-EmailNotification.ps1 -Send to verify delivery." -ForegroundColor Green
+        }
+    }
+    return
 }
 
 if (-not $Target) {

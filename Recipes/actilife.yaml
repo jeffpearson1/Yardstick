@@ -1,0 +1,315 @@
+# ActiLife is the desktop analysis suite for Ametris (formerly ActiGraph) activity
+# monitors. The installer is an NSIS bundle and is distributed ungated; the licence
+# is applied in-app after install, so nothing needs to be staged in the dropbox.
+#
+# The vendor download page (https://ametris.com/downloads) links ActiLife through a
+# key-entry page, but the support "getlatest" endpoint used by that page serves the
+# current ActiLife 7 build directly and publishes the version in its
+# Content-Disposition filename. The endpoint is pinned to the ActiLife 7 line --
+# revisit it when the vendor ships a major version 8.
+#
+# Known environment limitation: on Windows Server the bundled .NET Framework
+# prerequisite check fails, because the in-box .NET servicing story differs from
+# client SKUs. ActiLife is a client application and the targeted Windows 10/11
+# estate ships .NET Framework 4.8 in-box, which satisfies the app's 4.6.2
+# requirement, so no prerequisite is packaged here.
+url: https://support.theactigraph.com/downloads/getlatest/ActiLife7
+urlRedirects: false
+preDownloadScript: |
+  # The endpoint rejects HEAD (405) and Windows PowerShell will not let
+  # Invoke-WebRequest set a Range header, so read the response headers with
+  # HttpClient and stop before the 44 MB body streams.
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  Add-Type -AssemblyName System.Net.Http
+
+  $client = [System.Net.Http.HttpClient]::new()
+  try {
+    $request  = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $url)
+    $response = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+    try {
+      if (-not $response.IsSuccessStatusCode) {
+        throw "ActiLife download endpoint returned HTTP $([int]$response.StatusCode)."
+      }
+
+      $values = $null
+      if (-not $response.Content.Headers.TryGetValues('Content-Disposition', [ref]$values)) {
+        throw "ActiLife download endpoint returned no Content-Disposition header; cannot determine version."
+      }
+      $disposition = ($values -join ' ')
+    }
+    finally { $response.Dispose() }
+  }
+  finally { $client.Dispose() }
+
+  if ($disposition -notmatch 'ActiLife(?<version>\d+(?:\.\d+)+)Setup\.exe') {
+    throw "Could not parse an ActiLife version from Content-Disposition '$disposition'."
+  }
+
+  $version  = $Matches['version']
+  $fileName = "ActiLife${version}Setup.exe"
+downloadScript: |
+  # BITS probes with HEAD first, which this endpoint answers with 405, so fetch the
+  # payload with a plain GET instead.
+  Invoke-WebRequest -Uri $url -OutFile (Join-Path $PWD $fileName) -UseBasicParsing
+postDownloadScript: |
+  # ActiLife bundles three driver packages. Cletus (ANT USB) and Nebula (ST Tube)
+  # carry Microsoft WHQL catalogues and install silently, but the USBXpress
+  # package is signed with ActiGraph's own commercial code-signing certificate.
+  # Windows therefore raises the "Would you like to install this device
+  # software?" trust dialog, which stalls an otherwise silent install.
+  #
+  # Lift that publisher certificate out of the bundle at build time and ship it
+  # beside the installer so the install script can seed TrustedPublisher. The
+  # certificate itself expired in 2013, but the catalogue is timestamp
+  # countersigned, so the signature stays valid and the trust decision still
+  # matches on the certificate in the store.
+  # Resolved through the known-folder API rather than %ProgramFiles%: the build
+  # host may be driven from a shell that does not propagate those variables, and
+  # "ProgramFiles(x86)" in particular cannot survive a POSIX environment block.
+  $sevenZipExe = @(
+    (Join-Path $Tools '7z.exe'),
+    (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) '7-Zip\7z.exe'),
+    (Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) '7-Zip\7z.exe')
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+
+  if (-not $sevenZipExe) {
+    throw "7-Zip is required to extract the ActiLife driver signing certificate but was not found."
+  }
+
+  $catalogName = 'actigraphdrivers.cat'
+  & $sevenZipExe e "-o$($PWD.Path)" -y $fileName "Drivers\$catalogName" | Out-Null
+
+  $catalogPath = Join-Path $PWD.Path $catalogName
+  if (-not (Test-Path -LiteralPath $catalogPath)) {
+    throw "Could not extract '$catalogName' from the ActiLife installer; the driver layout may have changed."
+  }
+
+  try {
+    $signerCert = (Get-AuthenticodeSignature -LiteralPath $catalogPath).SignerCertificate
+    if (-not $signerCert) {
+      throw "The ActiLife driver catalogue '$catalogName' carries no signer certificate."
+    }
+    [IO.File]::WriteAllBytes(
+      (Join-Path $PWD.Path 'ActiGraphDriverPublisher.cer'),
+      $signerCert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+  }
+  finally {
+    # Only the installer and the exported certificate should reach the package.
+    Remove-Item -LiteralPath $catalogPath -Force -ErrorAction SilentlyContinue
+  }
+powerShellInstallScript: |
+  # Trust the ActiGraph driver publisher before running setup, otherwise the
+  # USBXpress driver package raises an interactive trust dialog and the silent
+  # install never completes. See postDownloadScript for why this is needed.
+  $certPath = Join-Path $PSScriptRoot 'ActiGraphDriverPublisher.cer'
+  if (-not (Test-Path -LiteralPath $certPath)) {
+    throw "The ActiGraph driver publisher certificate is missing from the package."
+  }
+
+  $publisherCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certPath)
+  $publisherStore = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPublisher', 'LocalMachine')
+  $publisherStore.Open('ReadWrite')
+  try { $publisherStore.Add($publisherCert) } finally { $publisherStore.Close() }
+
+  $setup = Join-Path $PSScriptRoot '<filename>'
+  $process = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+  $installExitCode = $process.ExitCode
+
+  # setup.exe embeds the NSIS UAC plugin, which returns 1223 (ERROR_CANCELLED)
+  # whenever it cannot hand the install off to an interactive elevated session --
+  # the normal case under Intune's SYSTEM context, and what this installer returns
+  # on every observed silent run. The install itself completes, so the ARP
+  # registration decides the outcome rather than the exit code. The version is
+  # checked too: without it an older ActiLife left over from a superseded package
+  # would make a genuinely failed install look successful.
+  $expected = [version]'<version>'
+  $deadline = (Get-Date).AddSeconds(60)
+  do {
+    $registered = Get-ItemProperty -Path @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      ) -ErrorAction SilentlyContinue |
+      Where-Object {
+        if ($_.DisplayName -notlike 'ActiLife*') { return $false }
+        $text = ([string]$_.DisplayVersion) -replace '\s.*$', ''
+        $found = $null
+        [version]::TryParse($text, [ref]$found) -and $found -ge $expected
+      } |
+      Select-Object -First 1
+    if ($registered) { break }
+    Start-Sleep -Seconds 5
+  } while ((Get-Date) -lt $deadline)
+
+  if (-not $registered) {
+    throw "ActiLife installer exited with $installExitCode and no ActiLife $expected or newer is registered."
+  }
+  if ($installExitCode -ne 0) {
+    Write-Output "ActiLife installer exited with $installExitCode; '$($registered.DisplayName)' is registered, so the install succeeded."
+  }
+powerShellUninstallScript: |
+  # NSIS uninstaller. Prefer the ARP registration so we follow the installer's own
+  # choice of install directory, and fall back to the default location if the ARP
+  # entry is missing a usable command.
+  function Get-ActiLifeArpEntry {
+    Get-ItemProperty -Path @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+      ) -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like 'ActiLife*' } |
+      Select-Object -First 1
+  }
+
+  $entry = Get-ActiLifeArpEntry
+
+  $uninstaller = $null
+  $raw = $null
+  if ($entry) {
+    $raw = $entry.QuietUninstallString
+    if (-not $raw) { $raw = $entry.UninstallString }
+  }
+
+  if ($raw) {
+    # UninstallString may be quoted and may carry arguments; take just the executable.
+    $uninstaller = if ($raw -match '^\s*"([^"]+)"') { $Matches[1] }
+      elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $Matches[1] }
+      else { $raw.Trim('"') }
+  }
+
+  if (-not $uninstaller -or -not (Test-Path -LiteralPath $uninstaller)) {
+    $programFiles = @(
+      [Environment]::GetFolderPath('ProgramFilesX86'),
+      [Environment]::GetFolderPath('ProgramFiles')
+    ) | Where-Object { $_ } | Select-Object -Unique
+    $uninstaller = Get-ChildItem -Path @(
+        $programFiles | ForEach-Object { (Join-Path $_ 'ActiGraph'), (Join-Path $_ 'ActiLife') }
+      ) -Filter 'uninst.exe' -Recurse -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty FullName -First 1
+  }
+
+  if (-not $uninstaller) {
+    throw "Could not locate the ActiLife uninstaller."
+  }
+
+  # ActiLife runs a tray helper that holds files in the install directory.
+  Get-Process -Name 'ActiLife', 'ActiTray', 'ActiTrayCleaner' -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+  # _?= keeps the NSIS uninstaller in-process so -Wait reflects the real result;
+  # without it NSIS copies itself to %TEMP% and returns immediately.
+  $installDir = Split-Path -Parent $uninstaller
+  $process = Start-Process -FilePath $uninstaller `
+    -ArgumentList '/S', "_?=$installDir" -Wait -PassThru
+  $uninstallExitCode = $process.ExitCode
+
+  # uninst.exe carries the NSIS UAC plugin, which reports 1223 (ERROR_CANCELLED)
+  # when it cannot hand off to an interactive elevated session -- exactly the
+  # situation under Intune's SYSTEM context. The removal itself still runs, so the
+  # exit code is treated as advisory here and the ARP registration below is the
+  # authority on whether the product actually went away. Everything from this
+  # point on is cleanup the vendor uninstaller leaves undone, so it must run even
+  # when the exit code is non-zero.
+
+  # setup.ini declares "Remove Copied Files On Uninstall = Yes" and
+  # "Uninstall Quiet Mode = On"; the USBXpress installer drops this uninstaller
+  # into its own install directory for exactly this purpose. It deregisters the
+  # driver from the driver store but cannot delete the directory it is running
+  # from, so the staged copy is removed here once it has exited.
+  $driverDir = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'ActiGraph\Drivers'
+  $driverUninstaller = Join-Path $driverDir 'DriverUninstaller.exe'
+  if (Test-Path -LiteralPath $driverUninstaller) {
+    Start-Process -FilePath $driverUninstaller -Wait -PassThru | Out-Null
+    Remove-Item -LiteralPath $driverDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  # The ANT (Cletus/libusb) packages are published with DPInst, which registers
+  # its own ARP entries and leaves the INFs in the driver store. Each entry
+  # records the exact dpinst call needed to undo it.
+  Get-ItemProperty -Path @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    ) -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -match 'ActiGraph \(WinUSB\)|ANT LibUSB' } |
+    ForEach-Object {
+      if ($_.UninstallString -match '^\s*"?(?<exe>.+?dpinst\d*\.exe)"?\s+(?<args>.+)$') {
+        $dpinst = $Matches['exe']
+        $dpinstArgs = $Matches['args'].Trim()
+        if (Test-Path -LiteralPath $dpinst) {
+          Start-Process -FilePath $dpinst -ArgumentList "$dpinstArgs /s" -Wait -PassThru | Out-Null
+        }
+      }
+    }
+
+  # NSIS leaves the uninstaller itself behind when _?= is used.
+  Remove-Item -LiteralPath $uninstaller -Force -ErrorAction SilentlyContinue
+
+  # Walk up from the install directory (ActiGraph\ActiLife6) so the vendor folder
+  # goes too, but only while each level is genuinely empty.
+  $pruneRoots = @(
+    $installDir
+    (Split-Path -Parent $installDir)
+    (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'ActiGraph')
+    (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'ActiGraph')
+  )
+  foreach ($pruneRoot in $pruneRoots) {
+    if ($pruneRoot -and (Test-Path -LiteralPath $pruneRoot)) {
+      Get-Item -LiteralPath $pruneRoot -ErrorAction SilentlyContinue |
+        Where-Object { -not $_.GetFileSystemInfos() } |
+        Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+    }
+  }
+
+  # Drop the driver publisher we seeded at install time so the machine is not
+  # left trusting an ActiGraph signing certificate it no longer needs.
+  $publisherStore = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPublisher', 'LocalMachine')
+  $publisherStore.Open('ReadWrite')
+  try {
+    foreach ($storedCert in @($publisherStore.Certificates)) {
+      if ($storedCert.Subject -like '*O=ActiGraph*') {
+        $publisherStore.Remove($storedCert)
+      }
+    }
+  }
+  finally { $publisherStore.Close() }
+
+  # The real verdict: the product must no longer be registered.
+  if (Get-ActiLifeArpEntry) {
+    throw "ActiLife is still registered after the uninstaller exited with $uninstallExitCode."
+  }
+  if ($uninstallExitCode -ne 0) {
+    Write-Output "ActiLife uninstaller exited with $uninstallExitCode but the product is no longer registered; cleanup completed."
+  }
+iconFile: actilife.png
+id: actilife
+displayName: ActiLife
+publisher: Ametris
+description: ActiLife is the desktop suite from Ametris (formerly ActiGraph) for initialising activity monitors, downloading device data, and scoring physical activity, sleep, and wear-time results for research studies.
+fileType: exe
+softwareName: ActiLife
+detectionType: script
+detectionScript: |
+  # ActiLife registers under a vendor-chosen ARP key, so match on DisplayName and
+  # compare versions numerically. -ge keeps older installs visible to supersedence.
+  $expected = [version]'<version>'
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike 'ActiLife*') { continue }
+      $text = ([string]$props.DisplayVersion) -replace '\s.*$', ''
+      $found = $null
+      if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected) {
+        Write-Output 'Detected'
+        exit 0
+      }
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 60

@@ -112,13 +112,25 @@ defaultDeploymentGroups:
 # EMAIL NOTIFICATION SETTINGS
 #####################################
 emailNotificationEnabled: false
+# How email is delivered: "outlook" (default) sends through the Outlook desktop
+# client via COM; "smtp" sends straight to an SMTP server with Send-MailMessage
+# and needs no Outlook install.
+emailDeliveryMethod: outlook
 emailRecipient: "admin@yourorganization.com"
 # Address that receives operational alerts such as client secret expiration.
 # Falls back to emailRecipient when omitted.
 adminEmailRecipient: "admin@yourorganization.com"
 emailSubject: "Yardstick Application Update Report"
 emailSenderName: "Yardstick Automation"
+# Required for smtp delivery. With outlook it is optional and needs send-on-behalf rights.
 emailSendFromAddress: "noreply@yourorganization.com"
+# SMTP settings, used only when emailDeliveryMethod is smtp.
+smtpServer: "smtp.yourorganization.com"
+smtpPort: 25
+smtpUseSsl: false
+# Credential Manager target for the SMTP account. Leave the credential unset to
+# relay anonymously; store one with:  .\Set-YardstickCredential.ps1 -Smtp
+smtpCredentialTarget: "Yardstick:Smtp"
 
 #####################################
 # DEPENDENT LINK UPDATE SETTINGS

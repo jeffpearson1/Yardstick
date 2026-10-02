@@ -1,0 +1,290 @@
+# Falcon Design Space is Creality's laser design/control suite, shipped as a Qt
+# Installer Framework 4.6 bundle. The CraftSeek software API is the vendor's own
+# feed for the download page, so it supplies both the version and the URL.
+#
+# Two things about IFW matter for a SYSTEM-context Intune deployment, and both are
+# confirmed from the installer's embedded config.xml:
+#
+#   <StartMenuDir>Falcon Design Space <version></StartMenuDir>
+#   <TargetDir>C:\Program Files\Falcon Design Space</TargetDir>
+#
+# TargetDir is pinned, so the install location is deterministic. Everything else is
+# not: IFW resolves @StartMenuDir@ through the installing account's
+# "User Shell Folders", and builds its uninstall registration as
+# HKEY_CURRENT_USER or HKEY_LOCAL_MACHINE + \Software\Microsoft\Windows\CurrentVersion\Uninstall\
+# depending on the rights it thinks it has. Run by Intune the installing account is
+# SYSTEM, so both land in C:\Windows\System32\config\systemprofile / HKU\S-1-5-18
+# where no real user will ever see them -- the app installs correctly but appears
+# in neither the Start Menu nor Apps & Features.
+#
+# The install script therefore does that registration itself, machine-wide, and
+# clears the systemprofile copies the vendor leaves behind.
+url: https://www.craftseek.com/pc-api/software/get
+urlRedirects: false
+preDownloadScript: |
+  $response = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 60 -ErrorAction Stop
+  if ($response.code -ne 1 -or -not $response.data) {
+    throw 'The official CraftSeek software API did not return Falcon Design Space metadata.'
+  }
+  $version = [string]$response.data.version
+  $downloadUri = [uri][string]$response.data.winUrl
+  if ($version -notmatch '^\d+(\.\d+){2,3}$') {
+    throw "CraftSeek returned an unexpected version: '$version'."
+  }
+  if ($downloadUri.Scheme -ne 'https' -or $downloadUri.Host -ne 'download.craftseek.com') {
+    throw "CraftSeek returned an unexpected Windows download host: '$($downloadUri.Host)'."
+  }
+  $url = $downloadUri.AbsoluteUri
+  $fileName = [uri]::UnescapeDataString([IO.Path]::GetFileName($downloadUri.AbsolutePath))
+  if ($fileName -notmatch '(?i)^Falcon Design Space .+\.exe$') {
+    throw "CraftSeek returned an unexpected Windows filename: '$fileName'."
+  }
+powerShellInstallScript: |
+  $installerPath = Join-Path $PSScriptRoot '<filename>'
+
+  # config.xml pins TargetDir to C:\Program Files\Falcon Design Space, which is also
+  # what the file detection rule looks at.
+  $installRoot = Join-Path $env:ProgramFiles 'Falcon Design Space'
+  $applicationPath = Join-Path $installRoot 'FalconDesignSpace.exe'
+  $maintenanceTool = Join-Path $installRoot 'maintenancetool.exe'
+
+  $process = Start-Process -FilePath $installerPath `
+    -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru
+  $installExitCode = $process.ExitCode
+
+  # The exit code is advisory, not the verdict. IFW finishes by writing the
+  # maintenance tool from a detached restart, and it has been observed returning
+  # non-zero from an install that completed -- so wait for the payload and let the
+  # installed binary decide. Everything after this point is registration the vendor
+  # installer does not do usefully under SYSTEM, so it must run even when the
+  # installer exited non-zero; the previous version of this recipe returned on the
+  # exit code here and skipped all of it.
+  $deadline = (Get-Date).AddSeconds(120)
+  while (-not (Test-Path -LiteralPath $applicationPath -PathType Leaf) -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 5
+  }
+  if (-not (Test-Path -LiteralPath $applicationPath -PathType Leaf)) {
+    throw "The Falcon Design Space installer exited with $installExitCode and did not write '$applicationPath'."
+  }
+  if ($installExitCode -ne 0) {
+    Write-Output "Falcon Design Space installer exited with $installExitCode; '$applicationPath' is present, so the install itself succeeded."
+  }
+
+  # Start Menu, for every user of the device. Named without the version -- unlike the
+  # vendor's "Falcon Design Space <version>" folder -- so an upgrade replaces this
+  # entry instead of stacking a second one beside it.
+  $commonPrograms = [Environment]::GetFolderPath('CommonPrograms')
+  if (-not $commonPrograms) {
+    $commonPrograms = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+  }
+  $shortcutPath = Join-Path $commonPrograms 'Falcon Design Space.lnk'
+
+  $shell = New-Object -ComObject WScript.Shell
+  try {
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $applicationPath
+    $shortcut.WorkingDirectory = $installRoot
+    $shortcut.IconLocation = $applicationPath
+    $shortcut.Description = 'Falcon Design Space'
+    $shortcut.Save()
+  }
+  finally {
+    [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+  }
+
+  # Fail the install if the shortcut did not land: a silently shortcut-less install
+  # is the defect this recipe exists to avoid, so it should be visible in Intune.
+  if (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) {
+    throw "Falcon Design Space installed but the All Users Start Menu shortcut could not be created at '$shortcutPath'."
+  }
+  Write-Output "All Users Start Menu shortcut written to '$shortcutPath'."
+
+  # Apps & Features registration. Drop whatever IFW registered for the installing
+  # profile first -- under SYSTEM it is invisible, and leaving it in place would put
+  # two entries on the machine for one product -- then write a single machine-wide
+  # entry under a version-independent key name so upgrades overwrite it.
+  $arpKeyName = 'FalconDesignSpace'
+  $arpKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$arpKeyName"
+  $arpRoots = @(
+    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($arpRoot in $arpRoots) {
+    foreach ($arpEntry in @(Get-ChildItem -LiteralPath $arpRoot -ErrorAction SilentlyContinue)) {
+      if ($arpEntry.PSChildName -eq $arpKeyName) { continue }
+      $arpProps = Get-ItemProperty -LiteralPath $arpEntry.PSPath -ErrorAction SilentlyContinue
+      if (([string]$arpProps.DisplayName) -notmatch '^Falcon Design Space(?:\s+\d+(?:\.\d+){1,3})?$') { continue }
+      Remove-Item -LiteralPath $arpEntry.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  New-Item -Path $arpKeyPath -Force | Out-Null
+  $uninstallCommand = '"{0}" --default-answer --confirm-command purge' -f $maintenanceTool
+  $arpStrings = [ordered]@{
+    DisplayName          = 'Falcon Design Space'
+    DisplayVersion       = '<version>'
+    Publisher            = 'Creality'
+    InstallLocation      = $installRoot
+    DisplayIcon          = $applicationPath
+    InstallDate          = (Get-Date).ToString('yyyyMMdd')
+    UninstallString      = $uninstallCommand
+    QuietUninstallString = $uninstallCommand
+  }
+  foreach ($arpName in $arpStrings.Keys) {
+    New-ItemProperty -LiteralPath $arpKeyPath -Name $arpName -Value $arpStrings[$arpName] -PropertyType String -Force | Out-Null
+  }
+  foreach ($arpFlag in 'NoModify', 'NoRepair') {
+    New-ItemProperty -LiteralPath $arpKeyPath -Name $arpFlag -Value 1 -PropertyType DWord -Force | Out-Null
+  }
+  $installedBytes = (Get-ChildItem -LiteralPath $installRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+    Measure-Object -Property Length -Sum).Sum
+  if ($installedBytes -gt 0) {
+    New-ItemProperty -LiteralPath $arpKeyPath -Name 'EstimatedSize' -Value ([int]($installedBytes / 1KB)) -PropertyType DWord -Force | Out-Null
+  }
+  Write-Output "Registered Falcon Design Space <version> at '$arpKeyPath'."
+
+  # The vendor's own Start Menu folder and desktop link were created in the
+  # installing profile -- systemprofile under Intune -- so nobody can reach them.
+  # Clear them rather than leaving orphaned links in the SYSTEM profile.
+  $userPrograms = [Environment]::GetFolderPath('Programs')
+  if ($userPrograms -and (Test-Path -LiteralPath $userPrograms)) {
+    Get-ChildItem -LiteralPath $userPrograms -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like 'Falcon Design Space*' } |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  foreach ($desktop in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory'))) {
+    if (-not $desktop) { continue }
+    $desktopShortcut = Join-Path $desktop 'Falcon Design Space.lnk'
+    if (Test-Path -LiteralPath $desktopShortcut) {
+      Remove-Item -LiteralPath $desktopShortcut -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  # Earlier packages of this recipe put the shortcut inside a folder; the flat .lnk
+  # above replaces it.
+  $legacyShortcutDirectory = Join-Path $commonPrograms 'Falcon Design Space'
+  if (Test-Path -LiteralPath $legacyShortcutDirectory -PathType Container) {
+    Remove-Item -LiteralPath $legacyShortcutDirectory -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  exit 0
+powerShellUninstallScript: |
+  $installRoot = Join-Path $env:ProgramFiles 'Falcon Design Space'
+  $applicationPath = Join-Path $installRoot 'FalconDesignSpace.exe'
+  $arpKeyName = 'FalconDesignSpace'
+  $arpRoots = @(
+    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+
+  # Collect every Falcon Design Space registration on the machine: the one this
+  # recipe writes under HKLM, plus anything IFW registered for an installing profile
+  # (including installs made by the previous version of this recipe).
+  $arpEntries = foreach ($arpRoot in $arpRoots) {
+    foreach ($arpEntry in @(Get-ChildItem -LiteralPath $arpRoot -ErrorAction SilentlyContinue)) {
+      $arpProps = Get-ItemProperty -LiteralPath $arpEntry.PSPath -ErrorAction SilentlyContinue
+      if ($arpEntry.PSChildName -eq $arpKeyName -or
+          ([string]$arpProps.DisplayName) -match '^Falcon Design Space(?:\s+\d+(?:\.\d+){1,3})?$') {
+        $arpProps
+      }
+    }
+  }
+  $arpEntries = @($arpEntries)
+
+  # Follow the recorded install location where there is one, then the pinned default.
+  $searchRoots = @($arpEntries | ForEach-Object { [string]$_.InstallLocation }) + $installRoot
+  $maintenanceTool = $searchRoots |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object { Join-Path $_ 'maintenancetool.exe' } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+
+  $uninstallExitCode = 0
+  if ($maintenanceTool) {
+    # The app holds its own install directory open, and IFW cannot purge underneath a
+    # running instance.
+    Get-Process -Name 'FalconDesignSpace' -ErrorAction SilentlyContinue |
+      Stop-Process -Force -ErrorAction SilentlyContinue
+
+    $process = Start-Process -FilePath $maintenanceTool `
+      -ArgumentList '--default-answer', '--confirm-command', 'purge' -Wait -PassThru
+    $uninstallExitCode = $process.ExitCode
+
+    # The maintenance tool relaunches a detached copy of itself to delete the
+    # directory it is running from, so -Wait can return before the tree is gone.
+    $deadline = (Get-Date).AddSeconds(180)
+    while ((Test-Path -LiteralPath $applicationPath) -and (Get-Date) -lt $deadline) {
+      Start-Sleep -Seconds 5
+    }
+  }
+  else {
+    Write-Output 'No Falcon Design Space maintenance tool was found; cleaning up any remaining registration.'
+  }
+
+  # Cleanup the vendor uninstaller does not do, or cannot do from the SYSTEM profile.
+  # This runs regardless of the exit code above -- the check at the end is the verdict.
+  foreach ($arpRoot in $arpRoots) {
+    foreach ($arpEntry in @(Get-ChildItem -LiteralPath $arpRoot -ErrorAction SilentlyContinue)) {
+      $arpProps = Get-ItemProperty -LiteralPath $arpEntry.PSPath -ErrorAction SilentlyContinue
+      if ($arpEntry.PSChildName -eq $arpKeyName -or
+          ([string]$arpProps.DisplayName) -match '^Falcon Design Space(?:\s+\d+(?:\.\d+){1,3})?$') {
+        Remove-Item -LiteralPath $arpEntry.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  $commonPrograms = [Environment]::GetFolderPath('CommonPrograms')
+  if (-not $commonPrograms) {
+    $commonPrograms = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+  }
+  foreach ($shortcutRoot in @($commonPrograms, [Environment]::GetFolderPath('Programs'))) {
+    if (-not $shortcutRoot -or -not (Test-Path -LiteralPath $shortcutRoot)) { continue }
+    Get-ChildItem -LiteralPath $shortcutRoot -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like 'Falcon Design Space*' } |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  foreach ($desktop in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory'))) {
+    if (-not $desktop) { continue }
+    $desktopShortcut = Join-Path $desktop 'Falcon Design Space.lnk'
+    if (Test-Path -LiteralPath $desktopShortcut) {
+      Remove-Item -LiteralPath $desktopShortcut -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  # purge leaves the install root behind when it is not empty; drop it only if it is.
+  if ((Test-Path -LiteralPath $installRoot -PathType Container) -and
+      -not (Get-Item -LiteralPath $installRoot).GetFileSystemInfos()) {
+    Remove-Item -LiteralPath $installRoot -Force -ErrorAction SilentlyContinue
+  }
+
+  if (Test-Path -LiteralPath $applicationPath -PathType Leaf) {
+    throw "Falcon Design Space is still installed at '$applicationPath' after the maintenance tool exited with $uninstallExitCode."
+  }
+  if ($uninstallExitCode -ne 0) {
+    Write-Output "The Falcon Design Space maintenance tool exited with $uninstallExitCode but the product is gone; cleanup completed."
+  }
+  exit 0
+iconFile: falcondesignspace.png
+id: falcondesignspace
+displayName: Falcon Design Space
+publisher: Creality
+description: Creality Falcon software for preparing designs and controlling supported laser engraving and cutting devices.
+fileType: exe
+softwareName: Falcon Design Space
+detectionType: file
+fileDetectionPath: 'C:\Program Files\Falcon Design Space'
+fileDetectionName: FalconDesignSpace.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+installExperience: system
+restartBehavior: suppress
+maximumInstallationTimeInMinutes: 60
+allowUserUninstall: false
+minOSVersion: W10_1607
+architecture: x64
+is32BitApp: false
+scopeTags:
+  - scopeTag1
+  - scopeTag2

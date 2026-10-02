@@ -4,11 +4,12 @@ Rebuilds the Yardstick email report from YLog.log and sends it after the fact.
 
 .DESCRIPTION
 Yardstick normally emails its summary at the end of a run, straight out of the
-in-memory trackers. When that email is skipped (-NoEmail, a declined prompt, an
-Outlook failure, or an aborted run) the results are gone, but the log still has
+in-memory trackers. When that email is skipped (-NoEmail, a declined prompt, a
+delivery failure, or an aborted run) the results are gone, but the log still has
 everything the report needs. This script replays a run out of YLog.log,
 repopulates the same trackers Yardstick.ps1 uses, and hands them to
-Send-YardstickEmailReport.
+Send-YardstickEmailReport, which delivers through the configured
+emailDeliveryMethod.
 
 Only what Write-Log actually recorded can be reconstructed, so a few fields are
 inferred: the failure stage comes from the error text, and the action is
@@ -28,13 +29,14 @@ Text shown in the report header as the parameters of the run. Defaults to a note
 naming the log file and run start time.
 
 .PARAMETER Preview
-Open the message in Outlook for inspection instead of sending it.
+Open the message for inspection instead of sending it - in Outlook, or in the
+default browser for SMTP delivery.
 
 .PARAMETER HtmlOutputPath
 Also write the rendered HTML body here for browser preview.
 
 .PARAMETER ParseOnly
-Print what was parsed out of the log and exit without touching Outlook.
+Print what was parsed out of the log and exit without sending anything.
 
 .EXAMPLE
 .\Send-YardstickLogReport.ps1 -ParseOnly
@@ -68,6 +70,7 @@ $Global:LogLocation = $PSScriptRoot
 $Global:LogFile = 'YEmailReport.log'
 
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
 Import-Module powershell-yaml -Force
 
 
@@ -391,7 +394,7 @@ if ($HtmlOutputPath) { $reportArgs.HtmlOutputPath = $HtmlOutputPath }
 if ($Preview) { $reportArgs.Preview = $true }
 
 if ($Preview) {
-    Write-Host "Opening the reconstructed report in Outlook for preview..."
+    Write-Host "Opening the reconstructed report for preview..."
 } else {
     Write-Host "Sending the reconstructed report..."
 }

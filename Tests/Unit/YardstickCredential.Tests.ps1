@@ -179,3 +179,87 @@ Describe "Send-YardstickCredentialExpiryEmail" {
             Should -BeFalse
     }
 }
+
+Describe "Get-YardstickSmtpCredentialTarget" {
+    It "Falls back to the default target when preferences are empty" {
+        Get-YardstickSmtpCredentialTarget -Preferences @{} | Should -Be 'Yardstick:Smtp'
+    }
+
+    It "Falls back to the default target when preferences are null" {
+        Get-YardstickSmtpCredentialTarget -Preferences $null | Should -Be 'Yardstick:Smtp'
+    }
+
+    It "Honours smtpCredentialTarget from preferences" {
+        Get-YardstickSmtpCredentialTarget -Preferences @{ smtpCredentialTarget = 'Custom:Smtp' } | Should -Be 'Custom:Smtp'
+    }
+
+    It "Ignores a blank smtpCredentialTarget" {
+        Get-YardstickSmtpCredentialTarget -Preferences @{ smtpCredentialTarget = '   ' } | Should -Be 'Yardstick:Smtp'
+    }
+}
+
+Describe "SMTP credential storage round-trip" {
+    BeforeAll {
+        $script:SmtpTarget = "Yardstick:PesterSmtp-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    }
+
+    AfterEach {
+        Remove-YardstickSmtpCredential -Target $script:SmtpTarget -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    It "Returns null when no credential is stored" {
+        Get-YardstickSmtpCredential -Target $script:SmtpTarget | Should -BeNullOrEmpty
+    }
+
+    It "Round-trips the user name and password as a PSCredential" {
+        Set-YardstickSmtpCredential -Target $script:SmtpTarget -UserName 'smtp-user' -Password 'smtp-pass'
+        $cred = Get-YardstickSmtpCredential -Target $script:SmtpTarget
+        $cred | Should -BeOfType [System.Management.Automation.PSCredential]
+        $cred.UserName | Should -Be 'smtp-user'
+        $cred.GetNetworkCredential().Password | Should -Be 'smtp-pass'
+    }
+
+    It "Accepts a SecureString password" {
+        $secure = ConvertTo-SecureString 'secure-pass' -AsPlainText -Force
+        Set-YardstickSmtpCredential -Target $script:SmtpTarget -UserName 'u' -Password $secure
+        (Get-YardstickSmtpCredential -Target $script:SmtpTarget).GetNetworkCredential().Password | Should -Be 'secure-pass'
+    }
+
+    It "Rejects an empty password" {
+        { Set-YardstickSmtpCredential -Target $script:SmtpTarget -UserName 'u' -Password '' } | Should -Throw
+    }
+
+    It "Reports whether a credential was removed" {
+        Set-YardstickSmtpCredential -Target $script:SmtpTarget -UserName 'u' -Password 'p'
+        Remove-YardstickSmtpCredential -Target $script:SmtpTarget | Should -BeTrue
+        Remove-YardstickSmtpCredential -Target $script:SmtpTarget | Should -BeFalse
+    }
+}
+
+Describe "Send-YardstickCredentialExpiryEmail over SMTP" {
+    BeforeAll {
+        Import-Module "$PSScriptRoot\..\..\Modules\YardstickSupport.psm1" -Global -Force
+        $script:cred = [PSCustomObject]@{ Target = 't'; TenantID = 't'; ClientID = 'c'; ClientSecret = 's'; SecretExpiresOn = (Get-Date).AddDays(5); LastNotifiedOn = $null }
+        $script:smtpPrefs = @{ emailNotificationEnabled = $true; emailDeliveryMethod = 'smtp'; adminEmailRecipient = 'admin@x.com' }
+    }
+
+    It "Sends through Send-YardstickSmtpMessage instead of Outlook" {
+        Mock Send-YardstickSmtpMessage {} -ModuleName YardstickCredential
+        Mock Test-OutlookAvailability { $true } -ModuleName YardstickCredential
+
+        Send-YardstickCredentialExpiryEmail -Preferences $script:smtpPrefs -Credential $script:cred -DaysRemaining 5 |
+            Should -BeTrue
+
+        Should -Invoke Send-YardstickSmtpMessage -ModuleName YardstickCredential -Times 1 -Exactly -ParameterFilter {
+            $To -contains 'admin@x.com' -and $Subject -like 'Yardstick: *'
+        }
+        Should -Invoke Test-OutlookAvailability -ModuleName YardstickCredential -Times 0 -Exactly
+    }
+
+    It "Returns false when the SMTP send fails" {
+        Mock Send-YardstickSmtpMessage { throw 'relay denied' } -ModuleName YardstickCredential
+
+        Send-YardstickCredentialExpiryEmail -Preferences $script:smtpPrefs -Credential $script:cred -DaysRemaining 5 -WarningAction SilentlyContinue |
+            Should -BeFalse
+    }
+}

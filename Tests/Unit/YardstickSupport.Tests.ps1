@@ -260,3 +260,122 @@ Describe "Remove-YardstickApp delete retry" {
         }
     }
 }
+
+Describe "Get-YardstickEmailDeliveryMethod" {
+    It "Defaults to outlook when unset" {
+        Get-YardstickEmailDeliveryMethod -Preferences @{} | Should -Be 'outlook'
+    }
+
+    It "Defaults to outlook when preferences are null" {
+        Get-YardstickEmailDeliveryMethod -Preferences $null | Should -Be 'outlook'
+    }
+
+    It "Normalizes case and whitespace" {
+        Get-YardstickEmailDeliveryMethod -Preferences @{ emailDeliveryMethod = ' SMTP ' } | Should -Be 'smtp'
+    }
+}
+
+Describe "Send-YardstickSmtpMessage" {
+    BeforeAll {
+        # Provides Get-YardstickSmtpCredential so it can be mocked.
+        Import-Module "$PSScriptRoot\..\..\Modules\YardstickCredential.psm1" -Global -Force
+    }
+
+    It "Throws when smtpServer is not configured" {
+        InModuleScope YardstickSupport {
+            Mock Send-MailMessage {}
+            { Send-YardstickSmtpMessage -Preferences @{ emailSendFromAddress = 'from@x.com' } -To 'a@x.com' -Subject 's' -HtmlBody 'b' } |
+                Should -Throw '*smtpServer*'
+            Should -Invoke Send-MailMessage -Times 0 -Exactly
+        }
+    }
+
+    It "Sends anonymously on port 25 with the sender display name by default" {
+        InModuleScope YardstickSupport {
+            Mock Send-MailMessage {}
+            Mock Get-YardstickSmtpCredential { $null }
+
+            $prefs = @{ smtpServer = 'smtp.x.com'; emailSendFromAddress = 'from@x.com'; emailSenderName = 'Yardstick' }
+            Send-YardstickSmtpMessage -Preferences $prefs -To @('a@x.com', 'b@x.com') -Subject 'Report' -HtmlBody '<p>hi</p>'
+
+            Should -Invoke Send-MailMessage -Times 1 -Exactly -ParameterFilter {
+                $SmtpServer -eq 'smtp.x.com' -and $Port -eq 25 -and -not $UseSsl -and
+                $From -eq 'Yardstick <from@x.com>' -and $To.Count -eq 2 -and
+                $Subject -eq 'Report' -and $Body -eq '<p>hi</p>' -and $BodyAsHtml -and
+                $null -eq $Credential
+            }
+        }
+    }
+
+    It "Honours smtpPort and smtpUseSsl, and uses the bare address without a sender name" {
+        InModuleScope YardstickSupport {
+            Mock Send-MailMessage {}
+            Mock Get-YardstickSmtpCredential { $null }
+
+            $prefs = @{ smtpServer = 'smtp.x.com'; smtpPort = 587; smtpUseSsl = $true; emailSendFromAddress = 'from@x.com' }
+            Send-YardstickSmtpMessage -Preferences $prefs -To 'a@x.com' -Subject 's' -HtmlBody 'b'
+
+            Should -Invoke Send-MailMessage -Times 1 -Exactly -ParameterFilter {
+                $Port -eq 587 -and $UseSsl -and $From -eq 'from@x.com'
+            }
+        }
+    }
+
+    It "Authenticates with the stored SMTP credential" {
+        InModuleScope YardstickSupport {
+            Mock Send-MailMessage {}
+            Mock Get-YardstickSmtpCredential {
+                [System.Management.Automation.PSCredential]::new('smtp-user', (ConvertTo-SecureString 'p' -AsPlainText -Force))
+            }
+
+            $prefs = @{ smtpServer = 'smtp.x.com'; emailSendFromAddress = 'from@x.com'; smtpCredentialTarget = 'Custom:Smtp' }
+            Send-YardstickSmtpMessage -Preferences $prefs -To 'a@x.com' -Subject 's' -HtmlBody 'b'
+
+            Should -Invoke Get-YardstickSmtpCredential -Times 1 -Exactly -ParameterFilter { $Target -eq 'Custom:Smtp' }
+            Should -Invoke Send-MailMessage -Times 1 -Exactly -ParameterFilter { $Credential.UserName -eq 'smtp-user' }
+        }
+    }
+}
+
+Describe "Send-YardstickEmailReport over SMTP" {
+    It "Sends through Send-YardstickSmtpMessage without touching Outlook or the logo" {
+        InModuleScope YardstickSupport {
+            Mock Write-Log {}
+            Mock Test-OutlookAvailability { $true }
+            Mock Send-YardstickSmtpMessage {}
+
+            Initialize-ApplicationTracker
+            Add-SuccessfulApplication -ApplicationId 'App' -DisplayName 'App' -Version '1.0' -Action 'Updated'
+
+            $prefs = @{
+                emailNotificationEnabled = $true; emailDeliveryMethod = 'smtp'
+                emailRecipient = 'a@x.com'; emailSubject = 'Report'; emailSenderName = 'Yardstick'
+                emailSendFromAddress = 'from@x.com'; smtpServer = 'smtp.x.com'
+            }
+            Send-YardstickEmailReport -Preferences $prefs -RunParameters '-All'
+
+            Should -Invoke Test-OutlookAvailability -Times 0 -Exactly
+            Should -Invoke Send-YardstickSmtpMessage -Times 1 -Exactly -ParameterFilter {
+                $Subject -eq 'Report' -and $To -contains 'a@x.com' -and
+                $HtmlBody -like '*Application Update Report*' -and $HtmlBody -notlike '*cid:*'
+            }
+        }
+    }
+
+    It "Skips sending when smtpServer is missing" {
+        InModuleScope YardstickSupport {
+            Mock Write-Log {}
+            Mock Send-YardstickSmtpMessage {}
+
+            $prefs = @{
+                emailNotificationEnabled = $true; emailDeliveryMethod = 'smtp'
+                emailRecipient = 'a@x.com'; emailSubject = 'Report'; emailSenderName = 'Yardstick'
+                emailSendFromAddress = 'from@x.com'
+            }
+            Send-YardstickEmailReport -Preferences $prefs
+
+            Should -Invoke Send-YardstickSmtpMessage -Times 0 -Exactly
+            Should -Invoke Write-Log -ParameterFilter { $Content -like "*'smtpServer' is required*" }
+        }
+    }
+}

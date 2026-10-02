@@ -10,12 +10,17 @@ new email report formatting:
     should render in scrollable code boxes
   - Multi-line stack-trace style errors on failed apps
 
-By default the email is opened in Outlook for visual inspection (not sent). Pass
--Send to actually deliver to the recipients in Preferences.yaml, or -SaveHtml to
-also dump the rendered body to disk for browser preview.
+By default the email is opened for visual inspection (not sent) - in Outlook, or in
+the default browser when emailDeliveryMethod is 'smtp'. Pass -Send to actually
+deliver to the recipients in Preferences.yaml, or -SaveHtml to also dump the
+rendered body to disk for browser preview.
 
 .PARAMETER TestOutlook
 Only check Outlook COM availability.
+
+.PARAMETER TestSmtp
+Only check the SMTP settings: print the resolved server, port and stored credential,
+and test a TCP connection to the server.
 
 .PARAMETER Send
 Actually send the email instead of opening it for preview.
@@ -26,11 +31,13 @@ Also write the rendered HTML to TestEmailPreview.html in the script directory.
 
 param(
     [Switch]$TestOutlook,
+    [Switch]$TestSmtp,
     [Switch]$Send,
     [Switch]$SaveHtml
 )
 
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Force
+Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Force
 Import-Module powershell-yaml -Force
 
 $Global:LOG_LOCATION = $PSScriptRoot
@@ -48,6 +55,23 @@ try {
     if ($TestOutlook) {
         $outlookAvailable = Test-OutlookAvailability
         Write-Host "Outlook COM object available: $outlookAvailable"
+        return
+    }
+
+    if ($TestSmtp) {
+        $port = if (($prefs.smtpPort -as [int]) -gt 0) { [int]$prefs.smtpPort } else { 25 }
+        $smtpTarget = Get-YardstickSmtpCredentialTarget -Preferences $prefs
+        $smtpCredential = Get-YardstickSmtpCredential -Target $smtpTarget
+        Write-Host "Delivery method: $(Get-YardstickEmailDeliveryMethod -Preferences $prefs)"
+        Write-Host "SMTP server: $($prefs.smtpServer):$port (SSL: $([bool]$prefs.smtpUseSsl))"
+        Write-Host "From: $($prefs.emailSendFromAddress)"
+        Write-Host "Credential ($smtpTarget): $(if ($smtpCredential) { $smtpCredential.UserName } else { 'none - anonymous relay' })"
+        if (-not $prefs.smtpServer) {
+            Write-Host "smtpServer is not configured."
+            return
+        }
+        $reachable = Test-NetConnection -ComputerName $prefs.smtpServer -Port $port -InformationLevel Quiet -WarningAction SilentlyContinue
+        Write-Host "TCP connection to $($prefs.smtpServer):$port succeeded: $reachable"
         return
     }
 
@@ -127,7 +151,7 @@ Inner exception:
         Write-Host "Sending test email report..."
         Send-YardstickEmailReport -Preferences $prefs -RunParameters $testParams -HtmlOutputPath $htmlOutPath
     } else {
-        Write-Host "Opening test email report in Outlook for preview (use -Send to actually deliver)..."
+        Write-Host "Opening test email report for preview (use -Send to actually deliver)..."
         Send-YardstickEmailReport -Preferences $prefs -RunParameters $testParams -Preview -HtmlOutputPath $htmlOutPath
     }
 
