@@ -1,11 +1,49 @@
-url: 
+url:
 urlRedirects: false
 preDownloadScript: |
-  $URL = "https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html"
-  $Content = Invoke-WebRequest -Uri $URL
-  $URL = ($Content.links | Where-Object href -match "putty-64bit-[0-9]{1}\.[0-9]{1,3}-installer.msi$").href
+  # chiark is PuTTY's canonical home and stays the primary source. It has also
+  # had multi-hour outages on 2026-09-28 and 2026-09-29 - DNS resolving fine
+  # while both :80 and :443 time out - which failed this recipe outright on both
+  # days. the.earth.li is the project's long-standing mirror and serves the same
+  # author-signed MSI (Authenticode CN=Simon Tatham, verified against 0.85), so
+  # it stands in rather than losing a day's update to someone else's outage.
+  $canonicalUrl = "https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html"
+  $mirrorUrl = "https://the.earth.li/~sgtatham/putty/latest/w64/putty-64bit-installer.msi"
+  $URL = $null
+  try {
+    # -UseBasicParsing is a no-op under PowerShell 7, which is what the scheduled
+    # run uses, but Windows PowerShell 5.1 otherwise hands the response to its IE
+    # parser and can fail with a NullReferenceException that reads nothing like
+    # the outage it is actually reporting. -TimeoutSec bounds a half-open
+    # connection: chiark's outages present as a TCP connect that never completes,
+    # and without this the whole nightly run waits on it.
+    $Content = Invoke-WebRequest -Uri $canonicalUrl -UseBasicParsing -TimeoutSec 60
+    $URL = ($Content.links | Where-Object href -match "putty-64bit-[0-9]{1}\.[0-9]{1,3}-installer.msi$").href
+    if (-not $URL) { throw "No 64-bit installer link was found on $canonicalUrl." }
+  } catch {
+    Write-Log "PuTTY: chiark did not answer ($($_.Exception.Message)). Falling back to the the.earth.li mirror."
+    # The mirror's latest/ path redirects to the versioned one, so resolving the
+    # redirect is what yields the version - there is no version listing to read.
+    # Done with HttpWebRequest rather than Invoke-WebRequest because the resolved
+    # address has to be read back off the response, and Invoke-WebRequest exposes
+    # it differently per host: BaseResponse is an HttpWebResponse (.ResponseUri)
+    # on Windows PowerShell 5.1 and an HttpResponseMessage
+    # (.RequestMessage.RequestUri) on 7. Worse, 5.1 throws
+    # NullReferenceException on a HEAD unless -UseBasicParsing is passed, because
+    # its HTML parser has no body to work on. HttpWebRequest behaves identically
+    # on both.
+    $request = [System.Net.HttpWebRequest]::Create($mirrorUrl)
+    $request.Method = 'HEAD'
+    $request.AllowAutoRedirect = $true
+    $request.MaximumAutomaticRedirections = 5
+    $response = $request.GetResponse()
+    try { $URL = $response.ResponseUri.AbsoluteUri } finally { $response.Close() }
+  }
   $filename = $URL.split("/")[-1]
   $Version = $filename.split("-")[2]
+  # Both sources are parsed by position, so a layout change upstream would
+  # otherwise publish a package named after whatever landed in that field.
+  if ($Version -notmatch '^[0-9]+\.[0-9]{1,3}$') { throw "Unexpected PuTTY version string '$Version' parsed from $URL." }
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
 version:
