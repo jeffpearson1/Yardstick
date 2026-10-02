@@ -55,6 +55,53 @@ function Expand-RecipeToken {
     return $result
 }
 
+function Add-NativeBitnessGuard {
+    <#
+    .SYNOPSIS
+    Prepends the 32-bit re-launch guard to a generated install.ps1/uninstall.ps1.
+    Mirrors Add-NativeBitnessGuard in Yardstick.ps1.
+
+    .DESCRIPTION
+    Yardstick adds this preamble to every .ps1 it writes into a package, because
+    the 32-bit Intune Management Extension would otherwise run the script under
+    WOW64 redirection. The harness has to write byte-identical scripts or it
+    stops reproducing what actually ships: a recipe whose uninstaller depends on
+    the native registry view would pass here and fail in the tenant.
+
+    Keep this in sync with the Yardstick.ps1 copy. If the two drift, the harness
+    silently tests something other than the shipped package.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $ScriptContent
+    )
+
+    $guard = @'
+# --- Begin Yardstick native-bitness guard (generated - do not edit) ---
+# The Intune Management Extension is 32-bit, so the generated command line
+# starts this script under WOW64: HKLM:\SOFTWARE reads are redirected to
+# WOW6432Node and 64-bit install paths are hidden. Re-launch once natively so
+# the script sees the real machine.
+if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem) {
+    $yardstickNativePowerShell = Join-Path $env:SystemRoot 'sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $yardstickNativePowerShell) {
+        $yardstickChild = Start-Process -FilePath $yardstickNativePowerShell -Wait -PassThru -NoNewWindow `
+            -WorkingDirectory (Get-Location -PSProvider FileSystem).ProviderPath `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
+        exit $yardstickChild.ExitCode
+    }
+    Write-Output 'WARNING: running 32-bit and native PowerShell was not found; continuing under WOW64 redirection.'
+}
+# --- End Yardstick native-bitness guard ---
+
+'@
+
+    return $guard + $ScriptContent
+}
+
 function ConvertTo-ComparableVersion {
     <#
     .SYNOPSIS
@@ -267,6 +314,10 @@ function Invoke-TestProcess {
     if ($null -ne $noCurrentDir) { Remove-Item Env:\NoDefaultCurrentDirectoryInExePath -ErrorAction SilentlyContinue }
     try {
         $process = Start-Process @startParams
+        # Reading .Handle caches the native handle on the Process object. Without
+        # it, Windows PowerShell 5.1 hands back a process whose .ExitCode reads as
+        # $null once the child exits, so every phase would report "exit=" and fail.
+        $null = $process.Handle
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             $timedOut = $true
             try {
@@ -310,6 +361,15 @@ function Invoke-CommandLine {
     double quotes, which corrupts command lines such as
     "%LocalAppData%\...\Uninstall App.exe" /S. A batch file receives the text
     verbatim and still expands %ENVVAR% references.
+
+    .PARAMETER AgentBitness
+    Which cmd.exe hosts the command line. The Intune Management Extension is a
+    32-bit process, so everything it launches inherits WOW64 redirection: a bare
+    "powershell.exe" resolves to SysWOW64, %ProgramFiles% is the x86 tree, and
+    HKLM\SOFTWARE\...\Uninstall is redirected into WOW6432Node. 'x86' is the
+    default because reproducing that is the whole point - a recipe that only
+    works under a native 64-bit host passes here and then fails in Intune.
+    Use 'x64' to confirm that a failure really is a bitness problem.
     #>
     [CmdletBinding()]
     param(
@@ -317,7 +377,9 @@ function Invoke-CommandLine {
         [Parameter(Mandatory)][string] $WorkingDirectory,
         [int] $TimeoutSeconds = 1800,
         [Parameter(Mandatory)][string] $LogDirectory,
-        [Parameter(Mandatory)][string] $LogName
+        [Parameter(Mandatory)][string] $LogName,
+        [ValidateSet('x86', 'x64')]
+        [string] $AgentBitness = 'x86'
     )
 
     New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
@@ -330,7 +392,22 @@ function Invoke-CommandLine {
     )
     Set-Content -LiteralPath $batchPath -Value $batchLines -Encoding ASCII
 
-    $run = Invoke-TestProcess -FilePath "$env:SystemRoot\System32\cmd.exe" `
+    # SysWOW64\cmd.exe is the 32-bit binary and is addressable by that literal
+    # path from a 64-bit process. Going the other way needs sysnative, which only
+    # exists inside a 32-bit process - hence the branch rather than a lookup.
+    $cmdPath = if ($AgentBitness -eq 'x86' -and [Environment]::Is64BitOperatingSystem) {
+        Join-Path $env:SystemRoot 'SysWOW64\cmd.exe'
+    } elseif ($AgentBitness -eq 'x64' -and -not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem) {
+        Join-Path $env:SystemRoot 'sysnative\cmd.exe'
+    } else {
+        Join-Path $env:SystemRoot 'System32\cmd.exe'
+    }
+    if (-not (Test-Path -LiteralPath $cmdPath)) {
+        Write-Warning "cmd.exe for '$AgentBitness' was not found at '$cmdPath'; falling back to the host's native cmd.exe."
+        $cmdPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    }
+
+    $run = Invoke-TestProcess -FilePath $cmdPath `
         -ArgumentList @('/d', '/c', $batchPath) `
         -WorkingDirectory $WorkingDirectory `
         -TimeoutSeconds $TimeoutSeconds `
@@ -339,6 +416,7 @@ function Invoke-CommandLine {
 
     $run | Add-Member -NotePropertyName CommandLine -NotePropertyValue $CommandLine -Force
     $run | Add-Member -NotePropertyName BatchFile -NotePropertyValue $batchPath -Force
+    $run | Add-Member -NotePropertyName AgentBitness -NotePropertyValue $AgentBitness -Force
     return $run
 }
 
@@ -575,6 +653,6 @@ function Test-RecipeDetection {
 }
 
 Export-ModuleMember -Function Test-IsElevated, Expand-RecipeString, Expand-RecipeToken,
-ConvertTo-ComparableVersion, Compare-DetectionValue, Get-InstalledPackage, Get-SystemSnapshot,
-Compare-SystemSnapshot, Invoke-TestProcess, Invoke-CommandLine, Invoke-DetectionScript,
-Get-RegistryValueForDetection, Test-RecipeDetection
+Add-NativeBitnessGuard, ConvertTo-ComparableVersion, Compare-DetectionValue, Get-InstalledPackage,
+Get-SystemSnapshot, Compare-SystemSnapshot, Invoke-TestProcess, Invoke-CommandLine,
+Invoke-DetectionScript, Get-RegistryValueForDetection, Test-RecipeDetection

@@ -248,6 +248,65 @@ Use for:
 - Auto-generates `uninstallScript` as: `powershell.exe -noprofile -executionpolicy bypass -file .\uninstall.ps1`
 - Only auto-generates if `uninstallScript` is not also set
 
+#### Execution bitness (important)
+
+The Intune Management Extension is a **32-bit process**, and everything it
+launches inherits that. A bare `powershell.exe` resolves by `PATH`, which under
+WOW64 means `SysWOW64` - so your script runs 32-bit and sees a *redirected*
+machine:
+
+| What you read | What a 32-bit script actually gets |
+| --- | --- |
+| `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall` | the `WOW6432Node` view - a 64-bit app's ARP key is **invisible** |
+| `HKLM:\SOFTWARE\Vendor\Product` | `HKLM:\SOFTWARE\WOW6432Node\Vendor\Product` |
+| `[Environment]::GetFolderPath('ProgramFiles')` | `C:\Program Files (x86)` |
+| `C:\Windows\System32\...` | `C:\Windows\SysWOW64\...` |
+
+Note that `$env:ProgramFiles` is *inherited* from the parent's environment block
+rather than rewritten by WOW64, so it is not a reliable signal either way - do
+not use its value to infer which bitness you are running in.
+
+This is a silent failure mode, not a loud one. A typical uninstaller looks up the
+ARP key, finds nothing, falls through to its cleanup branch where every
+`Remove-Item` is `-ErrorAction SilentlyContinue`, and then `exit 0`. Intune
+records "uninstall succeeded" while detection keeps finding the app.
+
+**Yardstick handles this for you.** Every generated `install.ps1` and
+`uninstall.ps1` gets a guard prepended that re-launches the script once under
+native PowerShell and propagates the child's exit code, so by the time your code
+runs the process is 64-bit. You do not need to add one.
+
+Two consequences worth knowing:
+
+- The `.ps1` in the buildspace is **not** byte-identical to your recipe YAML. It
+  has a clearly delimited `--- Begin Yardstick native-bitness guard ---` preamble,
+  which offsets line numbers in any error message that reports one.
+- The guard is a script preamble, not a `%SystemRoot%\sysnative\...` command line,
+  because `sysnative` is a virtual alias that **only exists inside a 32-bit
+  process**. A sysnative command line is correct under the Management Extension
+  but fails outright under any 64-bit caller - including the test harness's
+  `-AgentBitness x64` mode. The preamble is correct in both.
+
+If you set `installScript`/`uninstallScript` explicitly you are overriding the
+generated command line, but the guard is still present in the `.ps1`, so pointing
+your own command line at a bare `powershell.exe` is fine.
+
+**Write the exit code honestly.** Intune reads it. An unconditional `exit 0` at
+the end of an uninstaller is what let this bug class go unnoticed - verify the
+removal actually happened and exit non-zero if it did not:
+
+```yaml
+powerShellUninstallScript: |
+  # ... removal work ...
+  $stillOnDisk = Test-Path -LiteralPath (Join-Path $appRoot 'bin\App.exe')
+  $stillRegistered = Test-Path -LiteralPath $arpKey
+  if ($stillOnDisk -or $stillRegistered) {
+    Write-Output "App is still present (onDisk=$stillOnDisk registered=$stillRegistered)."
+    exit 1
+  }
+  exit 0
+```
+
 **Example (QGIS):**
 ```yaml
 powershellInstallScript: |

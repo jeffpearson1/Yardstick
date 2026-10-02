@@ -18,6 +18,12 @@ For each recipe the harness runs these phases:
   8. PostUninstall - detection rule must report Not Detected again
   9. Residue       - registry and directory leftovers after uninstall
 
+Install and uninstall command lines run through 32-bit cmd.exe by default,
+because the Intune Management Extension is a 32-bit process and everything it
+launches inherits WOW64 redirection. Running them natively would let a recipe
+that mishandles $env:ProgramFiles or the Uninstall hive pass here and then do
+nothing on a real client. See -AgentBitness.
+
 Everything is written to artifacts\_install-tests\<timestamp>\ as JSON, a
 markdown summary, and raw installer logs. Nothing is uploaded anywhere.
 
@@ -29,6 +35,10 @@ markdown summary, and raw installer logs. Nothing is uploaded anywhere.
 
 .EXAMPLE
     .\Invoke-RecipeInstallTest.ps1 -All -WhatIf
+
+.EXAMPLE
+    # Re-run a failure natively to confirm the cause really is bitness.
+    .\Invoke-RecipeInstallTest.ps1 -Id r -AgentBitness x64
 #>
 [CmdletBinding(DefaultParameterSetName = 'ById', SupportsShouldProcess)]
 param(
@@ -77,6 +87,15 @@ param(
 
     # Never relaunch elevated. System-context recipes are reported as skipped.
     [switch] $NoElevate,
+
+    # Bitness of the cmd.exe that hosts the install and uninstall command lines.
+    # Intune's Management Extension is 32-bit, so 'x86' is what the client
+    # actually does and is the default: a recipe that resolves $env:ProgramFiles
+    # or HKLM\SOFTWARE\...\Uninstall without accounting for WOW64 redirection
+    # fails here instead of silently reporting success in Intune. Re-run a
+    # failure with 'x64' to confirm bitness is the cause.
+    [ValidateSet('x86', 'x64')]
+    [string] $AgentBitness = 'x86',
 
     [string] $YardstickDevPath,
 
@@ -222,13 +241,18 @@ function Invoke-ElevatedBatch {
     $childArgs.AddRange([string[]]@('-InstallTimeoutMinutes', "$InstallTimeoutMinutes"))
     $childArgs.AddRange([string[]]@('-DetectionSettleSeconds', "$DetectionSettleSeconds"))
     $childArgs.AddRange([string[]]@('-ResidueSettleSeconds', "$ResidueSettleSeconds"))
+    $childArgs.AddRange([string[]]@('-AgentBitness', $AgentBitness))
     $childArgs.AddRange([string[]]@('-YardstickDevPath', $YardstickDevPath))
     $childArgs.AddRange([string[]]@('-RecipesPath', $workspaceRecipes))
     $childArgs.AddRange([string[]]@('-IconsPath', $workspaceIcons))
     $childArgs.AddRange([string[]]@('-ArtifactsPath', $artifactsRoot))
     $childArgs.AddRange([string[]]@('-RunRoot', $childRoot, '-ElevatedChild'))
 
-    $psHost = [Environment]::ProcessPath
+    # [Environment]::ProcessPath is .NET 5+, so it does not exist under Windows
+    # PowerShell 5.1 and Set-StrictMode turns the missing member into a
+    # terminating error. Swallow that so the Get-Process fallback can run.
+    $psHost = $null
+    try { $psHost = [Environment]::ProcessPath } catch { $psHost = $null }
     if (-not $psHost -or -not (Test-Path -LiteralPath $psHost)) { $psHost = (Get-Process -Id $PID).Path }
 
     Write-Host ""
@@ -514,7 +538,7 @@ function Test-Recipe {
             $installCommand = Expand-RecipeToken -Value ([string]$recipe['installScript']) @tokenArgs
         } elseif ($recipe.ContainsKey('powerShellInstallScript') -and $recipe['powerShellInstallScript']) {
             $content = Expand-RecipeToken -Value ([string]$recipe['powerShellInstallScript']) @tokenArgs
-            Set-Content -LiteralPath (Join-Path $harnessBuildDirectory 'install.ps1') -Value $content -Encoding UTF8
+            Set-Content -LiteralPath (Join-Path $harnessBuildDirectory 'install.ps1') -Value (Add-NativeBitnessGuard -ScriptContent $content) -Encoding UTF8
             $installCommand = 'powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1'
         }
         if (-not $installCommand) { throw 'Recipe has neither installScript nor powerShellInstallScript.' }
@@ -525,7 +549,7 @@ function Test-Recipe {
             $uninstallCommand = Expand-RecipeToken -Value ([string]$recipe['uninstallScript']) @tokenArgs
         } elseif ($recipe.ContainsKey('powerShellUninstallScript') -and $recipe['powerShellUninstallScript']) {
             $content = Expand-RecipeToken -Value ([string]$recipe['powerShellUninstallScript']) @tokenArgs
-            Set-Content -LiteralPath (Join-Path $harnessBuildDirectory 'uninstall.ps1') -Value $content -Encoding UTF8
+            Set-Content -LiteralPath (Join-Path $harnessBuildDirectory 'uninstall.ps1') -Value (Add-NativeBitnessGuard -ScriptContent $content) -Encoding UTF8
             $uninstallCommand = 'powershell.exe -noprofile -executionpolicy bypass -file .\uninstall.ps1'
         }
         $result['UninstallCommand'] = $uninstallCommand
@@ -567,8 +591,8 @@ function Test-Recipe {
         }
 
         if ($requestedWhatIf) {
-            $phases.Add((New-PhaseResult -Name 'Install' -Status 'Skip' -Detail "WhatIf: would run '$installCommand'"))
-            $phases.Add((New-PhaseResult -Name 'Uninstall' -Status 'Skip' -Detail "WhatIf: would run '$uninstallCommand'"))
+            $phases.Add((New-PhaseResult -Name 'Install' -Status 'Skip' -Detail "WhatIf: would run '$installCommand' via $AgentBitness cmd.exe"))
+            $phases.Add((New-PhaseResult -Name 'Uninstall' -Status 'Skip' -Detail "WhatIf: would run '$uninstallCommand' via $AgentBitness cmd.exe"))
             $result['Overall'] = 'WhatIf'
             return [PSCustomObject]$result
         }
@@ -583,10 +607,10 @@ function Test-Recipe {
 
         # -- Phase: Install ---------------------------------------------------
         $install = Invoke-CommandLine -CommandLine $installCommand -WorkingDirectory $harnessBuildDirectory `
-            -TimeoutSeconds $timeoutSeconds -LogDirectory $logRoot -LogName 'install'
+            -TimeoutSeconds $timeoutSeconds -LogDirectory $logRoot -LogName 'install' -AgentBitness $AgentBitness
         $installOk = (-not $install.TimedOut) -and ($install.ExitCode -in 0, 1641, 3010)
         $phases.Add((New-PhaseResult -Name 'Install' -Status $(if ($installOk) { 'Pass' } else { 'Fail' }) `
-                    -Detail "exit=$($install.ExitCode) timedOut=$($install.TimedOut) cmd='$installCommand'" -DurationSec $install.DurationSec))
+                    -Detail "exit=$($install.ExitCode) timedOut=$($install.TimedOut) host=$AgentBitness cmd='$installCommand'" -DurationSec $install.DurationSec))
 
         # -- Phase: PostDetect ------------------------------------------------
         $post = Wait-ForDetectionState -DetectionArgs $detectionArgs -ExpectDetected $true `
@@ -600,7 +624,7 @@ function Test-Recipe {
         # -- Phase: Reinstall (optional) --------------------------------------
         if ($IncludeReinstall -and $installOk) {
             $reinstall = Invoke-CommandLine -CommandLine $installCommand -WorkingDirectory $harnessBuildDirectory `
-                -TimeoutSeconds $timeoutSeconds -LogDirectory $logRoot -LogName 'reinstall'
+                -TimeoutSeconds $timeoutSeconds -LogDirectory $logRoot -LogName 'reinstall' -AgentBitness $AgentBitness
             $reinstallOk = (-not $reinstall.TimedOut) -and ($reinstall.ExitCode -in 0, 1641, 3010)
             $reDetect = Wait-ForDetectionState -DetectionArgs $detectionArgs -ExpectDetected $true `
                 -LogDirectory $logRoot -LogName 'detect-post-reinstall' -TimeoutSeconds $DetectionSettleSeconds
@@ -615,10 +639,10 @@ function Test-Recipe {
             $phases.Add((New-PhaseResult -Name 'Uninstall' -Status 'Fail' -Detail 'Recipe has neither uninstallScript nor powerShellUninstallScript'))
         } else {
             $uninstall = Invoke-CommandLine -CommandLine $uninstallCommand -WorkingDirectory $harnessBuildDirectory `
-                -TimeoutSeconds $timeoutSeconds -LogDirectory $logRoot -LogName 'uninstall'
+                -TimeoutSeconds $timeoutSeconds -LogDirectory $logRoot -LogName 'uninstall' -AgentBitness $AgentBitness
             $uninstallOk = (-not $uninstall.TimedOut) -and ($uninstall.ExitCode -in 0, 1605, 1641, 3010)
             $phases.Add((New-PhaseResult -Name 'Uninstall' -Status $(if ($uninstallOk) { 'Pass' } else { 'Fail' }) `
-                        -Detail "exit=$($uninstall.ExitCode) timedOut=$($uninstall.TimedOut) cmd='$uninstallCommand'" -DurationSec $uninstall.DurationSec))
+                        -Detail "exit=$($uninstall.ExitCode) timedOut=$($uninstall.TimedOut) host=$AgentBitness cmd='$uninstallCommand'" -DurationSec $uninstall.DurationSec))
 
             # -- Phase: PostUninstallDetect ------------------------------------
             $postUninstall = Wait-ForDetectionState -DetectionArgs $detectionArgs -ExpectDetected $false `
@@ -751,7 +775,13 @@ if ($delegateSystemRecipes) {
 # Restore the caller's requested order regardless of which context ran each recipe.
 $order = @{}
 for ($i = 0; $i -lt $recipePaths.Count; $i++) { $order[[IO.Path]::GetFileNameWithoutExtension($recipePaths[$i])] = $i }
-$results = [Collections.Generic.List[psobject]]@($results | Sort-Object { if ($order.ContainsKey($_.Id)) { $order[$_.Id] } else { [int]::MaxValue } })
+# Built through the IEnumerable<T> constructor rather than a cast: Windows
+# PowerShell 5.1 converts an object[] to List[psobject] by storing the array as a
+# single element instead of enumerating it, which leaves one nested collection
+# that Sort-Object cannot read .Id from and that ConvertTo-Json writes out as
+# {"value":[...],"Count":n}. PowerShell 7 enumerates, so this only bites on 5.1.
+$results = [Collections.Generic.List[psobject]]::new(
+    [psobject[]]@($results | Sort-Object { if ($order.ContainsKey($_.Id)) { $order[$_.Id] } else { [int]::MaxValue } }))
 
 $summary = [PSCustomObject]@{
     RunRoot     = $RunRoot
@@ -767,6 +797,7 @@ $markdown.Add("# Recipe install test run")
 $markdown.Add("")
 $markdown.Add("- Machine: $env:COMPUTERNAME")
 $markdown.Add("- Elevated: $(Test-IsElevated)")
+$markdown.Add("- Command host: $AgentBitness cmd.exe$(if ($AgentBitness -eq 'x86') { ' (matches the 32-bit Intune Management Extension)' } else { ' (NOT what Intune does - diagnostic only)' })")
 $markdown.Add("- Results: $RunRoot")
 $markdown.Add("")
 $markdown.Add("| Recipe | Version | Context | Result | Failed or warned phases |")

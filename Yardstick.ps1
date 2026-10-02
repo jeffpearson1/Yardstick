@@ -921,7 +921,12 @@ function Set-ScriptVariables {
         [bool]$Preferences.useDetectAnchor
     } else { $true }
 
-    # Handle PowerShell Script batch handoff
+    # Handle PowerShell Script batch handoff.
+    # "powershell.exe" is left bare on purpose. It resolves to SysWOW64 under the
+    # 32-bit Management Extension, which is wrong, but the correction belongs in
+    # the script (see Add-NativeBitnessGuard) rather than here: a
+    # "%SystemRoot%\sysnative\..." command line only resolves inside a 32-bit
+    # process and fails outright under a 64-bit caller.
     if (($Script:PowerShellInstallScript) -and (!$Script:InstallScript)) {
         $Script:InstallScript = "powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1"
     }
@@ -1114,6 +1119,72 @@ function Update-ScriptPlaceholders {
     if ($Script:RegistryDetectionKey) {
         $Script:RegistryDetectionKey = $Script:RegistryDetectionKey.replace("<version>", $Version)
     }
+}
+
+
+
+function Add-NativeBitnessGuard {
+    <#
+    .SYNOPSIS
+    Prepends a 32-bit re-launch guard to a generated install.ps1/uninstall.ps1.
+
+    .DESCRIPTION
+    The Intune Management Extension is a 32-bit process, and the command lines
+    Yardstick auto-generates for powerShellInstallScript/powerShellUninstallScript
+    invoke a bare "powershell.exe". A bare name resolves by PATH, which under
+    WOW64 means SysWOW64 - so the script runs 32-bit and silently sees a
+    redirected machine: HKLM:\SOFTWARE\... reads come from WOW6432Node, and a
+    64-bit application's ARP key and install directory are simply invisible. An
+    uninstaller written against those paths then finds nothing, removes nothing,
+    and exits 0, so Intune reports success while the app is still installed.
+
+    The guard re-launches the script once under native PowerShell and propagates
+    the child's exit code. It is deliberately a script preamble rather than a
+    "%SystemRoot%\sysnative\..." command line: sysnative is a virtual alias that
+    exists only inside a 32-bit process, so a sysnative command line fails
+    outright whenever the caller is already 64-bit. The preamble is correct in
+    both cases, which keeps these packages testable by the recipe harness and
+    keeps them working if the Management Extension ever ships 64-bit.
+
+    .PARAMETER ScriptContent
+    The recipe-authored script body, after placeholder replacement.
+
+    .OUTPUTS
+    The script body with the guard prepended.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $ScriptContent
+    )
+
+    # -WorkingDirectory is passed explicitly because Start-Process otherwise
+    # resolves against the PowerShell provider location, which is not reliably
+    # the package directory the cmd wrapper cd'd into. Install scripts routinely
+    # reference the payload by a relative path, so this has to survive.
+    $guard = @'
+# --- Begin Yardstick native-bitness guard (generated - do not edit) ---
+# The Intune Management Extension is 32-bit, so the generated command line
+# starts this script under WOW64: HKLM:\SOFTWARE reads are redirected to
+# WOW6432Node and 64-bit install paths are hidden. Re-launch once natively so
+# the script sees the real machine.
+if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem) {
+    $yardstickNativePowerShell = Join-Path $env:SystemRoot 'sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $yardstickNativePowerShell) {
+        $yardstickChild = Start-Process -FilePath $yardstickNativePowerShell -Wait -PassThru -NoNewWindow `
+            -WorkingDirectory (Get-Location -PSProvider FileSystem).ProviderPath `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
+        exit $yardstickChild.ExitCode
+    }
+    Write-Output 'WARNING: running 32-bit and native PowerShell was not found; continuing under WOW64 redirection.'
+}
+# --- End Yardstick native-bitness guard ---
+
+'@
+
+    return $guard + $ScriptContent
 }
 
 
@@ -1594,13 +1665,16 @@ foreach ($AppId_Processing in $Applications) {
             continue
         }
 
-        # Write the contents of the install and uninstall scripts to files if they are PowerShell scripts
+        # Write the contents of the install and uninstall scripts to files if they are PowerShell scripts.
+        # Add-NativeBitnessGuard is applied here rather than at assignment so the
+        # recipe-authored text stays intact for logging and the placeholder audit
+        # above; only the file that actually ships in the package carries it.
         if ($Script:PowerShellInstallScript) {
-            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\install.ps1 -Value $Script:PowerShellInstallScript -Force
+            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\install.ps1 -Value (Add-NativeBitnessGuard -ScriptContent $Script:PowerShellInstallScript) -Force
         }
 
         if ($Script:PowerShellUninstallScript) {
-            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\uninstall.ps1 -Value $Script:PowerShellUninstallScript -Force
+            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\uninstall.ps1 -Value (Add-NativeBitnessGuard -ScriptContent $Script:PowerShellUninstallScript) -Force
         }
 
         # Generate the .intunewin file
