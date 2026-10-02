@@ -66,6 +66,7 @@ foreach ($target in $targets) {
 
 ## Important Harness and Installer Lessons
 
+- Check `$env:PATHEXT` before trusting a harness failure. An agent driving the harness through a Git Bash shell inherits `PATHEXT=.CPL`, which overrides the machine value (`.COM;.EXE;.BAT;...`). PowerShell then stops recognizing `.exe` as executable and routes native commands through ShellExecute, so anything of the form `& $exe ... | Out-Null` dies with *"Cannot run a document in the middle of a pipeline"*. This looks exactly like a recipe bug and is not one. Export the real `PATHEXT` before launching, and do not "fix" a recipe on this evidence.
 - Do not run a live batch while another installer is active. Windows Installer error `1618` means another MSI transaction owns the global lock. Let the unrelated installer and the current harness exit before retrying; do not immediately alter a recipe based on a collision.
 - Keep the parent harness process alive. Output from the elevated child may not stream until it exits, but progress is visible under the current artifact directory.
 - Do not start a second harness while the first elevated child is still running.

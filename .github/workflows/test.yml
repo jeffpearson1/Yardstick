@@ -16,6 +16,9 @@ jobs:
       - name: Install modules
         shell: pwsh
         run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
           Install-Module -Name powershell-yaml -Force -Scope CurrentUser
@@ -47,6 +50,9 @@ jobs:
       - name: Install PSScriptAnalyzer
         shell: pwsh
         run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
 
@@ -94,6 +100,9 @@ jobs:
       - name: Install powershell-yaml
         shell: pwsh
         run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module -Name powershell-yaml -Force -Scope CurrentUser
 

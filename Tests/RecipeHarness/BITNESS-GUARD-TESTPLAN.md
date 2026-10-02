@@ -29,28 +29,33 @@ succeeded without the guard. The 229-vs-411 result is the isolating evidence.
 The guard now applies to **87 recipes** using `powerShellUninstallScript` and
 **38** using `powerShellInstallScript`. Exactly one of them (`r`) has been run.
 
-### Priority 1 — known regression risk
+### Priority 1 — known regression risk (code fixed, live test still owed)
 
 The guard *changes* behaviour for any recipe that implicitly relied on running
 32-bit. `[Environment]::GetFolderPath('ProgramFiles')` is the dangerous call: it
-returns `C:\Program Files (x86)` in a 32-bit process and `C:\Program Files` in a
-64-bit one. A static sweep of all `powerShell*Script` recipes found one user:
+returns `C:\Program Files` in a 64-bit process and `C:\Program Files (x86)` in a
+32-bit one. A static sweep of all `powerShell*Script` recipes found one user:
+**`actilife.yaml`**, in `powerShellUninstallScript`.
 
-- **`actilife.yaml`** — uses it in two places in `powerShellUninstallScript`:
-  - `$driverDir = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'ActiGraph\Drivers'`
-  - the `ActiGraph` entry in `$pruneRoots`
+Both uses have been rewritten to derive from `$installDir`, which comes from the
+ARP registration and is therefore correct under either bitness (and follows a
+non-default install directory, which the hardcoded root never did):
 
-  ActiLife appears to be an x86-registered app (the uninstaller fallback searches
-  `ProgramFilesX86` first). If its drivers live under `C:\Program Files (x86)`,
-  then post-change these two lookups point at the wrong directory. Both are
-  `Test-Path`-guarded and the final verdict is ARP-based, so **the uninstall
-  would still report success while silently skipping the driver uninstall and
-  leaving the directory behind.** The harness Residue phase should catch it.
+- `$vendorRoot = Split-Path -Parent $installDir`, with
+  `$driverDir = Join-Path $vendorRoot 'Drivers'`
+- the `$pruneRoots` entry now uses `$vendorRoot`; the hardcoded
+  `ProgramFiles\ActiGraph` entry it duplicated was dropped
 
-  Test: `-Id actilife`, compare `-AgentBitness x86` against the pre-change
-  behaviour, and check the Residue phase for a leftover `ActiGraph` directory.
-  If confirmed, pin both lines to `GetFolderPath('ProgramFilesX86')` rather than
-  reverting the guard.
+The recipe's uninstaller fallback (lines ~179-182) enumerates **both**
+`ProgramFilesX86` and `ProgramFiles` through `Select-Object -Unique`. Under 32-bit
+those two collapsed to one entry and the native root was never searched, so the
+guard improves that path rather than endangering it.
+
+**Still owed:** a live uninstall run confirming `DriverUninstaller.exe` is found
+and no `ActiGraph` directory survives. That has **not** been done — ActiLife's
+bundled .NET Framework prerequisite check fails on Windows Server (recorded at the
+top of the recipe), which is the only test host available here, so this needs a
+Windows 10/11 box. Watch the Residue phase for a leftover `ActiGraph` directory.
 
 Recipes naming `ProgramFilesX86` / `Program Files (x86)` *explicitly* are not at
 risk — that resolves identically in both bitnesses. For the record, those are:
