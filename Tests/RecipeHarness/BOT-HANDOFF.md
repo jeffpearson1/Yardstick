@@ -6,6 +6,8 @@ This folder contains the standalone test harness used to research, author, and p
 
 Do not modify generated `Artifacts\RecipeHarness\_install-tests\<timestamp>\summary.*` files. They are immutable test evidence. Put durable workflow guidance here and in `README.md`.
 
+Install and uninstall command lines now run through **32-bit** `cmd.exe` by default, matching the Intune Management Extension. See `-AgentBitness` and the outstanding coverage tracked in [`BITNESS-GUARD-TESTPLAN.md`](BITNESS-GUARD-TESTPLAN.md) — 125 recipes are affected by the native-bitness guard and only `r` has been run.
+
 ## Current Layout
 
 - Yardstick workspace: `G:\Intune\YardstickDev`
