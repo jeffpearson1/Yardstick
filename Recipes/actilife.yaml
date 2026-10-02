@@ -214,7 +214,18 @@ powerShellUninstallScript: |
   # into its own install directory for exactly this purpose. It deregisters the
   # driver from the driver store but cannot delete the directory it is running
   # from, so the staged copy is removed here once it has exited.
-  $driverDir = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'ActiGraph\Drivers'
+  #
+  # The vendor folder is derived from the install directory -- "ActiGraph\Drivers"
+  # is a sibling of "ActiGraph\ActiLife6" -- rather than from
+  # [Environment]::GetFolderPath('ProgramFiles'). That call returns
+  # "Program Files (x86)" in a 32-bit process and "Program Files" in a 64-bit one,
+  # so it names a different directory depending on how this script is hosted;
+  # every path below is Test-Path guarded and the verdict at the end is ARP-based,
+  # so pointing at the wrong root would skip the driver uninstall and still report
+  # success. $installDir comes from the ARP registration, so it is correct either
+  # way and follows a non-default install directory as well.
+  $vendorRoot = Split-Path -Parent $installDir
+  $driverDir = Join-Path $vendorRoot 'Drivers'
   $driverUninstaller = Join-Path $driverDir 'DriverUninstaller.exe'
   if (Test-Path -LiteralPath $driverUninstaller) {
     Start-Process -FilePath $driverUninstaller -Wait -PassThru | Out-Null
@@ -243,11 +254,12 @@ powerShellUninstallScript: |
   Remove-Item -LiteralPath $uninstaller -Force -ErrorAction SilentlyContinue
 
   # Walk up from the install directory (ActiGraph\ActiLife6) so the vendor folder
-  # goes too, but only while each level is genuinely empty.
+  # goes too, but only while each level is genuinely empty. $vendorRoot already
+  # names the real "ActiGraph" directory, so there is no hardcoded Program Files
+  # root here either.
   $pruneRoots = @(
     $installDir
-    (Split-Path -Parent $installDir)
-    (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'ActiGraph')
+    $vendorRoot
     (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'ActiGraph')
   )
   foreach ($pruneRoot in $pruneRoots) {
