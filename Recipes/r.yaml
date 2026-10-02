@@ -18,7 +18,12 @@ preDownloadScript: |
 # below), not this script's.
 installScript: <filename> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS
 powerShellUninstallScript: |
- $ErrorActionPreference = 'Continue'
+  # Runs 64-bit even though the Intune Management Extension is 32-bit: Yardstick
+  # prepends a native re-launch guard to every generated uninstall.ps1 (see
+  # Add-NativeBitnessGuard). That matters here because the "..._is1" key below
+  # lives in the native hive - under WOW64 redirection this script would find
+  # nothing, remove nothing, and still exit 0.
+  $ErrorActionPreference = 'Continue'
   $rVersion = '<version>'
   $appRoot = Join-Path $env:ProgramFiles "R\R-$rVersion"
   $arpName = "R for Windows $rVersion" + '_is1'
@@ -31,7 +36,10 @@ powerShellUninstallScript: |
   # below is scoped to this version's directory. Killing or deleting anything
   # broader would take out an R the user still has deployed.
   foreach ($process in @(Get-Process -Name 'Rgui', 'Rterm', 'Rscript', 'R' -ErrorAction SilentlyContinue)) {
-    if ($process.Path -and $process.Path.StartsWith("$appRoot\", [StringComparison]::OrdinalIgnoreCase)) {
+    # .Path throws for a process this one cannot open rather than returning null,
+    # which would abort the loop and leave the rest running.
+    $processPath = try { $process.Path } catch { $null }
+    if ($processPath -and $processPath.StartsWith("$appRoot\", [StringComparison]::OrdinalIgnoreCase)) {
       Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     }
   }
@@ -130,10 +138,21 @@ powerShellUninstallScript: |
   foreach ($key in $arpKeys) {
     Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
   }
+
+  # Intune reads the exit code. An unconditional "exit 0" reports success even
+  # when nothing was removed, which is what let the 32-bit failure above go
+  # unnoticed - the app showed "uninstall succeeded" while detection kept
+  # finding R.exe. Verify, then report honestly.
+  $stillOnDisk = Test-Path -LiteralPath (Join-Path $appRoot 'bin\R.exe')
+  $stillRegistered = @($arpKeys | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0
+  if ($stillOnDisk -or $stillRegistered) {
+    Write-Output "R $rVersion is still present after uninstall (onDisk=$stillOnDisk registered=$stillRegistered)."
+    exit 1
+  }
   exit 0
 iconFile: r.png
 id: r
-displayName: TEST 9-30-26 - R for Windows
+displayName: R for Windows
 publisher: R Core Team
 description: R is a free software environment for statistical computing and graphics.
 detectionType: file
