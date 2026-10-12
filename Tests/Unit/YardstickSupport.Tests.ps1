@@ -431,6 +431,30 @@ Describe "Send-YardstickEmailReport audiences" {
         }
     }
 
+    It "Flags apps uploaded without an icon in the admin report only" {
+        InModuleScope YardstickSupport -Parameters @{ prefs = (& $script:audiencePrefs) } {
+            Mock Write-Log {}
+            Mock Send-YardstickSmtpMessage {}
+
+            Initialize-ApplicationTracker
+            Add-SuccessfulApplication -ApplicationId 'a' -DisplayName 'Iconless App' -Version '1.0' -Action 'Updated' -MissingIcon 'iconless.png'
+            Add-SuccessfulApplication -ApplicationId 'b' -DisplayName 'Normal App' -Version '2.0' -Action 'Updated'
+
+            $Script:SuccessfulApplications[0].MissingIcon | Should -Be 'iconless.png'
+            $Script:SuccessfulApplications[1].MissingIcon | Should -BeNullOrEmpty
+
+            Send-YardstickEmailReport -Preferences $prefs
+
+            Should -Invoke Send-YardstickSmtpMessage -Times 1 -Exactly -ParameterFilter {
+                $To -contains 'admin@x.com' -and $HtmlBody -like '*No icon uploaded: iconless.png*' -and
+                ([regex]::Matches($HtmlBody, 'No icon uploaded')).Count -eq 1
+            }
+            Should -Invoke Send-YardstickSmtpMessage -Times 1 -Exactly -ParameterFilter {
+                $To -contains 'general@x.com' -and $HtmlBody -notlike '*No icon uploaded*'
+            }
+        }
+    }
+
     It "Sends only one full report to emailRecipient when no admin address is set" {
         InModuleScope YardstickSupport -Parameters @{ prefs = (& $script:audiencePrefs) } {
             Mock Write-Log {}

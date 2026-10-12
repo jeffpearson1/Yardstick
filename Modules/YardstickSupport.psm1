@@ -3964,6 +3964,10 @@ function Add-SuccessfulApplication {
     .PARAMETER AutoUpdateStatus
     Optional short status string from the auto-update handler (e.g. "published (12 device(s))",
     "no outdated devices", "skipped (no usable installer URL)"). $null when auto-update was disabled.
+
+    .PARAMETER MissingIcon
+    The recipe's iconFile when it was not found in the Icons folder and the app was
+    uploaded without an icon. Shown in the admin email. $null when the icon was used.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -3981,7 +3985,10 @@ function Add-SuccessfulApplication {
         [string]$Action = "Updated",
 
         [AllowNull()]
-        [string]$AutoUpdateStatus
+        [string]$AutoUpdateStatus,
+
+        [AllowNull()]
+        [string]$MissingIcon
     )
 
     if (-not $Script:SuccessfulApplications) {
@@ -3995,6 +4002,7 @@ function Add-SuccessfulApplication {
         Action           = $Action
         Dependents       = $Dependents
         AutoUpdateStatus = $AutoUpdateStatus
+        MissingIcon      = if ($MissingIcon) { $MissingIcon } else { $null }
         # Filled in later by Wait-YardstickBackup, once the background copy of
         # this app's .intunewin has finished.
         BackupStatus     = $null
@@ -4614,9 +4622,15 @@ $summaryRows
                     }
                     $backupCell = "`n                    <td data-label=`"Backup`"><span style=`"color: $bkColor;`">$bkStatus</span></td>"
                 }
+                # Uploaded without an icon: flag it so the operator knows to add one
+                # (Get-YardstickIcon.ps1 -RecipeId <id>).
+                $iconNote = ""
+                if ($app.PSObject.Properties['MissingIcon'] -and $app.MissingIcon) {
+                    $iconNote = "<br><small style=`"color:#b35c00;`">No icon uploaded: $([System.Net.WebUtility]::HtmlEncode([string]$app.MissingIcon)) is missing from the Icons folder</small>"
+                }
                 $emailBody += @"
                 <tr>
-                    <td data-label="Application"><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small></td>
+                    <td data-label="Application"><strong>$($app.DisplayName)</strong><br><small>ID: $($app.ApplicationId)</small>$iconNote</td>
                     <td data-label="Version">$($app.Version)</td>
                     <td data-label="Action">$($app.Action)</td>
                     <td data-label="Auto-Update"><span style="color: $auColor;">$auStatus</span></td>$backupCell

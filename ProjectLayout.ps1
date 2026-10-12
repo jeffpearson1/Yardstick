@@ -5,7 +5,9 @@ function Get-YardstickProjectLayout {
         [string]$ProjectRoot
     )
 
-    $root = (Resolve-Path -LiteralPath $ProjectRoot -ErrorAction Stop).Path
+    # ProviderPath, not Path: on a UNC share Path can come back provider-qualified
+    # (Microsoft.PowerShell.Core\FileSystem::\\server\...), which breaks Join-Path.
+    $root = (Resolve-Path -LiteralPath $ProjectRoot -ErrorAction Stop).ProviderPath
     $manifestPath = Join-Path $root 'Yardstick.Project.psd1'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         throw "Yardstick project manifest was not found at '$manifestPath'."

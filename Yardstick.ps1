@@ -1688,9 +1688,11 @@ foreach ($AppId_Processing in $Applications) {
         # Intune does not require an icon, so a missing file must not discard a
         # package that has already been downloaded and built.
         $Icon = $null
+        $missingIcon = $null
         if (Test-Path -LiteralPath "$($Icons)\$($Script:IconFile)" -PathType Leaf) {
             $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
         } else {
+            $missingIcon = if ($Script:IconFile) { [string]$Script:IconFile } else { '(no iconFile set)' }
             Write-Log "WARNING: Icon file $($Script:IconFile) not found in Icons folder. Uploading $($Script:DisplayName) without an icon."
         }
         if (-not $Script:FileDetectionVersion) {
@@ -1788,7 +1790,7 @@ foreach ($AppId_Processing in $Applications) {
         if ($autoUpdateApplied -gt 0) { $autoStatusParts += "auto-update on $autoUpdateApplied assignment(s)" }
         if ($anchorStatus)            { $autoStatusParts += "anchor: $anchorStatus" }
         $autoStatus = if ($autoStatusParts.Count -gt 0) { $autoStatusParts -join ', ' } else { $null }
-        Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus -AutoUpdateStatus $autoStatus
+        Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus -AutoUpdateStatus $autoStatus -MissingIcon $missingIcon
         Write-Log "Updates complete for $Script:DisplayName"
 
     } catch {
