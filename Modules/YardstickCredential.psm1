@@ -15,10 +15,9 @@ small JSON document as the credential blob:
 Generic credentials are encrypted by Windows under the storing user's profile,
 so only that user (on that machine) can read them back.
 
-The client secret's expiration is discovered from Microsoft Graph when the app
-registration has Application.Read.All, matching the secret to its
-passwordCredential by hint. When Graph cannot be queried, the expiration entered
-at setup time is used instead.
+An expiration entered at setup time is used as-is. When none is stored, it is
+discovered from Microsoft Graph if the app registration has Application.Read.All,
+matching the secret to its passwordCredential by hint.
 
 An optional SMTP account for emailDeliveryMethod 'smtp' is stored the same way,
 under `smtpCredentialTarget` (default "Yardstick:Smtp"), with the SMTP user name
@@ -574,10 +573,11 @@ function Update-YardstickSecretExpiration {
     Refreshes the stored client secret expiration date from Microsoft Graph.
 
     .DESCRIPTION
-    Reads the app registration's passwordCredentials and matches the one whose
-    hint (first three characters) equals the stored secret's. Requires the app
-    registration to hold Application.Read.All; if the call is denied the stored
-    expiration is left untouched, which is not an error.
+    Does nothing when an expiration date is already stored. Otherwise reads the
+    app registration's passwordCredentials and matches the one whose hint (first
+    three characters) equals the stored secret's. Requires the app registration
+    to hold Application.Read.All; if the call is denied the expiration stays
+    unset, which is not an error.
 
     .PARAMETER Credential
     Credential object from Get-YardstickIntuneCredential.
@@ -590,6 +590,10 @@ function Update-YardstickSecretExpiration {
         [Parameter(Mandatory = $true)]
         $Credential
     )
+
+    if ($Credential.SecretExpiresOn) {
+        return $Credential
+    }
 
     if (-not (Get-Command -Name Invoke-YardstickGraphRequest -ErrorAction SilentlyContinue)) {
         return $Credential

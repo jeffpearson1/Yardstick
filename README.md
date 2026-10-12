@@ -91,10 +91,10 @@ to the console and log, and an email goes to `adminEmailRecipient` (falling back
 `credentialExpirationEmailIntervalHours` (default 24) so a nightly schedule does not
 spam the mailbox.
 
-The expiration date is discovered from Graph when the app registration holds
-`Application.Read.All` - Yardstick matches the secret to its `passwordCredential` by
-hint. Without that permission, supply the date yourself when running
-`Set-YardstickCredential.ps1`.
+If you supply an expiration date when running `Set-YardstickCredential.ps1`, Yardstick
+uses it and does not query Graph. If you leave it blank, the date is discovered from
+Graph when the app registration holds `Application.Read.All` - Yardstick matches the
+secret to its `passwordCredential` by hint.
 
 
 ### Set recipe credentials in Windows Credential Manager
