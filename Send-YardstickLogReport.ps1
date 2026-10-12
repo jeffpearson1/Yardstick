@@ -80,7 +80,7 @@ function Get-YardstickLogRun {
     Splits the log into runs and returns the requested one.
     #>
     param(
-        [Parameter(Mandatory)][string[]]$Lines,
+        [Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines,
         [int]$Index
     )
 
@@ -117,7 +117,7 @@ function ConvertTo-YardstickLogEntry {
     Turns raw log lines into timestamped entries, folding wrapped error text into
     the entry it belongs to.
     #>
-    param([Parameter(Mandatory)][string[]]$Lines)
+    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
 
     $entries = [System.Collections.Generic.List[PSObject]]::new()
     foreach ($line in $Lines) {
