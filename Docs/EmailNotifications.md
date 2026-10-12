@@ -24,8 +24,10 @@ The following settings control email notifications:
 #####################################
 emailNotificationEnabled: true                    # Enable/disable email notifications
 emailDeliveryMethod: outlook                      # "outlook" (default) or "smtp"
-emailRecipient: "admin@yourorganization.com"      # Recipient email address
+emailRecipient: "general@yourorganization.com"    # General list - updated software only
+adminEmailRecipient: "admin@yourorganization.com" # Admin - full report incl. failures
 emailSubject: "Yardstick Application Update Report" # Email subject line
+adminEmailSubject: "Yardstick Application Update Report (Admin)" # Optional
 emailSenderName: "Yardstick Automation"           # Display name for sender
 emailSendFromAddress: "noreply@yourorganization.com" # From address (required for smtp)
 smtpServer: "smtp.yourorganization.com"           # SMTP only
@@ -38,8 +40,10 @@ smtpCredentialTarget: "Yardstick:Smtp"            # SMTP only - Credential Manag
 
 - **emailNotificationEnabled**: Boolean flag to enable or disable email notifications
 - **emailDeliveryMethod**: `outlook` (default when omitted) or `smtp`
-- **emailRecipient**: The email address that will receive the reports
+- **emailRecipient**: The general list. Receives the general email, which lists only the software that was updated
+- **adminEmailRecipient**: Receives the admin email (everything: run parameters, successes, failures, dependents, auto-update and backup status) and operational alerts such as client secret expiration. When omitted, a single admin-style full report goes to `emailRecipient` instead
 - **emailSubject**: The subject line for notification emails
+- **adminEmailSubject**: Subject of the admin email. Defaults to `emailSubject` followed by ` (Admin)` when `adminEmailRecipient` is set
 - **emailSenderName**: Display name shown as the sender
 - **emailSendFromAddress**: "From" address. Optional with Outlook (requires Outlook delegation rights); required with SMTP
 - **smtpServer**: Host name of the SMTP server or relay
@@ -48,6 +52,10 @@ smtpCredentialTarget: "Yardstick:Smtp"            # SMTP only - Credential Manag
 - **smtpCredentialTarget**: Windows Credential Manager target holding the SMTP account, default `Yardstick:Smtp`
 
 ## Delivery Methods
+
+### General and admin emails
+
+Each run sends up to two emails. The **admin** email goes to `adminEmailRecipient` and contains the full report. The **general** email goes to `emailRecipient` and lists only applications that were updated (`Updated` or `Force Updated`); maintenance sweeps, repairs and failures are left out, and nothing is sent when no application was updated. Both are sent with one confirmation when `emailPromptBeforeSending` is on.
 
 ### Outlook (default)
 

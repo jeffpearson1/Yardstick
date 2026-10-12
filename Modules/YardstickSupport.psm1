@@ -4188,21 +4188,53 @@ function Send-YardstickSmtpMessage {
 }
 
 
+function Get-YardstickEmailAudiences {
+    <#
+    .SYNOPSIS
+    Lists the report audiences a run should email.
+
+    .DESCRIPTION
+    The admin report (everything, including failures) is always sent. It goes to
+    adminEmailRecipient, or to emailRecipient when no admin address is configured.
+    The general report (updated software only) is added when adminEmailRecipient
+    and emailRecipient are both configured, so the wider list is not sent the
+    admin report as well.
+
+    .OUTPUTS
+    'Admin' and, when applicable, 'General'.
+    #>
+    param([Parameter(Mandatory=$true)]$Preferences)
+
+    $audiences = @('Admin')
+    if ($Preferences['adminEmailRecipient'] -and $Preferences['emailRecipient']) {
+        $audiences += 'General'
+    }
+    return $audiences
+}
+
+
 function Send-YardstickEmailReport {
     <#
     .SYNOPSIS
-    Sends an email report of application processing results.
+    Sends the email reports of application processing results.
 
     .DESCRIPTION
-    Creates and sends an email summary of successful and failed application
-    updates. Delivery follows emailDeliveryMethod: Microsoft Outlook's COM
-    interface by default, or Send-MailMessage when set to 'smtp'.
+    Sends two emails per run. The admin email carries everything: the run
+    parameters, successful and failed applications, dependents, auto-update and
+    backup status. The general email lists only the software that was updated.
+    With no adminEmailRecipient configured, a single admin email goes to
+    emailRecipient. The general email is skipped when nothing was updated.
+    Delivery follows emailDeliveryMethod: Microsoft Outlook's COM interface by
+    default, or Send-MailMessage when set to 'smtp'.
 
     .PARAMETER Preferences
     Hashtable containing email configuration preferences.
 
     .PARAMETER RunParameters
     String describing the parameters used for this Yardstick run.
+
+    .PARAMETER Audience
+    'All' (default) sends every applicable report. 'Admin' or 'General' sends just that one.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -4210,12 +4242,16 @@ function Send-YardstickEmailReport {
 
         [string]$RunParameters = "",
 
+        [ValidateSet('All', 'Admin', 'General')]
+        [string]$Audience = 'All',
+
         # When set, the email is opened for visual inspection instead of being sent -
         # in Outlook, or in the default browser for SMTP delivery.
         [switch]$Preview,
 
         # Optional path. If provided, the rendered HTML body is also written to this file
         # so it can be opened in a browser (useful when validating formatting changes).
+        # The general report is written alongside it with a ".general" suffix.
         [string]$HtmlOutputPath
     )
     
@@ -4224,14 +4260,54 @@ function Send-YardstickEmailReport {
         Write-Log "Email notifications are disabled in preferences"
         return
     }
-    
+
+    if ($Audience -eq 'All') {
+        foreach ($target in (Get-YardstickEmailAudiences -Preferences $Preferences)) {
+            $audienceArgs = @{}
+            foreach ($key in $PSBoundParameters.Keys) { $audienceArgs[$key] = $PSBoundParameters[$key] }
+            $audienceArgs.Audience = $target
+            if ($HtmlOutputPath -and $target -eq 'General') {
+                $audienceArgs.HtmlOutputPath = [System.IO.Path]::ChangeExtension($HtmlOutputPath, ".general$([System.IO.Path]::GetExtension($HtmlOutputPath))")
+            }
+            Send-YardstickEmailReport @audienceArgs
+        }
+        return
+    }
+
+    $isAdmin = $Audience -eq 'Admin'
+    $separateAdmin = [bool]$Preferences['adminEmailRecipient']
+    $recipients = if ($isAdmin -and $separateAdmin) { @($Preferences['adminEmailRecipient']) } else { @($Preferences['emailRecipient']) }
+    $subject = [string]$Preferences['emailSubject']
+    if ($isAdmin -and $separateAdmin) {
+        $subject = if ($Preferences['adminEmailSubject']) { [string]$Preferences['adminEmailSubject'] } else { "$subject (Admin)" }
+    }
+
     # Validate required email settings
-    $requiredSettings = @('emailRecipient', 'emailSubject', 'emailSenderName')
-    foreach ($setting in $requiredSettings) {
+    if (-not $recipients) {
+        Write-Log "WARNING: No recipients configured for the $Audience email report. Skipping."
+        return
+    }
+    foreach ($setting in @('emailSubject', 'emailSenderName')) {
         if (-not $Preferences[$setting]) {
             Write-Log "WARNING: Email setting '$setting' not configured. Skipping email notification."
             return
         }
+    }
+
+    # Initialize tracking arrays if they don't exist
+    if (-not $Script:SuccessfulApplications) {
+        $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
+    }
+    if (-not $Script:FailedApplications) {
+        $Script:FailedApplications = [System.Collections.Generic.List[PSObject]]::new()
+    }
+
+    # Maintenance sweeps and repairs republish nothing new, so they are not
+    # "updated software" as far as the general audience is concerned.
+    $updatedApplications = @($Script:SuccessfulApplications | Where-Object { $_.Action -in @('Updated', 'Force Updated') })
+    if (-not $isAdmin -and $updatedApplications.Count -eq 0) {
+        Write-Log "No applications were updated; skipping the general email report."
+        return
     }
     
     $method = Get-YardstickEmailDeliveryMethod -Preferences $Preferences
@@ -4248,16 +4324,8 @@ function Send-YardstickEmailReport {
         return
     }
 
-    # Initialize tracking arrays if they don't exist
-    if (-not $Script:SuccessfulApplications) {
-        $Script:SuccessfulApplications = [System.Collections.Generic.List[PSObject]]::new()
-    }
-    if (-not $Script:FailedApplications) {
-        $Script:FailedApplications = [System.Collections.Generic.List[PSObject]]::new()
-    }
-    
     try {
-        Write-Log "Creating email report for Yardstick run"
+        Write-Log "Creating $Audience email report for Yardstick run"
 
         # Load branding logo. Use a cid: reference for the email itself (Outlook
         # desktop does not render base64 data URIs reliably) and a base64 data URI
@@ -4288,6 +4356,19 @@ function Send-YardstickEmailReport {
         # Without a logo, drop its cell rather than leave an empty 195px gap.
         $logoCell = if ($logoHtml) { "<td class=`"header-logo-cell`" style=`"width:195px; padding:15px 15px 15px 15px; vertical-align:middle; border:0;`">$logoHtml</td>" } else { "" }
         $headerTextPadding = if ($logoHtml) { "15px 15px 15px 0" } else { "15px" }
+
+        $summaryRowStyle = 'margin:0; padding:0; line-height:1.3; color:#1a1a1a;'
+        $summaryRows = if ($isAdmin) {
+            @"
+                    <p style="$summaryRowStyle"><strong>Successful Applications:</strong> $($Script:SuccessfulApplications.Count)</p>
+                    <p style="$summaryRowStyle"><strong>Failed Applications:</strong> $($Script:FailedApplications.Count)</p>
+                    <p style="$summaryRowStyle"><strong>Total Processed:</strong> $($Script:SuccessfulApplications.Count + $Script:FailedApplications.Count)</p>
+"@
+        } else {
+            @"
+                    <p style="$summaryRowStyle"><strong>Updated Applications:</strong> $($updatedApplications.Count)</p>
+"@
+        }
 
         # Build email body
         $emailBody = @"
@@ -4465,7 +4546,7 @@ function Send-YardstickEmailReport {
             <td class="header-text-cell" style="padding:$headerTextPadding; vertical-align:middle; border:0;">
                 <p style="margin:0 0 6px 0; padding:0; font-size:18pt; font-weight:bold; line-height:1.1; color:white;">Application Update Report</p>
                 <p style="margin:0; padding:0; line-height:1.2; color:white;">Run Time: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss tt")</p>
-$(if ($RunParameters) { @"
+$(if ($isAdmin -and $RunParameters) { @"
                 <p style="margin:6px 0 4px 0; padding:0; line-height:1.4; color:white;">Parameters:</p>
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; margin:0;">
                     <tr>
@@ -4486,15 +4567,13 @@ $(if ($RunParameters) { @"
             <tr>
                 <td class="section-summary" bgcolor="#e7f3ff" style="background-color:#e7f3ff; color:#1a1a1a; padding:15px; border-left:4px solid #0078d4; border-radius:5px;">
                     <h3 style="margin:0 0 8px 0; padding:0; line-height:1.2; color:#1a1a1a;">Summary</h3>
-                    <p style="margin:0; padding:0; line-height:1.3; color:#1a1a1a;"><strong>Successful Applications:</strong> $($Script:SuccessfulApplications.Count)</p>
-                    <p style="margin:0; padding:0; line-height:1.3; color:#1a1a1a;"><strong>Failed Applications:</strong> $($Script:FailedApplications.Count)</p>
-                    <p style="margin:0; padding:0; line-height:1.3; color:#1a1a1a;"><strong>Total Processed:</strong> $($Script:SuccessfulApplications.Count + $Script:FailedApplications.Count)</p>
+$summaryRows
                 </td>
             </tr>
         </table>
 "@
 
-        if ($Script:SuccessfulApplications.Count -gt 0) {
+        if ($isAdmin -and $Script:SuccessfulApplications.Count -gt 0) {
             # Only show the Backup column when backups are actually configured,
             # so runs without a Backup preference do not carry an empty column.
             $anyBackup = @($Script:SuccessfulApplications | Where-Object { $_.PSObject.Properties['BackupStatus'] -and $_.BackupStatus }).Count -gt 0
@@ -4598,7 +4677,7 @@ $(if ($RunParameters) { @"
         </table>
 "@
         }
-        if ($Script:FailedApplications.Count -gt 0) {
+        if ($isAdmin -and $Script:FailedApplications.Count -gt 0) {
             $emailBody += @"
 
         <table cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#f8d7da" style="width:100%; background-color:#f8d7da; border-collapse:separate; border-radius:5px; margin:10px 0;">
@@ -4636,14 +4715,47 @@ $(if ($RunParameters) { @"
 "@
         }
 
+        if (-not $isAdmin) {
+            $emailBody += @"
+
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#d4edda" style="width:100%; background-color:#d4edda; border-collapse:separate; border-radius:5px; margin:10px 0;">
+            <tr>
+                <td class="section-success" bgcolor="#d4edda" style="background-color:#d4edda; color:#1a1a1a; padding:15px; border-left:4px solid #28a745; border-radius:5px;">
+                    <h3 style="margin:0 0 8px 0; padding:0; line-height:1.2; color:#1a1a1a;">Updated Applications</h3>
+                    <table class="report-table">
+                        <tr class="report-header-row">
+                            <th>Application</th>
+                            <th>Version</th>
+                            <th>Time</th>
+                        </tr>
+"@
+            foreach ($app in $updatedApplications) {
+                $encodedName = [System.Net.WebUtility]::HtmlEncode([string]$app.DisplayName)
+                $encodedVersion = [System.Net.WebUtility]::HtmlEncode([string]$app.Version)
+                $emailBody += @"
+                <tr>
+                    <td data-label="Application"><strong>$encodedName</strong></td>
+                    <td data-label="Version">$encodedVersion</td>
+                    <td data-label="Time" class="timestamp">$($app.Timestamp.ToString("MM/dd/yyyy HH:mm:ss"))</td>
+                </tr>
+"@
+            }
+            $emailBody += @"
+                    </table>
+                </td>
+            </tr>
+        </table>
+"@
+        }
+
         # Add footer
+        $footerLogLine = if ($isAdmin) { "<br>`n                Log file location: $Global:LogLocation\$Global:LogFile" } else { "" }
         $emailBody += @"
         
         <hr style="margin: 20px 0;">
         <p class="timestamp">
             <small>
-                This report was automatically generated by Yardstick.<br>
-                Log file location: $Global:LogLocation\$Global:LogFile
+                This report was automatically generated by Yardstick.$footerLogLine
             </small>
         </p>
     </div>
@@ -4669,16 +4781,16 @@ $(if ($RunParameters) { @"
                 # SMTP has no compose window to display, so preview in the browser.
                 $previewPath = $HtmlOutputPath
                 if (-not $previewPath) {
-                    $previewPath = Join-Path ([System.IO.Path]::GetTempPath()) "YardstickEmailPreview.html"
+                    $previewPath = Join-Path ([System.IO.Path]::GetTempPath()) "YardstickEmailPreview.$Audience.html"
                     Set-Content -Path $previewPath -Value $emailBody -Encoding UTF8
                 }
                 Invoke-Item -LiteralPath $previewPath
                 Write-Log "Email opened in the default browser for preview (not sent): $previewPath"
             } else {
-                Send-YardstickSmtpMessage -Preferences $Preferences -To $Preferences.emailRecipient `
-                    -Subject $Preferences.emailSubject -HtmlBody $emailBody
-                Write-Log "Email report sent successfully via SMTP to the following email addresses:"
-                Write-Log ($Preferences.emailRecipient -join ", ")
+                Send-YardstickSmtpMessage -Preferences $Preferences -To $recipients `
+                    -Subject $subject -HtmlBody $emailBody
+                Write-Log "$Audience email report sent successfully via SMTP to the following email addresses:"
+                Write-Log ($recipients -join ", ")
             }
             return
         }
@@ -4688,9 +4800,9 @@ $(if ($RunParameters) { @"
         $mail = $outlook.CreateItem(0)  # 0 = olMailItem
 
         # Set email properties
-        $mail.To = ($Preferences.emailRecipient -join "; ")
+        $mail.To = ($recipients -join "; ")
 
-        $mail.Subject = $Preferences.emailSubject
+        $mail.Subject = $subject
         if ($Preferences.emailSendFromAddress) {
             $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
         }
@@ -4719,8 +4831,8 @@ $(if ($RunParameters) { @"
             Write-Log "Email opened in Outlook for preview (not sent)."
         } else {
             $mail.Send()
-            Write-Log "Email report sent successfully to the following email addresses:"
-            Write-Log ($Preferences.emailRecipient -join ", ")
+            Write-Log "$Audience email report sent successfully to the following email addresses:"
+            Write-Log ($recipients -join ", ")
         }
 
         # Clean up COM objects

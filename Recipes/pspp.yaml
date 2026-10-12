@@ -9,7 +9,9 @@ preDownloadScript: |
   $baseUrl = 'https://caeis.etech.fh-augsburg.de/downloads/windows/latest-release/'
   $index = (Invoke-WebRequest -Uri $baseUrl -UseBasicParsing -ErrorAction Stop).Content
 
-  $candidates = foreach ($match in [regex]::Matches($index, 'href="(?<name>pspp-64bit-install-v(?<ver>\d+(?:-\d+)+)\.exe)"')) {
+  # The stable installer is currently named pspp-64bit-install-2-1-2-release.exe; the "v"
+  # prefix and "-release" suffix are optional so older and newer naming both match.
+  $candidates = foreach ($match in [regex]::Matches($index, 'href="(?<name>pspp-64bit-install-v?(?<ver>\d+(?:-\d+)+)(?:-release)?\.exe)"')) {
     [PSCustomObject]@{
       Name        = $match.Groups['name'].Value
       VersionText = $match.Groups['ver'].Value -replace '-', '.'

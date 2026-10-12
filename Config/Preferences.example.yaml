@@ -116,11 +116,16 @@ emailNotificationEnabled: false
 # client via COM; "smtp" sends straight to an SMTP server with Send-MailMessage
 # and needs no Outlook install.
 emailDeliveryMethod: outlook
-emailRecipient: "admin@yourorganization.com"
-# Address that receives operational alerts such as client secret expiration.
-# Falls back to emailRecipient when omitted.
+emailRecipient: "general@yourorganization.com"
+# Two emails are sent per run. emailRecipient (the general list) receives only the
+# software that was updated. adminEmailRecipient receives the full report -
+# parameters, failures, dependents, auto-update and backup status - plus operational
+# alerts such as client secret expiration. When omitted, a single full report goes to
+# emailRecipient and alerts fall back to it too.
 adminEmailRecipient: "admin@yourorganization.com"
 emailSubject: "Yardstick Application Update Report"
+# Subject of the admin email. Defaults to emailSubject followed by " (Admin)".
+# adminEmailSubject: "Yardstick Application Update Report (Admin)"
 emailSenderName: "Yardstick Automation"
 # Required for smtp delivery. With outlook it is optional and needs send-on-behalf rights.
 emailSendFromAddress: "noreply@yourorganization.com"

@@ -1685,12 +1685,14 @@ foreach ($AppId_Processing in $Applications) {
 
         # Upload .intunewin file to Intune
         # Detection Types
-        if (!(Test-Path "$($Icons)\$($Script:IconFile)")) {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Icon file $($Script:IconFile) not found in Icons folder." -FailureStage "Icon Retrieval"
-            Write-Log "ERROR: Icon file $($Script:IconFile) not found in Icons folder."
-            continue
+        # Intune does not require an icon, so a missing file must not discard a
+        # package that has already been downloaded and built.
+        $Icon = $null
+        if (Test-Path -LiteralPath "$($Icons)\$($Script:IconFile)" -PathType Leaf) {
+            $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
+        } else {
+            Write-Log "WARNING: Icon file $($Script:IconFile) not found in Icons folder. Uploading $($Script:DisplayName) without an icon."
         }
-        $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
         if (-not $Script:FileDetectionVersion) {
             $Script:FileDetectionVersion = $Script:Version
         }

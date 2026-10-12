@@ -234,7 +234,7 @@ function New-YardstickWin32AppIcon {
     if ($extension -notin '.png', '.jpg', '.jpeg') { throw "Unsupported icon extension '$extension'." }
     return [ordered]@{
         type  = if ($extension -eq '.png') { 'image/png' } else { 'image/jpeg' }
-        value = [convert]::ToBase64String([io.file]::ReadAllBytes((Resolve-Path -LiteralPath $FilePath)))
+        value = [convert]::ToBase64String([io.file]::ReadAllBytes((Resolve-Path -LiteralPath $FilePath).ProviderPath))
     }
 }
 

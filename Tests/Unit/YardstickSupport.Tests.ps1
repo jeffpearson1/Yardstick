@@ -379,3 +379,72 @@ Describe "Send-YardstickEmailReport over SMTP" {
         }
     }
 }
+
+Describe "Send-YardstickEmailReport audiences" {
+    BeforeAll {
+        $script:audiencePrefs = {
+            @{
+                emailNotificationEnabled = $true; emailDeliveryMethod = 'smtp'
+                emailRecipient = 'general@x.com'; adminEmailRecipient = 'admin@x.com'
+                emailSubject = 'Report'; emailSenderName = 'Yardstick'
+                emailSendFromAddress = 'from@x.com'; smtpServer = 'smtp.x.com'
+            }
+        }
+    }
+
+    It "Sends the full report to admins and an updates-only report to the general list" {
+        InModuleScope YardstickSupport -Parameters @{ prefs = (& $script:audiencePrefs) } {
+            Mock Write-Log {}
+            Mock Send-YardstickSmtpMessage {}
+
+            Initialize-ApplicationTracker
+            Add-SuccessfulApplication -ApplicationId 'a' -DisplayName 'Updated App' -Version '1.0' -Action 'Updated'
+            Add-SuccessfulApplication -ApplicationId 'b' -DisplayName 'Swept App' -Version '2.0' -Action 'Maintained'
+            Add-FailedApplication -ApplicationId 'c' -DisplayName 'Broken App' -Version '3.0' -ErrorMessage 'boom' -FailureStage 'Download'
+
+            Send-YardstickEmailReport -Preferences $prefs -RunParameters '-All'
+
+            Should -Invoke Send-YardstickSmtpMessage -Times 1 -Exactly -ParameterFilter {
+                $To -contains 'admin@x.com' -and $Subject -eq 'Report (Admin)' -and
+                $HtmlBody -like '*Broken App*' -and $HtmlBody -like '*Swept App*' -and $HtmlBody -like '*Updated App*'
+            }
+            Should -Invoke Send-YardstickSmtpMessage -Times 1 -Exactly -ParameterFilter {
+                $To -contains 'general@x.com' -and $Subject -eq 'Report' -and
+                $HtmlBody -like '*Updated App*' -and $HtmlBody -notlike '*Broken App*' -and
+                $HtmlBody -notlike '*Swept App*' -and $HtmlBody -notlike '*Log file location*'
+            }
+        }
+    }
+
+    It "Skips the general email when nothing was updated" {
+        InModuleScope YardstickSupport -Parameters @{ prefs = (& $script:audiencePrefs) } {
+            Mock Write-Log {}
+            Mock Send-YardstickSmtpMessage {}
+
+            Initialize-ApplicationTracker
+            Add-FailedApplication -ApplicationId 'c' -DisplayName 'Broken App' -Version '3.0' -ErrorMessage 'boom' -FailureStage 'Download'
+
+            Send-YardstickEmailReport -Preferences $prefs
+
+            Should -Invoke Send-YardstickSmtpMessage -Times 1 -Exactly -ParameterFilter { $To -contains 'admin@x.com' }
+            Should -Invoke Send-YardstickSmtpMessage -Times 0 -Exactly -ParameterFilter { $To -contains 'general@x.com' }
+        }
+    }
+
+    It "Sends only one full report to emailRecipient when no admin address is set" {
+        InModuleScope YardstickSupport -Parameters @{ prefs = (& $script:audiencePrefs) } {
+            Mock Write-Log {}
+            Mock Send-YardstickSmtpMessage {}
+            $prefs.Remove('adminEmailRecipient')
+
+            Initialize-ApplicationTracker
+            Add-SuccessfulApplication -ApplicationId 'a' -DisplayName 'Updated App' -Version '1.0' -Action 'Updated'
+
+            Send-YardstickEmailReport -Preferences $prefs
+
+            Should -Invoke Send-YardstickSmtpMessage -Times 1 -Exactly -ParameterFilter {
+                $To -contains 'general@x.com' -and $Subject -eq 'Report' -and $HtmlBody -like '*Total Processed*'
+            }
+        }
+    }
+}
