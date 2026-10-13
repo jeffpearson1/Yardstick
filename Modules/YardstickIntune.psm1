@@ -643,7 +643,7 @@ function Get-YardstickWin32AppMetadata {
     param([Parameter(Mandatory)][string]$FilePath)
     if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) { throw "Package does not exist: $FilePath" }
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
-    $archive = [io.compression.zipfile]::OpenRead((Resolve-Path -LiteralPath $FilePath))
+    $archive = [io.compression.zipfile]::OpenRead((Resolve-Path -LiteralPath $FilePath).ProviderPath)
     try {
         $entry = @($archive.Entries | Where-Object Name -eq 'detection.xml') | Select-Object -First 1
         if (-not $entry) { throw "Package '$FilePath' does not contain detection.xml." }
@@ -659,7 +659,7 @@ function Expand-YardstickWin32AppContent {
     $extractRoot = Join-Path ([io.path]::GetTempPath()) ('yardstick-intunewin-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
     $target = Join-Path $extractRoot ([io.path]::GetFileName($FileName))
-    $archive = [io.compression.zipfile]::OpenRead((Resolve-Path -LiteralPath $FilePath))
+    $archive = [io.compression.zipfile]::OpenRead((Resolve-Path -LiteralPath $FilePath).ProviderPath)
     try {
         $entry = @($archive.Entries | Where-Object Name -eq ([io.path]::GetFileName($FileName))) | Select-Object -First 1
         if (-not $entry) { throw "Package '$FilePath' does not contain encrypted content '$FileName'." }
@@ -953,7 +953,7 @@ function Send-YardstickIntuneContentBlob {
         [Parameter(Mandatory)][string]$FileResource,
         [int]$ChunkSize = 8MB
     )
-    $resolvedPath = Resolve-Path -LiteralPath $FilePath
+    $resolvedPath = (Resolve-Path -LiteralPath $FilePath).ProviderPath
     $blockCount = [math]::Max(1, [math]::Ceiling((Get-Item -LiteralPath $resolvedPath).Length / $ChunkSize))
     $stream = [io.file]::OpenRead($resolvedPath)
     $blockIds = [collections.generic.list[string]]::new()

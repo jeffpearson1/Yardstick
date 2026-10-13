@@ -1817,7 +1817,7 @@ foreach ($AppId_Processing in $Applications) {
         # Catch any unexpected errors during processing
         Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Unexpected error during processing: $_" -FailureStage "General Processing"
         Write-Log "ERROR: Unexpected error processing $AppId_Processing : $_"
-        if (-not((Get-Location).Path -eq $PSScriptRoot)) {
+        if (-not((Get-Location).ProviderPath -eq $PSScriptRoot)) {
             Set-Location $PSScriptRoot
         }
     } finally {

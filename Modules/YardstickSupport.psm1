@@ -4523,7 +4523,7 @@ function Send-YardstickEmailReport {
             try {
                 $candidatePath = Join-Path $PSScriptRoot "..\Branding\yardstick_logo_white_text_transparent_bg.png"
                 if (Test-Path $candidatePath) {
-                    $logoPath = (Resolve-Path $candidatePath).Path
+                    $logoPath = (Resolve-Path $candidatePath).ProviderPath
                     $logoBytes = [System.IO.File]::ReadAllBytes($logoPath)
                     $logoBase64 = [System.Convert]::ToBase64String($logoBytes)
                     $logoHtml = "<img src=`"cid:$logoCid`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"

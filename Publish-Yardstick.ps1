@@ -35,7 +35,7 @@ if (-not $Runtime -and -not $RecipeId) {
 if (-not $ProductionPath) {
     $ProductionPath = $layout.ProductionRoot
 }
-$productionRoot = (Resolve-Path -LiteralPath $ProductionPath -ErrorAction Stop).Path
+$productionRoot = (Resolve-Path -LiteralPath $ProductionPath -ErrorAction Stop).ProviderPath
 $projectRoot = $layout.ProjectRoot
 if ($productionRoot.Equals($projectRoot, [StringComparison]::OrdinalIgnoreCase) -or
     $productionRoot.StartsWith($projectRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
@@ -56,7 +56,7 @@ function Publish-YardstickFile {
         [Parameter(Mandatory)][string]$RelativePath
     )
 
-    $sourcePath = (Resolve-Path -LiteralPath $Source -ErrorAction Stop).Path
+    $sourcePath = (Resolve-Path -LiteralPath $Source -ErrorAction Stop).ProviderPath
     $relativeWindowsPath = $RelativePath.Replace('/', '\')
     $destinationPath = [IO.Path]::GetFullPath((Join-Path $productionRoot $relativeWindowsPath))
     if (-not $destinationPath.StartsWith($productionRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
