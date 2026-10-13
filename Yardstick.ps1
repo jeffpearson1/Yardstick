@@ -11,7 +11,7 @@
 
 .PARAMETER Group
     The name of the group of applications to update. This parameter is used when updating a group of applications.
-    May only be used with -Force, -NoDelete and -Repair parameters.
+    May only be used with -NoInteractive, -Force, -NoDelete and -Repair parameters.
 
 .PARAMETER All
     A switch parameter that indicates whether to update all applications in the repository. If specified, all applications will be processed.
@@ -70,6 +70,7 @@
     This command updates all applications in the repository, excluding interactive applications, forcing the update and preventing the deletion of old versions.
 #>
 
+#Requires -Version 7.0
 using module .\Modules\VersionPro.psm1
 
 param (
@@ -83,6 +84,7 @@ param (
     [parameter(ParameterSetName="AllApps")]
     [Switch] $All,
 
+    [parameter(ParameterSetName="GroupApps")]
     [parameter(ParameterSetName="AllApps")]
     [Switch] $NoInteractive,
 
@@ -119,6 +121,7 @@ Import-Module ${PSScriptRoot}\Modules\YardstickGraph.psm1 -Scope Global -Force
 Import-Module ${PSScriptRoot}\Modules\YardstickIntune.psm1 -Scope Global -Force
 Import-Module ${PSScriptRoot}\Modules\YardstickSupport.psm1 -Scope Global -Force
 Import-Module ${PSScriptRoot}\Modules\YardstickCredential.psm1 -Scope Global -Force
+Import-Module ${PSScriptRoot}\Modules\YardstickConfig.psm1 -Scope Global -Force
 
 $CustomModuleImports = Get-ChildItem -Path $PSScriptRoot\Modules\Custom\*.psm1
 foreach ($Module in $CustomModuleImports) {
@@ -141,14 +144,26 @@ if ((-not $ApplicationId) -and (($All -eq $false) -and (!$Group))) {
     exit 1
 }
 
-# Import preferences file:
+# powershell-yaml is needed to read the preferences file itself, so it is checked
+# here rather than waiting for Test-Prerequisites below.
+if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
+    Write-Log "ERROR: The PowerShell module 'powershell-yaml' is not installed. Install it with: Install-Module powershell-yaml -Scope CurrentUser (or run .\Install-Yardstick.ps1)."
+    exit 1
+}
+
+# Import preferences file. Absent or blank keys take built-in defaults, relative
+# folder paths are anchored to this folder, and the working folders are created.
 try {
-    . (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
-    $ProjectLayout = Get-YardstickProjectLayout -ProjectRoot $PSScriptRoot
-    $PreferencesPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
-    $Prefs = Get-Content -LiteralPath $PreferencesPath | ConvertFrom-Yaml
+    $Prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot -CreateFolders
 } catch {
-    Write-Error "Unable to open Yardstick preferences: $($_.Exception.Message)"
+    Write-Log "ERROR: Unable to load Yardstick preferences: $($_.Exception.Message)"
+    exit 1
+}
+$prefsResult = Test-YardstickPreferences -Preferences $Prefs
+foreach ($w in $prefsResult.Warnings) { Write-Log "WARNING: $w" }
+if (-not $prefsResult.IsValid) {
+    foreach ($e in $prefsResult.Errors) { Write-Log "ERROR: $e" }
+    Write-Log "Preference checks failed. Fix preferences.yaml (or run .\Test-YardstickSetup.ps1) and try again."
     exit 1
 }
 
@@ -1849,8 +1864,9 @@ if (-not $NoEmail) {
         # Select email delivery method based on preferences
         $emailMethod = if ($null -ne $Prefs.emailDeliveryMethod) { $Prefs.emailDeliveryMethod } else { "outlook" }
 
-        # If prompt before sending is enabled, ask the user for confirmation
-        if ($Prefs.emailPromptBeforeSending) {
+        # If prompt before sending is enabled, ask the user for confirmation.
+        # An unattended run has nobody to answer, so it sends without asking.
+        if ($Prefs.emailPromptBeforeSending -and -not $NoInteractive) {
             # play notification sound if specified
             if ($Prefs.emailNotificationSoundFile -and (Test-Path $Prefs.emailNotificationSoundFile)) {
                 try {

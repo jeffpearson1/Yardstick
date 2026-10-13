@@ -43,6 +43,8 @@
 .EXAMPLE
     .\Deploy-YardstickApps.ps1 -ApplicationId wingetautoupdate -TargetGroup "Lab Workstations" -WhatIf
 #>
+#Requires -Version 7.0
+
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [String[]]$Group,
@@ -70,6 +72,7 @@ $Global:LogFile = 'YDeploy.log'
 Import-Module powershell-yaml -ErrorAction Stop
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Scope Global -Force
 Import-Module IntuneWin32App -ErrorAction Stop
 
 Write-Log -Init
@@ -80,9 +83,9 @@ if (-not $Group -and -not $ApplicationId) {
 }
 
 try {
-    $Prefs = Get-Content "$PSScriptRoot\Preferences.yaml" | ConvertFrom-Yaml
+    $Prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot
 } catch {
-    Write-Log "ERROR: Unable to open Preferences.yaml!"
+    Write-Log "ERROR: Unable to load Yardstick preferences: $($_.Exception.Message)"
     exit 1
 }
 

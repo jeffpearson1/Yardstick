@@ -52,6 +52,8 @@
     .\Migrate-ToSupersedenceModel.ps1
 #>
 using module .\Modules\VersionPro.psm1
+#Requires -Version 7.0
+
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$ApplicationId,
@@ -65,11 +67,10 @@ Import-Module "$PSScriptRoot\Modules\YardstickGraph.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickIntune.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Scope Global -Force
 
-# Load preferences (same resolver Yardstick.ps1 uses)
-. (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
-$PreferencesPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
-$Prefs = Get-Content -LiteralPath $PreferencesPath | ConvertFrom-Yaml
+# Load preferences (same loader Yardstick.ps1 uses)
+$Prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot
 $Global:LogLocation = $PSScriptRoot
 $Global:LogFile = "SupersedenceMigration.log"
 $Recipes = $Prefs.Recipes

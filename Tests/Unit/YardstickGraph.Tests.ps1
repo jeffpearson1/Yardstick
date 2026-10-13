@@ -1,4 +1,8 @@
 BeforeAll {
+    # Earlier test files can leave extra copies of these modules loaded (YardstickSupport
+    # imports them globally, YardstickSetup nests YardstickGraph), and Mock -ModuleName
+    # refuses to pick between copies. Start from a single fresh copy.
+    Get-Module -Name YardstickSupport, YardstickSetup, YardstickIntune, YardstickGraph -All | Remove-Module -Force -ErrorAction SilentlyContinue
     Import-Module "$PSScriptRoot\..\..\Modules\YardstickGraph.psm1" -Force
 }
 

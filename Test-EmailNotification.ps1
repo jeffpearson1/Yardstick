@@ -29,6 +29,8 @@ Actually send the email instead of opening it for preview.
 Also write the rendered HTML to TestEmailPreview.html in the script directory.
 #>
 
+#Requires -Version 7.0
+
 param(
     [Switch]$TestOutlook,
     [Switch]$TestSmtp,
@@ -38,18 +40,17 @@ param(
 
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Force
+Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Force
 Import-Module powershell-yaml -Force
 
-$Global:LOG_LOCATION = $PSScriptRoot
-$Global:LOG_FILE = "EmailTest.log"
-Write-Host -Init
+$Global:LogLocation = $PSScriptRoot
+$Global:LogFile = "EmailTest.log"
+Write-Log -Init
 
 Write-Host "Starting Yardstick Email Notification Test"
 
 try {
-    . (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
-    $prefsPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
-    $prefs = Get-Content -LiteralPath $prefsPath | ConvertFrom-Yaml
+    $prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot
     Write-Host "Preferences loaded successfully"
 
     if ($TestOutlook) {

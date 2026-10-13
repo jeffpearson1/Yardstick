@@ -1196,6 +1196,8 @@ function Add-YardstickWin32App {
 Export-ModuleMember -Function @(
     # Exported for YardstickSupport, which rebases install times across apps.
     'ConvertTo-YardstickWallClock',
+    # Exported for Install-Yardstick.ps1 and Test-YardstickSetup.ps1.
+    'Resolve-YardstickIntuneWinAppUtil',
     'New-YardstickWin32AppDetectionRuleFile',
     'New-YardstickWin32AppDetectionRuleMsi',
     'New-YardstickWin32AppDetectionRuleRegistry',

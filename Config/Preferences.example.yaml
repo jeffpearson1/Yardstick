@@ -1,21 +1,31 @@
 #####################################
 # YARDSTICK CONFIG
 #####################################
+# The easiest way to create this file is to run .\Install-Yardstick.ps1, which
+# copies it to Local\preferences.yaml and fills in the few values that have no
+# sensible default.
+#
+# Every setting has a built-in default, so you only need to keep the lines you want
+# to change. Anything omitted or left blank uses the default shown here. Run
+# .\Test-YardstickSetup.ps1 at any time to check this file.
 
 
 #####################################
-# DEFAULT FOLDER LOCATIONS
+# FOLDER LOCATIONS
 #####################################
-Test: <REPLACE_WITH_YARDSTICK_ROOT>\Tests
-Buildspace: <REPLACE_WITH_YARDSTICK_ROOT>\Artifacts\BuildSpace
-Scripts: <REPLACE_WITH_YARDSTICK_ROOT>\Scripts
-Published: <REPLACE_WITH_YARDSTICK_ROOT>\Artifacts\Packages
-Recipes: <REPLACE_WITH_YARDSTICK_ROOT>\Recipes
-Icons: <REPLACE_WITH_YARDSTICK_ROOT>\Icons
-Tools: <REPLACE_WITH_YARDSTICK_ROOT>\Tools
-Temp: <REPLACE_WITH_YARDSTICK_ROOT>\Artifacts\Temp
-Secrets: <REPLACE_WITH_YARDSTICK_ROOT>\Local\Secrets
-Modules: <REPLACE_WITH_YARDSTICK_ROOT>\Modules
+# Relative paths are resolved against the Yardstick folder. Absolute and UNC paths
+# (\\server\share\...) are used as-is, and %ENVIRONMENT% variables are expanded.
+# The defaults below follow the standard repository layout; uncomment a line only to
+# move that folder somewhere else. Missing working folders are created on each run.
+# Recipes: Recipes
+# Icons: Icons
+# Scripts: Scripts
+# Tools: Tools
+# Buildspace: Artifacts\BuildSpace
+# Published: Artifacts\Packages
+# Temp: Artifacts\Temp
+# Secrets: Local\Secrets
+
 # Manual-drop recipes (`manualDownload: true`) package whatever an operator has
 # staged in SoftwareDropbox\<recipe id>. Vendors that gate their installer behind
 # a signed-in, licensed download cannot be automated, so a human fetches the file
@@ -27,9 +37,9 @@ SoftwareDropbox:
 SoftwareArchive:
 # Optional. When set, every .intunewin file Yardstick uploads is copied here on a
 # background thread, into a subfolder named after the recipe id, under a file name
-# carrying the version and the time Intune finished publishing it. Leave blank or
-# omit the key entirely to disable backups. A network path is fine - the copy runs
-# off the main thread, and a backup failure never fails an application update.
+# carrying the version and the time Intune finished publishing it. Leave blank to
+# disable backups. A network path is fine - the copy runs off the main thread, and a
+# backup failure never fails an application update.
 Backup:
 # How many .intunewin files to retain per recipe in the Backup folder - the newest
 # plus N-1 and N-2 by default. Set to 0 to keep every backup forever.
@@ -41,7 +51,8 @@ backupVersionsToKeep: 3
 #####################################
 # TenantID, ClientId and ClientSecret are NOT stored here. They live in Windows
 # Credential Manager, encrypted for the account that runs Yardstick. Populate them
-# with:  .\Set-YardstickCredential.ps1
+# with .\Install-Yardstick.ps1 -Step AppRegistration (creates the app registration
+# for you) or .\Set-YardstickCredential.ps1 (for an app you created yourself).
 # If the legacy TenantID/ClientId/ClientSecret keys are still present below,
 # Yardstick migrates them into Credential Manager on the next run and then asks you
 # to delete them from this file.
@@ -60,6 +71,7 @@ credentialExpirationEmailEnabled:
 #####################################
 # PACKAGED APPLICATION DEFAULTS
 #####################################
+# Recipes can override most of these individually; see Docs\WritingRecipes.md.
 defaultNumVersionsToKeep: 2
 # Whether the newest uploaded version declares Intune-native supersedence over
 # all kept older versions. Recipes can override with `supersedence`.
@@ -75,67 +87,98 @@ defaultUninstallPreviousVersion: false
 # for available assignments, so required-only recipes are unaffected. Recipes
 # can override with `autoUpdateOnAssignment` (accepted alias: `autoUpdate`).
 defaultAutoUpdate: true
-# Entra group IDs (device or user) that must never be auto-updated, even when
-# auto-update is on for the app. Assignments targeting one of these groups are
-# held at `notConfigured`, so adding a group here also turns off auto-update a
-# previous run had already enabled. Recipes ADD to this list with
+# Entra group object IDs (GUIDs, device or user groups) that must never be
+# auto-updated, even when auto-update is on for the app. Assignments targeting one
+# of these groups are held at `notConfigured`, so adding a group here also turns off
+# auto-update a previous run had already enabled. Recipes ADD to this list with
 # `groupSkipAutoUpdates` - a recipe cannot remove a group listed here.
-defaultGroupsSkipAutoUpdates:
-  - Group IDs go here and will be excluded from supersedence auto-update
+# Example: defaultGroupsSkipAutoUpdates: ["00000000-0000-0000-0000-000000000000"]
+defaultGroupsSkipAutoUpdates: []
 # Master switch for the {DETECT} anchor behavior. When enabled, the first time
 # Yardstick updates a version-detection app under the new model, the oldest
 # surviving version is renamed "{DETECT} <DisplayName>" and preserved so it
 # continues to detect long-abandoned installs. The anchor is always a
 # supersedence target of the newest version, always with type "Update".
 useDetectAnchor: true
+# Shown as the Owner field on every app Yardstick creates in Intune.
 defaultOwner:
 defaultMaximumInstallationTimeInMinutes: 60
+# W10_1607, W10_1703, W10_1709, W10_1803, W10_1809, W10_1903, W10_1909, W10_2004,
+# W10_20H2, W10_21H1, W10_21H2, W10_22H2, W11_21H2, W11_22H2, W11_23H2 or W11_24H2.
 defaultMinOSVersion: W10_20H2
+# system or user.
 defaultInstallExperience: system
+# basedOnReturnCode, allow, suppress or force.
 defaultRestartBehavior: suppress
 defaultAllowUserUninstall: true
 defaultIs32BitApp: false
+# none, x64, x86, arm64, x64x86 or AllWithARM64.
 defaultArchitecture: none
 defaultRequiresApproval: false
 defaultDetectionScriptFileExtension: ps1
 defaultDetectionScriptRunAs32Bit: false
 defaultDetectionScriptEnforceSignatureCheck: false
+# Whether apps that depend on a recipe's app are relinked to the new version.
+defaultAllowDependentLinkUpdates: true
 defaultDeadlineDateOffset: 0
 defaultAvailableDateOffset: 0
-defaultScopeTags:
-  - Scope Tags Go Here (Can be Multiple)
-defaultDeploymentGroups:
-  - Group IDs go here and will receive a default available deployment for testing purposes
+# Intune scope tag names applied to every new app. Leave empty to use the built-in
+# "Default" scope tag. Example: defaultScopeTags: ["Default", "Workstations"]
+defaultScopeTags: []
+# Entra group object IDs (GUIDs) that receive an Available assignment for every new
+# version - typically an IT test group, so updates can be tried before they reach
+# anyone else. Leave empty for no automatic assignment.
+# Example: defaultDeploymentGroups: ["00000000-0000-0000-0000-000000000000"]
+defaultDeploymentGroups: []
+
+
+#####################################
+# TIMEOUTS
+#####################################
+# Per-request timeout for downloads and web scraping. 0 disables the timeout.
+webRequestTimeoutSeconds: 120
+# A recipe that makes no progress for this long is abandoned so the rest of the run
+# can continue. 0 disables the watchdog.
+recipeStageTimeoutMinutes: 60
+# Maximum time IntuneWinAppUtil may take to package one application.
+packagingTimeoutMinutes: 30
+# A BITS transfer that makes no progress for this long is cancelled.
+bitsStallTimeoutMinutes: 15
 
 
 #####################################
 # EMAIL NOTIFICATION SETTINGS
 #####################################
 emailNotificationEnabled: false
-# How email is delivered: "outlook" (default) sends through the Outlook desktop
-# client via COM; "smtp" sends straight to an SMTP server with Send-MailMessage
-# and needs no Outlook install.
+# How email is delivered: "outlook" sends through the Outlook desktop client via
+# COM; "smtp" sends straight to an SMTP server and needs no Outlook install. Use
+# smtp for scheduled runs - Outlook needs a signed-in, interactive profile.
 emailDeliveryMethod: outlook
-emailRecipient: "general@yourorganization.com"
+emailRecipient:
 # Two emails are sent per run. emailRecipient (the general list) receives only the
 # software that was updated. adminEmailRecipient receives the full report -
 # parameters, failures, dependents, auto-update and backup status - plus operational
-# alerts such as client secret expiration. When omitted, a single full report goes to
+# alerts such as client secret expiration. When blank, a single full report goes to
 # emailRecipient and alerts fall back to it too.
-adminEmailRecipient: "admin@yourorganization.com"
+adminEmailRecipient:
 emailSubject: "Yardstick Application Update Report"
 # Subject of the admin email. Defaults to emailSubject followed by " (Admin)".
 # adminEmailSubject: "Yardstick Application Update Report (Admin)"
 emailSenderName: "Yardstick Automation"
 # Required for smtp delivery. With outlook it is optional and needs send-on-behalf rights.
-emailSendFromAddress: "noreply@yourorganization.com"
+emailSendFromAddress:
+# Ask for confirmation before sending. Ignored when Yardstick runs with -NoInteractive.
+emailPromptBeforeSending: false
+# Optional .wav file played when the email is ready (interactive runs only).
+# emailNotificationSoundFile: C:\Windows\Media\Windows Notify.wav
 # SMTP settings, used only when emailDeliveryMethod is smtp.
-smtpServer: "smtp.yourorganization.com"
+smtpServer:
 smtpPort: 25
 smtpUseSsl: false
 # Credential Manager target for the SMTP account. Leave the credential unset to
 # relay anonymously; store one with:  .\Set-YardstickCredential.ps1 -Smtp
 smtpCredentialTarget: "Yardstick:Smtp"
+
 
 #####################################
 # DEPENDENT LINK UPDATE SETTINGS
@@ -144,5 +187,6 @@ dependentLinkUpdateEnabled: true
 dependentLinkUpdateRetryCount: 3
 dependentLinkUpdateRetryDelaySeconds: 5
 dependentLinkUpdateTimeoutSeconds: 60
-dependentApplicationBlacklist:
-  - "Example Dependent App Name to Exclude"
+# Display names of dependent apps that must never be relinked to a new version.
+# Example: dependentApplicationBlacklist: ["Legacy App That Pins An Old Runtime"]
+dependentApplicationBlacklist: []

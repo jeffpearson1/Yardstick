@@ -6,7 +6,7 @@ The Yardstick email notification feature provides automated reporting of applica
 
 ## Prerequisites
 
-- Proper email configuration in `Preferences.yaml`
+- Proper email configuration in `Local\preferences.yaml` (`.\Install-Yardstick.ps1 -Step Email` sets it up)
 - For Outlook delivery (the default):
   - Microsoft Outlook installed and configured
   - Outlook COM automation available (typically available with Outlook desktop installation)
@@ -14,7 +14,7 @@ The Yardstick email notification feature provides automated reporting of applica
 
 ## Configuration
 
-### Preferences.yaml Settings
+### Preference settings
 
 The following settings control email notifications:
 
@@ -73,7 +73,7 @@ Set `emailDeliveryMethod: smtp` to send with `Send-MailMessage` straight to `smt
   .\Set-YardstickCredential.ps1 -Smtp -Remove  # go back to anonymous relay
   ```
 
-  Like the Intune credentials, the account is kept in Windows Credential Manager, encrypted for the Windows user that runs Yardstick, and is never written to `Preferences.yaml`.
+  Like the Intune credentials, the account is kept in Windows Credential Manager, encrypted for the Windows user that runs Yardstick, and is never written to `preferences.yaml`.
 - **Logo**: `Send-MailMessage` cannot set a Content-ID on an attachment, and many clients block base64 images, so SMTP reports are sent without the header logo.
 - **Preview**: SMTP has no compose window, so `-Preview` opens the rendered HTML in the default browser instead.
 - Microsoft marks `Send-MailMessage` as obsolete because it cannot guarantee secure connections, but it still works in both Windows PowerShell 5.1 and PowerShell 7. Use `smtpUseSsl: true` whenever the server supports it.
@@ -174,7 +174,7 @@ Returns the configured `emailDeliveryMethod`, lowercased, or `outlook` when unse
 Sends an HTML message with `Send-MailMessage` using the `smtp*` preferences and the stored SMTP credential, if there is one. Throws on failure.
 
 **Parameters:**
-- `Preferences`: Configuration hashtable from Preferences.yaml
+- `Preferences`: Configuration hashtable from `Import-YardstickPreferences`
 - `To`: One or more recipient addresses
 - `Subject`: Message subject
 - `HtmlBody`: HTML message body
@@ -183,7 +183,7 @@ Sends an HTML message with `Send-MailMessage` using the `smtp*` preferences and 
 Generates the email report and sends it through the configured delivery method.
 
 **Parameters:**
-- `Preferences`: Configuration hashtable from Preferences.yaml
+- `Preferences`: Configuration hashtable from `Import-YardstickPreferences`
 - `RunParameters`: String describing Yardstick execution parameters
 
 ## Implementation Details
@@ -223,7 +223,7 @@ Comprehensive error handling includes:
    - Check if Outlook is running or can be started
 
 2. **"Email setting 'X' not configured"**
-   - Verify all required settings in Preferences.yaml
+   - Verify all required settings in `Local\preferences.yaml`
    - Check for typos in setting names
 
 3. **"Failed to send email report"**

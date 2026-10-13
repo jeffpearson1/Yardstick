@@ -18,7 +18,7 @@
 
 .PARAMETER RecipeFolder
     The folder to read recipe ids from. Defaults to the folder named after the
-    group underneath the Recipes path from Preferences.yaml.
+    group underneath the Recipes path from preferences.yaml (Recipes\ by default).
 
 .PARAMETER GroupFile
     Path to the recipe group file. Defaults to RecipeGroups.yaml beside this script.
@@ -37,6 +37,8 @@
 .EXAMPLE
     .\Sync-RecipeGroup.ps1 -GroupName TestApps -RecipeFolder .\Recipes\Testing
 #>
+#Requires -Version 7.0
+
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [String]$GroupName = 'Development',
@@ -53,14 +55,11 @@ $ErrorActionPreference = 'Stop'
 Import-Module powershell-yaml -ErrorAction Stop
 
 if (-not $RecipeFolder) {
-    $prefsPath = Join-Path $PSScriptRoot 'Preferences.yaml'
-    if (-not (Test-Path $prefsPath)) {
-        Write-Error "Preferences.yaml not found. Pass -RecipeFolder explicitly."
-        exit 1
-    }
-    $prefs = Get-Content $prefsPath | ConvertFrom-Yaml
-    if ([string]::IsNullOrWhiteSpace($prefs.Recipes)) {
-        Write-Error "Preferences.yaml does not define a Recipes path. Pass -RecipeFolder explicitly."
+    Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Force
+    try {
+        $prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot
+    } catch {
+        Write-Error "$($_.Exception.Message) Alternatively, pass -RecipeFolder explicitly."
         exit 1
     }
     $RecipeFolder = Join-Path $prefs.Recipes $GroupName

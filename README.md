@@ -14,95 +14,48 @@ Yardstick includes a variety of recipes to use directly or adapt. Its Microsoft 
 
 ## Getting Started
 
+You need Windows 10/11 (or Windows Server 2019+), [PowerShell 7](https://aka.ms/powershell) and an Intune tenant. The first setup also needs an account that can create Entra app registrations and grant admin consent; if you don't have one, see [Installation.md](Docs/Installation.md#creating-the-app-registration-yourself).
+
+1. **Get Yardstick.** Clone the repository, or download the zip and extract it, into a folder with a few GB free for staging installers:
+   ```powershell
+   git clone https://github.com/jeffpearson1/Yardstick.git
+   cd Yardstick
+   ```
+2. **Run the installer** from PowerShell 7:
+   ```powershell
+   .\Install-Yardstick.ps1
+   ```
+   It installs the `powershell-yaml` module, creates `Local\preferences.yaml` and the working folders, creates the Entra app registration with the Microsoft Graph permissions Yardstick needs (storing its secret in Windows Credential Manager), and optionally sets up email reports and a daily scheduled task. It finishes by running the health check.
+3. **Package your first app:**
+   ```powershell
+   .\Yardstick.ps1 -AppId 7zip -NoEmail
+   ```
+
+Run `.\Test-YardstickSetup.ps1` at any time to check the installation. Re-run `.\Install-Yardstick.ps1` (or one step of it, such as `-Step AppRegistration` to renew the client secret) to change a setting; it skips whatever is already done.
+
+[Installation.md](Docs/Installation.md) covers each step in detail: the Graph permissions and why they are needed, creating the app registration by hand, scheduled-task accounts, email, upgrading and troubleshooting.
+
 ### Dependencies
 
-The only required PowerShell Gallery module is [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml). Selenium-Powershell and TUN.CredentialManager remain optional for recipes that use browser automation or stored vendor credentials. Yardstick calls Microsoft Graph directly and has no IntuneWin32App or MSAL.PS dependency.
+The only required PowerShell Gallery module is [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml), which the installer installs. Selenium-Powershell and TUN.CredentialManager are optional, for recipes that use browser automation or stored vendor credentials. Yardstick calls Microsoft Graph directly and has no IntuneWin32App or MSAL.PS dependency.
 
 The official Microsoft Win32 Content Prep Tool is downloaded on first use from a commit-pinned Microsoft release and verified with SHA-256 before execution.
 
+### Configuring preferences
 
-### Installing
+Settings live in `Local\preferences.yaml`, which is excluded from Git. Every setting has a built-in default, so the file only needs what you want to change; `Config\Preferences.example.yaml` lists them all with explanations. The Intune tenant ID, client ID and secret are **not** stored in this file - they are kept in Windows Credential Manager for the account that runs Yardstick.
 
-```powershell
-Install-Module -Name Powershell-Yaml
-# Optional, for recipes that use these integrations:
-Install-Module -Name TUN.CredentialManager
-Install-Module -Name Selenium -AllowPrerelease
-```
+* Email reports go out through Outlook or SMTP. See [EmailNotifications.md](Docs/EmailNotifications.md).
+* `SoftwareDropbox` and `SoftwareArchive` support recipes for vendors whose installer cannot be downloaded automatically. See [SoftwareDropbox.md](Docs/SoftwareDropbox.md).
+* Setting the optional `Backup` folder keeps a copy of every `.intunewin` file Yardstick uploads, so a bad release can be traced back to the exact package that shipped.
 
-* Download or clone the repository into a folder where it can live. A sufficient amount of disk space should be available in this directory for the staging of applications. 
-* Some recipes may require you to have Mozilla Firefox installed and configured to work with Selenium.
+### Icons
 
+Icons are not included for licensing reasons. Put the icons your recipes need in the `Icons` folder (.jpg or .png, up to Intune's 512x512 and 750KB), or run `.\Get-YardstickIcon.ps1` to search for, tidy up and save them. The health check lists recipes whose icon is missing.
 
-### Configuring Preferences.yaml
+### Recipe credentials
 
-Most of this file should be fairly self-explanatory. Defaults do not necessarily have to be set, however recipes that don't contain all the values normally set by the defaults may fail to run correctly.
-
-The development project keeps its machine-local configuration at `Local\preferences.yaml`. Start by copying `Config\Preferences.example.yaml`; both `Local` and `Artifacts` are excluded from Git. See [the project layout](Docs/Architecture.md) for the development, test, artifact, and production boundaries.
-
-The TenantID, ClientID and ClientSecret are **not** stored in this file - see [Set the Intune credentials](#set-the-intune-credentials) below. `credentialTarget`, `credentialExpirationWarningDays`, `credentialExpirationEmailIntervalHours` and `adminEmailRecipient` tune where those credentials are stored and who is told when they are about to expire.
-
-Email reports go out through Outlook by default. Set `emailDeliveryMethod: smtp` and the `smtp*` keys to send through an SMTP server instead, which needs no Outlook install. See [EmailNotifications.md](Docs/EmailNotifications.md).
-
-`SoftwareDropbox` and `SoftwareArchive` support recipes for vendors whose installer is behind a signed-in, licensed download that cannot be automated. An operator stages the installer in a folder and Yardstick packages whatever is there. See [SoftwareDropbox.md](Docs/SoftwareDropbox.md). Leave both blank if you have no such recipes.
-
-Setting the optional `Backup` folder makes Yardstick keep a copy of every `.intunewin` file it uploads, so a bad release can be traced back to the exact package that shipped. Each recipe gets its own subfolder, and each file is named with the version and the time Intune finished publishing it. The newest three are retained (`backupVersionsToKeep`). The copy runs on a background thread while Yardstick carries on with supersedence and assignments, and a backup failure is reported without failing the application update. Leave `Backup` blank to turn this off.
-
-
-### Populate the icon cache
-
-Icons are not included for licensing reasons. Populate the icon cache folder with the icons needed for any application recipes you will be running. Formats can be .jpg or .png, max size is the same as Intune - 512x512 and 750KB. Be sure to double check filename extensions in recipes you are using.
-
-
-### Set the Intune credentials
-
-The app registration credentials Yardstick uses to reach Microsoft Graph are held in
-Windows Credential Manager, encrypted for the account that runs Yardstick, rather than
-in plaintext in `Local\preferences.yaml`. Store them once per machine:
-
-```powershell
-.\Set-YardstickCredential.ps1
-```
-
-You are prompted for the Tenant ID, Client ID and Client Secret (typed as a masked
-SecureString), plus an optional secret expiration date. The script then authenticates
-to Graph to confirm the values work before you rely on them.
-
-Other useful invocations:
-
-```powershell
-.\Set-YardstickCredential.ps1 -Show               # tenant, client and expiry (secret masked)
-.\Set-YardstickCredential.ps1 -RefreshExpiration  # re-read the expiry date from Graph
-.\Set-YardstickCredential.ps1 -Remove             # delete the stored credential
-```
-
-If `Local\preferences.yaml` still carries the legacy `TenantID` / `ClientId` / `ClientSecret`
-keys, the next Yardstick run migrates them into Credential Manager automatically and
-logs a reminder to delete them from the file. Running with `-NoInteractive` never
-prompts: an unattended run with no stored credential fails immediately with an
-instruction to run `Set-YardstickCredential.ps1`.
-
-#### Client secret expiration
-
-At the start of every run Yardstick checks how much life the client secret has left.
-When it is inside `credentialExpirationWarningDays` (default 30), a warning is written
-to the console and log, and an email goes to `adminEmailRecipient` (falling back to
-`emailRecipient`). Repeat emails are throttled to one per
-`credentialExpirationEmailIntervalHours` (default 24) so a nightly schedule does not
-spam the mailbox.
-
-If you supply an expiration date when running `Set-YardstickCredential.ps1`, Yardstick
-uses it and does not query Graph. If you leave it blank, the date is discovered from
-Graph when the app registration holds `Application.Read.All` - Yardstick matches the
-secret to its `passwordCredential` by hint.
-
-
-### Set recipe credentials in Windows Credential Manager
-
-Some recipes sign in to vendor portals. Create a Windows credential -
-```yourdomainnamehere``` - that contains the username and password used for those
-sign-ins, along with any other credential objects required by the recipes you run.
-
+Some recipes sign in to vendor portals. Create the Windows credential each recipe names - for example ```yourdomainnamehere``` - in Credential Manager, as the account that runs Yardstick.
 
 ### Recipe Tips and Tricks
 * Use the defaults (configurable in preferences.yaml) for as much stuff as you can. All the available default settings are in the example preferences.yaml file.

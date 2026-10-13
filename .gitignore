@@ -68,7 +68,8 @@ Architecture.md
 /Tests/**/tmp/
 
 # Versioned development-only source remains in Git. Production exclusion for
-# .github, Config, Docs, Tests, README.md, and Publish-Yardstick.ps1 is enforced
+# .github, Docs, Tests, README.md, and Publish-Yardstick.ps1 (and Config, apart
+# from Preferences.example.yaml, which the installer needs) is enforced
 # by the explicit allowlist in Publish-Yardstick.ps1, not by this file.
 
 # Editors, dependencies, and local Codex scratch state

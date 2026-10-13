@@ -85,12 +85,15 @@ function Publish-YardstickFile {
 if ($Runtime) {
     $runtimeSpecs = @(
         'Branding/**',
+        'Config/Preferences.example.yaml',
         'Modules/**',
         'Scripts/**',
         'Templates/**',
         'Tools/**',
         'LICENSE.md',
         'Deploy-YardstickApps.ps1',
+        'Get-YardstickIcon.ps1',
+        'Install-Yardstick.ps1',
         'Migrate-ToSupersedenceModel.ps1',
         'ProjectLayout.ps1',
         'RecipeGroups.yaml',
@@ -98,7 +101,7 @@ if ($Runtime) {
         'Set-YardstickCredential.ps1',
         'Sync-RecipeGroup.ps1',
         'Test-EmailNotification.ps1',
-        'Test-MgearDeployment.ps1',
+        'Test-YardstickSetup.ps1',
         'Yardstick.Project.psd1',
         'Yardstick.ps1',
         'Yardstick.psd1'
@@ -111,7 +114,7 @@ if ($Runtime) {
 
     # These files must travel with the layout-aware runtime even before the
     # first commit that introduces them.
-    foreach ($required in 'ProjectLayout.ps1', 'Yardstick.Project.psd1') {
+    foreach ($required in 'ProjectLayout.ps1', 'Yardstick.Project.psd1', 'Modules/YardstickConfig.psm1') {
         if ((Test-Path -LiteralPath (Join-Path $projectRoot $required)) -and $required -notin $runtimeFiles) {
             $runtimeFiles += $required
         }

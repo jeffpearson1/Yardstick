@@ -46,6 +46,8 @@
     .\Set-YardstickCredential.ps1 -Smtp
     Prompts for the SMTP user name and password, and stores them securely.
 #>
+#Requires -Version 7.0
+
 [CmdletBinding(DefaultParameterSetName = 'Set')]
 param(
     [Parameter(ParameterSetName = 'Show')]
@@ -75,13 +77,11 @@ Import-Module "$PSScriptRoot\Modules\YardstickGraph.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickIntune.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Scope Global -Force
 
-$Prefs = $null
-. (Join-Path $PSScriptRoot 'ProjectLayout.ps1')
-$prefsPath = Get-YardstickPreferencesPath -ProjectRoot $PSScriptRoot
-if (Test-Path $prefsPath) {
-    $Prefs = Get-Content -LiteralPath $prefsPath | ConvertFrom-Yaml
-}
+# Credentials can be stored before preferences.yaml exists, so a missing file
+# just means the built-in defaults (credential target names) apply.
+$Prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot -AllowMissing
 
 if ($Smtp) {
     if (-not $Target) {

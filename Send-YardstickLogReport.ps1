@@ -48,6 +48,8 @@ Print what was parsed out of the log and exit without sending anything.
 .\Send-YardstickLogReport.ps1 -LogPath D:\Archive\YLog-20260908.log
 #>
 
+#Requires -Version 7.0
+
 [CmdletBinding()]
 param(
     [string]$LogPath = "$PSScriptRoot\YLog.log",
@@ -71,6 +73,7 @@ $Global:LogFile = 'YEmailReport.log'
 
 Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
 Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Scope Global -Force
 Import-Module powershell-yaml -Force
 
 
@@ -351,7 +354,7 @@ if (-not (Test-Path -LiteralPath $LogPath)) {
     throw "Log file not found: $LogPath"
 }
 
-$prefs = Get-Content "$PSScriptRoot\Preferences.yaml" | ConvertFrom-Yaml
+$prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot
 
 $run = Get-YardstickLogRun -Lines (Get-Content -LiteralPath $LogPath) -Index $RunIndex
 $entries = ConvertTo-YardstickLogEntry -Lines $run.Lines
