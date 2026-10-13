@@ -864,6 +864,10 @@ function Set-ScriptVariables {
     $Script:RegistryDetectionValueName = $Parameters.registryDetectionValueName
     $Script:RegistryDetectionValue = $Parameters.registryDetectionValue
     $Script:RegistryDetectionOperator = $Parameters.registryDetectionOperator
+    # Extra file/registry rules that must ALL match alongside the primary rule above.
+    # Entries are the recipe's own hashtables, so a pre/post-download script can set
+    # e.g. $additionalDetectionRules[0].registryDetectionValue at runtime.
+    $Script:AdditionalDetectionRules = @($Parameters.additionalDetectionRules | Where-Object { $_ })
     $Script:DetectionScript = $Parameters.detectionScript
     $Script:DetectionScriptFileExtension = if ($null -ne $Parameters.detectionScriptFileExtension) { $Parameters.detectionScriptFileExtension } else { $Preferences.defaultDetectionScriptFileExtension }
     $Script:DetectionScriptRunAs32Bit = if ($null -ne $Parameters.detectionScriptRunAs32Bit) { $Parameters.detectionScriptRunAs32Bit } else { $Preferences.defaultdetectionScriptRunAs32Bit }
@@ -1134,6 +1138,19 @@ function Update-ScriptPlaceholders {
     if ($Script:RegistryDetectionKey) {
         $Script:RegistryDetectionKey = $Script:RegistryDetectionKey.replace("<version>", $Version)
     }
+
+    # Additional detection rules get the same tokens in their path/key/value fields
+    foreach ($rule in $Script:AdditionalDetectionRules) {
+        foreach ($field in 'fileDetectionPath', 'fileDetectionName', 'fileDetectionVersion', 'registryDetectionKey', 'registryDetectionValue') {
+            if ($rule[$field] -is [string]) {
+                $value = $rule[$field].replace("<filename>", $FileName).replace("<version>", $Version)
+                if ($ProductCode) {
+                    $value = $value.replace("<productcode>", $ProductCode)
+                }
+                $rule[$field] = $value
+            }
+        }
+    }
 }
 
 
@@ -1211,7 +1228,10 @@ function New-DetectionRule {
     
     .DESCRIPTION
     This function creates the appropriate detection rule object based on the
-    specified detection type (file, msi, registry, or script).
+    specified detection type (file, msi, registry, or script). For file, msi,
+    and registry recipes, each entry in additionalDetectionRules adds another
+    rule; Intune requires every rule to match. Test-RecipeSchema rejects
+    additionalDetectionRules on script recipes, since Intune cannot combine them.
     
     .PARAMETER DetectionType
     The type of detection rule to create (file, msi, registry, script).
@@ -1224,59 +1244,44 @@ function New-DetectionRule {
         [string]$ProductCode = ""
     )
     
-    switch ($DetectionType) {
-        "file" {
-            switch ($Script:FileDetectionMethod) {
-                "exists" {
-                    return New-YardstickWin32AppDetectionRuleFile -Existence -DetectionType "exists" -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName
-                }
-                "modified" {
-                    return New-YardstickWin32AppDetectionRuleFile -DateModified -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -DateTimeValue $Script:FileDetectionDateTime
-                }
-                "created" {
-                    return New-YardstickWin32AppDetectionRuleFile -DateCreated -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -DateTimeValue (Get-Date $Script:FileDetectionDateTime)
-                }
-                "version" {
-                    return New-YardstickWin32AppDetectionRuleFile -Version -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -VersionValue $Script:FileDetectionVersion
-                }
-                "size" {
-                    return New-YardstickWin32AppDetectionRuleFile -Size -Path $Script:FileDetectionPath -FileOrFolder $Script:FileDetectionName -Operator $Script:FileDetectionOperator -SizeinMBValue $Script:FileDetectionValue
-                }
-            }
+    if ($DetectionType -eq "script") {
+        if (!(Test-Path $Script:Scripts\$Script:Id)) {
+            New-Item -Name $Script:Id -ItemType Directory -Path $Script:Scripts | Out-Null
         }
-        "msi" {
-            return New-YardstickWin32AppDetectionRuleMsi -ProductCode $ProductCode -ProductVersion $Script:FileDetectionVersion
-        }
-        "registry" {
-            switch ($Script:RegistryDetectionMethod) {
-                "exists" {
-                    if ($Script:RegistryDetectionValue) {
-                        return New-YardstickWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -DetectionType "exists"
-                    } else {
-                        return New-YardstickWin32AppDetectionRuleRegistry -Existence -KeyPath $Script:RegistryDetectionKey -DetectionType "exists"
-                    }
-                }
-                "version" {
-                    return New-YardstickWin32AppDetectionRuleRegistry -VersionComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -VersionComparisonOperator $Script:RegistryDetectionOperator -VersionComparisonValue $Script:RegistryDetectionValue
-                }
-                "integer" {
-                    return New-YardstickWin32AppDetectionRuleRegistry -IntegerComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -IntegerComparisonOperator $Script:RegistryDetectionOperator -IntegerComparisonValue $Script:RegistryDetectionValue
-                }
-                "string" {
-                    return New-YardstickWin32AppDetectionRuleRegistry -StringComparison -KeyPath $Script:RegistryDetectionKey -ValueName $Script:RegistryDetectionValueName -Check32BitOn64System $Script:Is32BitApp -StringComparisonOperator $Script:RegistryDetectionOperator -StringComparisonValue $Script:RegistryDetectionValue
-                }
-            }
-        }
-        "script" {
-            if (!(Test-Path $Script:Scripts\$Script:Id)) {
-                New-Item -Name $Script:Id -ItemType Directory -Path $Script:Scripts | Out-Null
-            }
-            $ScriptLocation = "$($Script:Scripts)\$($Script:Id)\$($Script:Version).$($Script:DetectionScriptFileExtension)"
-            Set-Content -Path $ScriptLocation -Value $Script:DetectionScript -Force
-            $DetRule = New-YardstickWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $Script:DetectionScriptEnforceSignatureCheck -RunAs32Bit $Script:DetectionScriptRunAs32Bit
-            return $DetRule
-        }
+        $ScriptLocation = "$($Script:Scripts)\$($Script:Id)\$($Script:Version).$($Script:DetectionScriptFileExtension)"
+        Set-Content -Path $ScriptLocation -Value $Script:DetectionScript -Force
+        $DetRule = New-YardstickWin32AppDetectionRuleScript -ScriptFile $ScriptLocation -EnforceSignatureCheck $Script:DetectionScriptEnforceSignatureCheck -RunAs32Bit $Script:DetectionScriptRunAs32Bit
+        return $DetRule
     }
+
+    $PrimarySpec = @{
+        detectionType              = $DetectionType
+        fileDetectionMethod        = $Script:FileDetectionMethod
+        fileDetectionPath          = $Script:FileDetectionPath
+        fileDetectionName          = $Script:FileDetectionName
+        fileDetectionOperator      = $Script:FileDetectionOperator
+        fileDetectionVersion       = $Script:FileDetectionVersion
+        fileDetectionDateTime      = $Script:FileDetectionDateTime
+        fileDetectionValue         = $Script:FileDetectionValue
+        registryDetectionMethod    = $Script:RegistryDetectionMethod
+        registryDetectionKey       = $Script:RegistryDetectionKey
+        registryDetectionValueName = $Script:RegistryDetectionValueName
+        registryDetectionValue     = $Script:RegistryDetectionValue
+        registryDetectionOperator  = $Script:RegistryDetectionOperator
+    }
+    $RuleArgs = @{
+        ProductCode    = $ProductCode
+        DefaultVersion = $Script:Version
+        Is32BitApp     = [bool]$Script:Is32BitApp
+    }
+    $Rules = @(New-YardstickDetectionRuleFromSpec -Spec $PrimarySpec @RuleArgs)
+    foreach ($AdditionalRule in $Script:AdditionalDetectionRules) {
+        $Rules += New-YardstickDetectionRuleFromSpec -Spec $AdditionalRule @RuleArgs
+    }
+    if ($Rules.Count -gt 1) {
+        Write-Log "Using $($Rules.Count) detection rules (all must match)"
+    }
+    return $Rules
 }
 
 

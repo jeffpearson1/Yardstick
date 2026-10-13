@@ -399,6 +399,38 @@ registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVers
 
 **Note:** The `<version>` placeholder in registry keys is automatically replaced by `Update-ScriptPlaceholders`.
 
+### Additional Detection Rules
+
+**`additionalDetectionRules`** (list, optional)
+
+Intune lets a Win32 app have several manual detection rules, and the app counts as installed only when **all** of them match. The top-level detection fields above are always the primary rule. `additionalDetectionRules` adds more rules alongside it. Use it when a single value can't tell the app apart, for example when Firefox and Firefox ESR share one uninstall key and only `DisplayName` shows the release track.
+
+Each entry is a mapping that uses the same field names as a top-level `file` or `registry` rule:
+
+```yaml
+detectionType: registry
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual
+additionalDetectionRules:
+  - detectionType: registry
+    registryDetectionMethod: string
+    registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
+    registryDetectionValueName: DisplayName
+    registryDetectionOperator: equal
+    registryDetectionValue: Mozilla Firefox ESR (x64 en-US)
+```
+
+**Rules:**
+- An entry's `detectionType` must be `file` or `registry`. Intune does not allow a script rule alongside other rules, and an extra `msi` rule would only repeat the primary product code.
+- You can't use `additionalDetectionRules` when the primary `detectionType` is `script`. Put all the logic in the detection script instead.
+- Every entry must list its own required fields: `fileDetectionPath`/`fileDetectionName`/`fileDetectionMethod` for `file`, and `registryDetectionKey`/`registryDetectionMethod` for `registry`. Registry `string`, `integer` and `version` rules also need `registryDetectionValueName` and `registryDetectionOperator`, and `string`/`integer` rules need `registryDetectionValue`. The schema validator treats missing fields in an entry as errors, because it cannot see assignments that scripts make to list entries.
+- Version comparisons with no value set (`fileDetectionVersion` for `file`, `registryDetectionValue` for `registry`) default to the recipe's `$version`, the same as for the primary rule.
+- `<filename>`, `<version>` and `<productcode>` placeholders are replaced in the path, name, key and value fields of each entry.
+- To set an entry's value from a script, change the entry in place. For example, in `preDownloadScript` use `$additionalDetectionRules[0].registryDetectionValue = "..."`.
+- Supersedence and the `{DETECT}` anchor only look at the primary rule. Keep the version comparison in the primary rule.
+
 ### Script Detection
 
 **`detectionType: script`**
@@ -677,7 +709,7 @@ This inherits all fields from `photoshop.yaml` and overrides only `id`, `display
 
 ## Placeholders
 
-`Update-ScriptPlaceholders` automatically replaces placeholders in these fields: `installScript`, `powerShellInstallScript`, `uninstallScript`, `powerShellUninstallScript`, `detectionScript`, and `registryDetectionKey`.
+`Update-ScriptPlaceholders` automatically replaces placeholders in these fields: `installScript`, `powerShellInstallScript`, `uninstallScript`, `powerShellUninstallScript`, `detectionScript`, and `registryDetectionKey`. They are also replaced in the `fileDetectionPath`, `fileDetectionName`, `fileDetectionVersion`, `registryDetectionKey` and `registryDetectionValue` fields of each `additionalDetectionRules` entry.
 
 The three placeholders are:
 
@@ -779,6 +811,41 @@ registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVers
 scopeTags:
   - My Scope Tag
   - My Scope Tag 2
+```
+
+### Multiple Detection Rules Example (Firefox ESR)
+
+Firefox ESR and Rapid Release Firefox write the same uninstall key, so a version check on its own would also match a newer Rapid Release install. A second rule requires the ESR `DisplayName` as well. Both rules must match.
+
+```yaml
+url: https://download.mozilla.org/?product=firefox-esr-msi-latest-ssl&os=win64&lang=en-US
+urlRedirects: true
+preDownloadScript: |
+  $filename = $URL.split("/")[-1].replace("%20", " ")
+  $version = ($filename.split(" ")[-1] -Split("esr\.msi"))[0]
+  $registryDetectionValue = $version
+installScript: msiexec /i "<filename>" /qn /norestart
+uninstallScript: |
+  "%ProgramFiles%\Mozilla Firefox\uninstall\helper.exe" -ms
+iconFile: firefox.png
+id: firefoxesr
+displayName: Mozilla Firefox ESR
+publisher: The Mozilla Foundation
+description: Mozilla Firefox ESR is a free and open-source web browser
+detectionType: registry
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual
+additionalDetectionRules:
+  - detectionType: registry
+    registryDetectionMethod: string
+    registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
+    registryDetectionValueName: DisplayName
+    registryDetectionOperator: equal
+    registryDetectionValue: Mozilla Firefox ESR (x64 en-US)
+scopeTags:
+  - My Scope Tag
 ```
 
 ### Registry Detection with Dynamic Keys Example (DJV)

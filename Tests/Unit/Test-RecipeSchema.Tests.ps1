@@ -228,4 +228,133 @@ Describe "Test-RecipeSchema" {
             $result.IsValid | Should -BeTrue
         }
     }
+
+    Context "additionalDetectionRules" {
+        BeforeAll {
+            function New-AdditionalRule {
+                @{
+                    detectionType              = "registry"
+                    registryDetectionMethod    = "string"
+                    registryDetectionKey       = "HKLM\SOFTWARE\TestApp"
+                    registryDetectionValueName = "DisplayName"
+                    registryDetectionOperator  = "equal"
+                    registryDetectionValue     = "Test App ESR"
+                }
+            }
+        }
+
+        It "Accepts a registry primary with an additional registry rule" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $recipe['additionalDetectionRules'] = @(New-AdditionalRule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+            $result.Warnings | Should -BeNullOrEmpty
+        }
+
+        It "Accepts an additional file rule alongside an msi primary" {
+            $recipe = New-ValidRecipe -DetectionType "msi"
+            $recipe['additionalDetectionRules'] = @(@{
+                detectionType       = "file"
+                fileDetectionMethod = "exists"
+                fileDetectionPath   = "C:\Program Files\TestApp"
+                fileDetectionName   = "plugin.dll"
+            })
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+        }
+
+        It "Rejects additional rules on a script recipe" {
+            $recipe = New-ValidRecipe -DetectionType "script"
+            $recipe['additionalDetectionRules'] = @(New-AdditionalRule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeFalse
+            $result.Errors | Where-Object { $_ -match "cannot be used with detectionType 'script'" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Rejects an additional rule of type <_>" -ForEach @('script', 'msi') {
+            $type = $_
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $rule = New-AdditionalRule
+            $rule['detectionType'] = $type
+            $recipe['additionalDetectionRules'] = @($rule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeFalse
+            $result.Errors | Where-Object { $_ -match "Invalid detectionType '$type' in 'additionalDetectionRules\[0\]'" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Reports a missing key in an entry" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $rule = New-AdditionalRule
+            $rule.Remove('registryDetectionKey')
+            $recipe['additionalDetectionRules'] = @($rule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Errors | Should -Contain "Missing required field 'registryDetectionKey' in 'additionalDetectionRules[0]' (detectionType 'registry')"
+        }
+
+        It "Does not accept a script assignment in place of an entry's required field" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $recipe['preDownloadScript'] = "`$registryDetectionKey = 'HKLM\SOFTWARE\Other'"
+            $rule = New-AdditionalRule
+            $rule.Remove('registryDetectionKey')
+            $recipe['additionalDetectionRules'] = @($rule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeFalse
+        }
+
+        It "Requires a value for a string comparison" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $rule = New-AdditionalRule
+            $rule.Remove('registryDetectionValue')
+            $recipe['additionalDetectionRules'] = @($rule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Errors | Should -Contain "Missing required field 'registryDetectionValue' in 'additionalDetectionRules[0]' (registryDetectionMethod 'string')"
+        }
+
+        It "Lets a version comparison fall back to the recipe version" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $rule = New-AdditionalRule
+            $rule['registryDetectionMethod'] = 'version'
+            $rule['registryDetectionOperator'] = 'greaterThanOrEqual'
+            $rule.Remove('registryDetectionValue')
+            $recipe['additionalDetectionRules'] = @($rule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+        }
+
+        It "Reports an invalid method in an entry" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $rule = New-AdditionalRule
+            $rule['registryDetectionMethod'] = 'bogus'
+            $recipe['additionalDetectionRules'] = @($rule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Errors | Where-Object { $_ -match "Invalid value 'bogus' for 'registryDetectionMethod' in 'additionalDetectionRules\[0\]'" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Warns on unknown and wrongly cased keys in an entry" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $rule = [ordered]@{}
+            foreach ($entry in (New-AdditionalRule).GetEnumerator()) { $rule[$entry.Key] = $entry.Value }
+            $rule.Remove('registryDetectionOperator')
+            $rule['RegistryDetectionOperator'] = 'equal'
+            $rule['registryDetectionValu'] = 'typo'
+            $recipe['additionalDetectionRules'] = @($rule)
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "Unknown field 'registryDetectionValu' in 'additionalDetectionRules\[0\]'" } | Should -Not -BeNullOrEmpty
+            $result.Warnings | Where-Object { $_ -match "Field 'RegistryDetectionOperator' in 'additionalDetectionRules\[0\]' has incorrect casing" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Rejects a value that is not a list" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $recipe['additionalDetectionRules'] = New-AdditionalRule
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Errors | Should -Contain "Field 'additionalDetectionRules' must be a list of detection rules"
+        }
+
+        It "Rejects a list entry that is not a mapping" {
+            $recipe = New-ValidRecipe -DetectionType "registry"
+            $recipe['additionalDetectionRules'] = @('registry')
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Errors | Should -Contain "Entry 'additionalDetectionRules[0]' must be a mapping of detection fields"
+        }
+    }
 }

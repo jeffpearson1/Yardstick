@@ -514,12 +514,67 @@ function Get-RegistryValueForDetection {
 function Test-RecipeDetection {
     <#
     .SYNOPSIS
-    Evaluates a recipe's detection rule against the local machine.
+    Evaluates a recipe's detection rules against the local machine.
+
+    .DESCRIPTION
+    Evaluates the primary rule (the recipe's top-level detection fields) and then
+    every entry in additionalDetectionRules. Like Intune, the recipe is detected
+    only when every rule matches. Rule and Detail join all evaluated rules with
+    ' + ' / ' | ' so a failure shows which rule missed.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable] $Recipe,
+        [Parameter(Mandatory)][string] $Version,
+        [AllowNull()][string] $ProductCode,
+        [AllowNull()][string] $FileName,
+        [Parameter(Mandatory)][string] $LogDirectory,
+        [Parameter(Mandatory)][string] $LogName
+    )
+
+    $ruleArgs = @{
+        Version      = $Version
+        ProductCode  = $ProductCode
+        FileName     = $FileName
+        LogDirectory = $LogDirectory
+    }
+    $results = @(Test-RecipeDetectionRule -Recipe $Recipe @ruleArgs -LogName $LogName)
+
+    $index = 0
+    foreach ($entry in @($Recipe['additionalDetectionRules'] | Where-Object { $_ })) {
+        # Yardstick's Update-ScriptPlaceholders expands tokens in these fields of an
+        # additional rule (unlike the primary rule's file fields), so do the same here.
+        $rule = @{}
+        foreach ($key in $entry.Keys) { $rule[$key] = $entry[$key] }
+        foreach ($field in 'fileDetectionPath', 'fileDetectionName', 'fileDetectionVersion', 'registryDetectionValue') {
+            if ($rule[$field] -is [string]) {
+                $rule[$field] = Expand-RecipeToken -Value $rule[$field] -FileName $FileName -Version $Version -ProductCode $ProductCode
+            }
+        }
+        if ($Recipe.ContainsKey('is32BitApp')) { $rule['is32BitApp'] = $Recipe['is32BitApp'] }
+        $result = Test-RecipeDetectionRule -Recipe $rule @ruleArgs -LogName "$LogName-rule$($index + 1)"
+        $results += $result
+        $index++
+    }
+
+    if ($results.Count -eq 1) { return $results[0] }
+    return [PSCustomObject]@{
+        Detected = -not ($results | Where-Object { -not $_.Detected })
+        Rule     = ($results | ForEach-Object { $_.Rule }) -join ' + '
+        Detail   = ($results | ForEach-Object { "$(if ($_.Detected) { 'PASS' } else { 'FAIL' }) $($_.Detail)" }) -join ' | '
+    }
+}
+
+function Test-RecipeDetectionRule {
+    <#
+    .SYNOPSIS
+    Evaluates a single detection rule against the local machine.
 
     .DESCRIPTION
     Supports the file, msi, registry, and script detection types used by
     Yardstick recipes, matching Intune's evaluation semantics as closely as a
-    local harness can.
+    local harness can. $Recipe is either the whole recipe (primary rule) or one
+    additionalDetectionRules entry.
     #>
     [CmdletBinding()]
     param(

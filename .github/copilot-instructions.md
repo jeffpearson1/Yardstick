@@ -50,6 +50,9 @@
     - `$registryDetectionValueName` – Name of the registry value to detect
     - `$registryDetectionValue` – Expected value for comparison (when using value-based detection)
     - Note: `registryDetectionOperator` and `registryDetectionMethod` are typically set in the YAML recipe
+  - **Additional detection rules** (optional `additionalDetectionRules` list; not allowed with `detectionType: script`):
+    - Each entry is a `file` or `registry` rule that uses the same field names as the top-level rule. Intune requires ALL rules (primary + additional) to match
+    - Scripts can change entries in place, e.g. `$additionalDetectionRules[0].registryDetectionValue = $version`
   - **Script detection variables** (required when `detectionType: script`):
     - `$detectionScript` – Set in YAML; the PowerShell script content that performs custom detection logic. Supports the `<version>` placeholder.
 

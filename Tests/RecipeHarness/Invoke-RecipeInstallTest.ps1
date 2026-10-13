@@ -567,6 +567,12 @@ function Test-Recipe {
                 $recipe[$detectionKey] = [string]$assigned
             }
         }
+        # A script may also replace the additionalDetectionRules list wholesale. Edits to
+        # existing entries need no fold-back: they mutate the recipe's own hashtables.
+        $assignedRules = Get-Variable -Name 'additionalDetectionRules' -Scope 0 -ValueOnly -ErrorAction SilentlyContinue
+        if ($assignedRules) {
+            $recipe['additionalDetectionRules'] = @($assignedRules)
+        }
 
         $detectionArgs = @{
             Recipe      = $recipe

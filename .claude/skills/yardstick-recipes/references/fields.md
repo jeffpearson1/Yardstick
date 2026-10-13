@@ -75,6 +75,7 @@ at runtime, but it will draw a warning on every schema run.
 | App drops a known versioned EXE at a known path | `detectionType: file` + `fileDetectionPath`, `fileDetectionName`, `fileDetectionMethod: version`, `fileDetectionOperator` |
 | Stable ARP key or registry value | `detectionType: registry` + `registryDetectionMethod`, `registryDetectionKey` |
 | Dynamic product codes, multiple registrations, version format needing normalization, or a portable/hand-rolled install | `detectionType: script` + `detectionScript` |
+| One value is not enough on its own (e.g. version and release track are in different values of the same key) | A primary `file`/`registry`/`msi` rule plus `additionalDetectionRules:`, a list of `file`/`registry` entries that use the same field names. All rules must match. Not allowed with a `script` primary. Keep the version comparison in the primary rule, because supersedence and `{DETECT}` only read that rule. (firefoxesr) |
 
 `fileDetectionVersion` defaults to `$version`. Set it only when the installed
 file's version format differs — commonly 4-part padding:

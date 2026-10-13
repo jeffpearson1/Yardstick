@@ -2499,6 +2499,104 @@ function Test-IsVersionDetection {
 }
 
 
+function New-YardstickDetectionRuleFromSpec {
+    <#
+    .SYNOPSIS
+    Builds one Intune file, msi, or registry detection rule from recipe fields.
+
+    .DESCRIPTION
+    The spec is keyed by the recipe field names (detectionType, fileDetection*,
+    registryDetection*), so a recipe's primary rule and each entry in its
+    additionalDetectionRules list are built by the same code. Script detection
+    is not handled here: it writes a file to disk, and Intune does not allow a
+    script rule to be combined with any other rule.
+
+    .PARAMETER Spec
+    Dictionary of recipe detection fields describing a single rule.
+
+    .PARAMETER ProductCode
+    The MSI product code (required for msi rules).
+
+    .PARAMETER DefaultVersion
+    Used when a version comparison (file or registry) has no explicit value.
+
+    .PARAMETER Is32BitApp
+    Sets check32BitOn64System on registry comparison rules.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [System.Collections.IDictionary]$Spec,
+        [string]$ProductCode = "",
+        [string]$DefaultVersion = "",
+        [bool]$Is32BitApp = $false
+    )
+
+    $fileVersion = if ($Spec['fileDetectionVersion']) { [string]$Spec['fileDetectionVersion'] } else { $DefaultVersion }
+    $path = [string]$Spec['fileDetectionPath']
+    $name = [string]$Spec['fileDetectionName']
+    $fileOperator = [string]$Spec['fileDetectionOperator']
+    $keyPath = [string]$Spec['registryDetectionKey']
+    $valueName = [string]$Spec['registryDetectionValueName']
+    $registryValue = $Spec['registryDetectionValue']
+    $registryOperator = [string]$Spec['registryDetectionOperator']
+
+    switch ([string]$Spec['detectionType']) {
+        "file" {
+            switch ([string]$Spec['fileDetectionMethod']) {
+                "exists" {
+                    return New-YardstickWin32AppDetectionRuleFile -Existence -DetectionType "exists" -Path $path -FileOrFolder $name
+                }
+                "modified" {
+                    return New-YardstickWin32AppDetectionRuleFile -DateModified -Path $path -FileOrFolder $name -Operator $fileOperator -DateTimeValue $Spec['fileDetectionDateTime']
+                }
+                "created" {
+                    return New-YardstickWin32AppDetectionRuleFile -DateCreated -Path $path -FileOrFolder $name -Operator $fileOperator -DateTimeValue (Get-Date $Spec['fileDetectionDateTime'])
+                }
+                "version" {
+                    return New-YardstickWin32AppDetectionRuleFile -Version -Path $path -FileOrFolder $name -Operator $fileOperator -VersionValue $fileVersion
+                }
+                "size" {
+                    return New-YardstickWin32AppDetectionRuleFile -Size -Path $path -FileOrFolder $name -Operator $fileOperator -SizeinMBValue $Spec['fileDetectionValue']
+                }
+                default {
+                    throw "Unsupported fileDetectionMethod '$($Spec['fileDetectionMethod'])'"
+                }
+            }
+        }
+        "msi" {
+            return New-YardstickWin32AppDetectionRuleMsi -ProductCode $ProductCode -ProductVersion $fileVersion
+        }
+        "registry" {
+            switch ([string]$Spec['registryDetectionMethod']) {
+                "exists" {
+                    if ($registryValue) {
+                        return New-YardstickWin32AppDetectionRuleRegistry -Existence -KeyPath $keyPath -ValueName $valueName -DetectionType "exists"
+                    } else {
+                        return New-YardstickWin32AppDetectionRuleRegistry -Existence -KeyPath $keyPath -DetectionType "exists"
+                    }
+                }
+                "version" {
+                    $versionValue = if ($registryValue) { [string]$registryValue } else { $DefaultVersion }
+                    return New-YardstickWin32AppDetectionRuleRegistry -VersionComparison -KeyPath $keyPath -ValueName $valueName -Check32BitOn64System $Is32BitApp -VersionComparisonOperator $registryOperator -VersionComparisonValue $versionValue
+                }
+                "integer" {
+                    return New-YardstickWin32AppDetectionRuleRegistry -IntegerComparison -KeyPath $keyPath -ValueName $valueName -Check32BitOn64System $Is32BitApp -IntegerComparisonOperator $registryOperator -IntegerComparisonValue $registryValue
+                }
+                "string" {
+                    return New-YardstickWin32AppDetectionRuleRegistry -StringComparison -KeyPath $keyPath -ValueName $valueName -Check32BitOn64System $Is32BitApp -StringComparisonOperator $registryOperator -StringComparisonValue $registryValue
+                }
+                default {
+                    throw "Unsupported registryDetectionMethod '$($Spec['registryDetectionMethod'])'"
+                }
+            }
+        }
+        default {
+            throw "Unsupported detectionType '$($Spec['detectionType'])' - only file, msi, and registry rules can be built from a spec"
+        }
+    }
+}
+
+
 function Get-DetectAnchor {
     <#
     .SYNOPSIS
@@ -3566,14 +3664,14 @@ function Test-RecipeSchema {
     }
 
     # Conditionally required fields based on detectionType
+    $detectionTypeFields = @{
+        'file'     = @('fileDetectionPath', 'fileDetectionMethod', 'fileDetectionName')
+        'registry' = @('registryDetectionMethod', 'registryDetectionKey')
+        'script'   = @('detectionScript')
+        'msi'      = @()
+    }
     if ($Recipe.ContainsKey('detectionType') -and -not [string]::IsNullOrWhiteSpace($Recipe['detectionType'])) {
         $detType = $Recipe['detectionType'].ToString().ToLower()
-        $detectionTypeFields = @{
-            'file'     = @('fileDetectionPath', 'fileDetectionMethod', 'fileDetectionName')
-            'registry' = @('registryDetectionMethod', 'registryDetectionKey')
-            'script'   = @('detectionScript')
-            'msi'      = @()
-        }
 
         if ($detectionTypeFields.ContainsKey($detType)) {
             foreach ($field in $detectionTypeFields[$detType]) {
@@ -3581,6 +3679,83 @@ function Test-RecipeSchema {
                     # Check if the field is set as a variable in any of the script fields
                     if (-not ($scriptContent -match ('\$' + [regex]::Escape($field) + '\s*='))) {
                         $errors.Add("Missing required field '$field' for detectionType '$detType'")
+                    }
+                }
+            }
+        }
+    }
+
+    # additionalDetectionRules: extra file/registry rules that must all match
+    # alongside the primary rule. Entries reuse the top-level field names. Intune
+    # cannot combine a script rule with anything, and an msi entry would only
+    # repeat the primary rule's product code, so both are rejected.
+    if ($Recipe.ContainsKey('additionalDetectionRules') -and $null -ne $Recipe['additionalDetectionRules']) {
+        $additionalRules = $Recipe['additionalDetectionRules']
+        $ruleFields = @(
+            'detectionType', 'fileDetectionMethod', 'fileDetectionPath', 'fileDetectionName',
+            'fileDetectionOperator', 'fileDetectionVersion', 'fileDetectionDateTime', 'fileDetectionValue',
+            'registryDetectionMethod', 'registryDetectionKey', 'registryDetectionValueName',
+            'registryDetectionValue', 'registryDetectionOperator'
+        )
+        $ruleFieldsLower = $ruleFields | ForEach-Object { $_.ToLower() }
+
+        if ($additionalRules -is [string] -or $additionalRules -is [System.Collections.IDictionary] -or $additionalRules -isnot [System.Collections.IEnumerable]) {
+            $errors.Add("Field 'additionalDetectionRules' must be a list of detection rules")
+        }
+        else {
+            if ([string]$Recipe['detectionType'] -eq 'script') {
+                $errors.Add("Field 'additionalDetectionRules' cannot be used with detectionType 'script' - Intune does not allow a detection script to be combined with other rules")
+            }
+            $index = 0
+            foreach ($rule in $additionalRules) {
+                $label = "additionalDetectionRules[$index]"
+                $index++
+                if ($rule -isnot [System.Collections.IDictionary]) {
+                    $errors.Add("Entry '$label' must be a mapping of detection fields")
+                    continue
+                }
+
+                $ruleType = ([string]$rule['detectionType']).ToLower()
+                if ($ruleType -notin @('file', 'registry')) {
+                    $errors.Add("Invalid detectionType '$($rule['detectionType'])' in '$label'. Allowed values: file, registry")
+                    continue
+                }
+
+                foreach ($field in 'fileDetectionMethod', 'registryDetectionMethod') {
+                    if (-not [string]::IsNullOrWhiteSpace($rule[$field])) {
+                        $allowed = $validEnumerations[$field]
+                        if ($rule[$field].ToString().ToLower() -notin $allowed) {
+                            $errors.Add("Invalid value '$($rule[$field])' for '$field' in '$label'. Allowed values: $($allowed -join ', ')")
+                        }
+                    }
+                }
+
+                # No script-assignment fallback here: scripts can only edit an entry
+                # that already exists, so every required field must be in the YAML.
+                foreach ($field in $detectionTypeFields[$ruleType]) {
+                    if ([string]::IsNullOrWhiteSpace($rule[$field])) {
+                        $errors.Add("Missing required field '$field' in '$label' (detectionType '$ruleType')")
+                    }
+                }
+                $registryMethod = ([string]$rule['registryDetectionMethod']).ToLower()
+                if ($ruleType -eq 'registry' -and $registryMethod -in @('string', 'integer', 'version')) {
+                    $comparisonFields = @('registryDetectionValueName', 'registryDetectionOperator')
+                    # version falls back to the recipe's version; string/integer have nothing to fall back to
+                    if ($registryMethod -ne 'version') { $comparisonFields += 'registryDetectionValue' }
+                    foreach ($field in $comparisonFields) {
+                        if ([string]::IsNullOrWhiteSpace($rule[$field])) {
+                            $errors.Add("Missing required field '$field' in '$label' (registryDetectionMethod '$registryMethod')")
+                        }
+                    }
+                }
+
+                foreach ($key in $rule.Keys) {
+                    if ($key.ToLower() -notin $ruleFieldsLower) {
+                        $warnings.Add("Unknown field '$key' in '$label' - this field is not used by Yardstick and may be a typo")
+                    }
+                    elseif ($key -cnotin $ruleFields) {
+                        $expectedCasing = $ruleFields | Where-Object { $_.ToLower() -eq $key.ToLower() } | Select-Object -First 1
+                        $warnings.Add("Field '$key' in '$label' has incorrect casing - expected '$expectedCasing'")
                     }
                 }
             }
@@ -3600,7 +3775,7 @@ function Test-RecipeSchema {
         'detectionType', 'fileDetectionMethod', 'fileDetectionName',
         'fileDetectionOperator', 'fileDetectionDateTime', 'fileDetectionValue',
         'registryDetectionMethod', 'registryDetectionKey', 'registryDetectionValueName',
-        'registryDetectionValue', 'registryDetectionOperator', 'detectionScript',
+        'registryDetectionValue', 'registryDetectionOperator', 'additionalDetectionRules', 'detectionScript',
         'detectionScriptFileExtension', 'detectionScriptRunAs32Bit',
         'detectionScriptEnforceSignatureCheck', 'iconFile', 'description', 'publisher',
         'versionLock', 'numVersionsToKeep', 'fileType', 'softwareName',

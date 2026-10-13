@@ -3,17 +3,28 @@ urlRedirects: true
 preDownloadScript: |
   $filename = $URL.split("/")[-1].replace("%20", " ")
   $version = ($filename.split(" ")[-1] -Split("esr\.msi"))[0]
+  $registryDetectionValue = $version
 installScript: msiexec /i "<filename>" /qn /norestart
 uninstallScript: |
   "%ProgramFiles%\Mozilla Firefox\uninstall\helper.exe" -ms
 iconFile: firefox.png
 id: firefoxesr
-displayName: Mozilla Firefox ESR
+displayName: DEV Mozilla Firefox ESR
 publisher: The Mozilla Foundation
 description: Mozilla Firefox ESR is a free and open-source web browser developed by the Mozilla Foundation and its subsidiary, the Mozilla Corporation.
 detectionType: registry
-registryDetectionMethod: exists
-registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> ESR (x64 en-US)'
+registryDetectionMethod: version
+registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
+registryDetectionValueName: DisplayVersion
+registryDetectionOperator: greaterThanOrEqual
+additionalDetectionRules:
+  # Rapid Release Firefox uses the same uninstall key, so also require the ESR track
+  - detectionType: registry
+    registryDetectionMethod: string
+    registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
+    registryDetectionValueName: DisplayName
+    registryDetectionOperator: equal
+    registryDetectionValue: Mozilla Firefox ESR (x64 en-US)
 scopeTags:
   - scopeTag1
   - scopeTag2

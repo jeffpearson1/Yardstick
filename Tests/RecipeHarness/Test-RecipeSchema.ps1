@@ -90,6 +90,7 @@ if ($errors.Count -gt 0) {
     Id = $recipeId
     RecipePath = $RecipePath
     DetectionType = $recipe.detectionType
+    AdditionalDetectionRuleCount = @($recipe.additionalDetectionRules | Where-Object { $_ }).Count
     Valid = $true
     WarningCount = @($result.Warnings).Count
 }
