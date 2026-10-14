@@ -9,7 +9,7 @@ uninstallScript: |
   "%ProgramFiles%\Mozilla Firefox\uninstall\helper.exe" -ms
 iconFile: firefox.png
 id: firefoxesr
-displayName: DEV Mozilla Firefox ESR
+displayName: Mozilla Firefox ESR
 publisher: The Mozilla Foundation
 description: Mozilla Firefox ESR is a free and open-source web browser developed by the Mozilla Foundation and its subsidiary, the Mozilla Corporation.
 detectionType: registry
