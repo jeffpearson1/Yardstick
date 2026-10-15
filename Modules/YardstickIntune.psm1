@@ -2,6 +2,7 @@ Set-StrictMode -Version 3.0
 
 # Every request goes through Invoke-YardstickGraphRequest. Imported here so this
 # module works on its own; no -Force, so an already-loaded copy is reused.
+Import-Module (Join-Path $PSScriptRoot 'YardstickLog.psm1')
 Import-Module (Join-Path $PSScriptRoot 'YardstickGraph.psm1')
 
 function Get-YardstickPropertyValue {
@@ -630,7 +631,7 @@ function New-YardstickWin32AppPackage {
     if ($TimeoutMinutes -gt 0) {
         if (-not $process.WaitForExit($TimeoutMinutes * 60 * 1000)) {
             try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {
-                Write-YardstickIntuneLog "Could not kill the stalled IntuneWinAppUtil.exe (PID $($process.Id)): $($_.Exception.Message)"
+                Write-YardstickIntuneLog "Could not kill the stalled IntuneWinAppUtil.exe (PID $($process.Id)): $($_.Exception.Message)" -Level Warning
             }
             throw "IntuneWinAppUtil.exe did not finish within $TimeoutMinutes minute(s) and was terminated."
         }
@@ -692,11 +693,12 @@ function Wait-YardstickIntuneFileProcessing {
 
 
 function Write-YardstickIntuneLog {
-    # Write-Log belongs to YardstickSupport and resolves from the session that
-    # imported both modules, the same way Invoke-YardstickGraphRequest does.
-    # Fall back to the warning stream when this module is loaded on its own.
-    param([Parameter(Mandatory)][string]$Message)
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log $Message } else { Write-Warning $Message }
+    # One seam for this module's logging, so tests can mock it in one place.
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet('Info', 'Detail', 'Warning', 'Error')][string]$Level = 'Info'
+    )
+    Write-Log $Message -Level $Level
 }
 
 function ConvertTo-YardstickUploadUri {
@@ -820,7 +822,7 @@ function Update-YardstickIntuneUploadUri {
             }
             if ($attempt -ge $MaximumAttempts) { throw }
             $delay = $backoff[[math]::Min($attempt - 1, $backoff.Count - 1)]
-            Write-YardstickIntuneLog "Upload signature renewal failed on attempt $attempt of ${MaximumAttempts}: $detail. Retrying in $delay second(s)."
+            Write-YardstickIntuneLog "Upload signature renewal failed (attempt $attempt/$MaximumAttempts): $detail. Retrying in $delay second(s)." -Level Warning
             Start-Sleep -Seconds $delay
         }
     }
@@ -924,7 +926,7 @@ function Invoke-YardstickBlobRequestWithRetry {
                 throw "$Label failed after $($attempt + 1) attempt(s): $detail"
             }
             $statusText = if ($status) { "HTTP $status" } else { 'no response' }
-            Write-YardstickIntuneLog "$Label failed ($statusText) on attempt $($attempt + 1) of $($MaximumRetryCount + 1): $detail"
+            Write-YardstickIntuneLog "$Label failed (attempt $($attempt + 1)/$($MaximumRetryCount + 1), $statusText): $detail" -Level Warning
             if ($sasRejected) {
                 # IssuedAt is read defensively: an upload URI built before this
                 # field existed, or by a caller that hand-rolls the object, just
@@ -934,10 +936,10 @@ function Invoke-YardstickBlobRequestWithRetry {
                 if ($age -and $age -lt $SasPropagationWindow -and $sasReplays -lt $MaximumSasReplays) {
                     $sasReplays++
                     $pause = 3 * $sasReplays
-                    Write-YardstickIntuneLog "The upload signature is only $([int]$age.TotalSeconds)s old, so this is most likely a stored access policy that has not propagated. Replaying $Label in $pause second(s) without renewing."
+                    Write-YardstickIntuneLog "The upload signature is only $([int]$age.TotalSeconds)s old, so this is most likely a stored access policy that has not propagated. Replaying $Label in $pause second(s) without renewing." -Level Detail
                     Start-Sleep -Seconds $pause
                 } else {
-                    Write-YardstickIntuneLog "Azure rejected the upload signature. Renewing it and replaying $Label."
+                    Write-YardstickIntuneLog "Azure rejected the upload signature. Renewing it and replaying $Label..." -Level Detail
                     $UploadUri = Update-YardstickIntuneUploadUri -FileResource $FileResource
                     # The replay budget is per signature, not per request.
                     $sasReplays = 0
@@ -1165,7 +1167,7 @@ function Add-YardstickWin32App {
                 break
             } catch {
                 if ($uploadAttempt -ge $uploadAttempts) { throw }
-                Write-YardstickIntuneLog "Content upload failed on attempt $uploadAttempt of ${uploadAttempts}: $_. Starting over against a fresh content version."
+                Write-YardstickIntuneLog "Content upload failed (attempt $uploadAttempt/$uploadAttempts): $_. Starting over against a fresh content version." -Level Warning
             }
         }
         $encryptionInfo = $applicationInfo.EncryptionInfo
@@ -1186,7 +1188,7 @@ function Add-YardstickWin32App {
         return Get-YardstickWin32App -ID $app.id
     } catch {
         if ($app -and $app.id) {
-            try { Remove-YardstickWin32App -ID $app.id -ErrorAction Stop } catch { Write-Warning "Failed to remove incomplete Intune app $($app.id): $($_.Exception.Message)" }
+            try { Remove-YardstickWin32App -ID $app.id -ErrorAction Stop } catch { Write-YardstickIntuneLog "Could not remove the incomplete Intune app $($app.id): $($_.Exception.Message)" -Level Warning }
         }
         throw
     } finally {

@@ -74,6 +74,7 @@ jobs:
             'Private/Invoke-YardstickRun.ps1',
             'Install-Yardstick.ps1',
             'Test-YardstickSetup.ps1',
+            'Modules/YardstickLog.psm1',
             'Modules/YardstickSupport.psm1',
             'Modules/YardstickConfig.psm1',
             'Modules/YardstickSetup.psm1',

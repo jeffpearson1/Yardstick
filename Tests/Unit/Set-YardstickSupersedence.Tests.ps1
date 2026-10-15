@@ -1551,7 +1551,7 @@ Describe "Move-AssignmentsAndDependencies assignment error handling" {
         $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -RetryDelaySeconds 0
         Should -Invoke Write-Log -ModuleName YardstickSupport -ParameterFilter {
-            $Content -match 'WARNING from Intune' -and $Content -match 'BadRequest'
+            $Level -eq 'Warning' -and $Content -match 'Intune warned' -and $Content -match 'BadRequest'
         }
     }
 
