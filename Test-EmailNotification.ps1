@@ -38,9 +38,7 @@ param(
     [Switch]$SaveHtml
 )
 
-Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Force
-Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Force
-Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Force
+Import-Module "$PSScriptRoot\Yardstick.psd1" -Force
 Import-Module powershell-yaml -Force
 
 $Global:LogLocation = $PSScriptRoot

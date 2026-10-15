@@ -55,52 +55,6 @@ function Expand-RecipeToken {
     return $result
 }
 
-function Add-NativeBitnessGuard {
-    <#
-    .SYNOPSIS
-    Prepends the 32-bit re-launch guard to a generated install.ps1/uninstall.ps1.
-    Mirrors Add-NativeBitnessGuard in Yardstick.ps1.
-
-    .DESCRIPTION
-    Yardstick adds this preamble to every .ps1 it writes into a package, because
-    the 32-bit Intune Management Extension would otherwise run the script under
-    WOW64 redirection. The harness has to write byte-identical scripts or it
-    stops reproducing what actually ships: a recipe whose uninstaller depends on
-    the native registry view would pass here and fail in the tenant.
-
-    Keep this in sync with the Yardstick.ps1 copy. If the two drift, the harness
-    silently tests something other than the shipped package.
-    #>
-    [CmdletBinding()]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string] $ScriptContent
-    )
-
-    $guard = @'
-# --- Begin Yardstick native-bitness guard (generated - do not edit) ---
-# The Intune Management Extension is 32-bit, so the generated command line
-# starts this script under WOW64: HKLM:\SOFTWARE reads are redirected to
-# WOW6432Node and 64-bit install paths are hidden. Re-launch once natively so
-# the script sees the real machine.
-if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem) {
-    $yardstickNativePowerShell = Join-Path $env:SystemRoot 'sysnative\WindowsPowerShell\v1.0\powershell.exe'
-    if (Test-Path -LiteralPath $yardstickNativePowerShell) {
-        $yardstickChild = Start-Process -FilePath $yardstickNativePowerShell -Wait -PassThru -NoNewWindow `
-            -WorkingDirectory (Get-Location -PSProvider FileSystem).ProviderPath `
-            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
-        exit $yardstickChild.ExitCode
-    }
-    Write-Output 'WARNING: running 32-bit and native PowerShell was not found; continuing under WOW64 redirection.'
-}
-# --- End Yardstick native-bitness guard ---
-
-'@
-
-    return $guard + $ScriptContent
-}
 
 function ConvertTo-ComparableVersion {
     <#
@@ -284,7 +238,7 @@ function Invoke-TestProcess {
     param(
         [Parameter(Mandatory)][string] $FilePath,
         [string[]] $ArgumentList = @(),
-        [string] $WorkingDirectory = (Get-Location).Path,
+        [string] $WorkingDirectory = (Get-Location).ProviderPath,
         [int] $TimeoutSeconds = 1800,
         [Parameter(Mandatory)][string] $LogDirectory,
         [Parameter(Mandatory)][string] $LogName
@@ -708,6 +662,6 @@ function Test-RecipeDetectionRule {
 }
 
 Export-ModuleMember -Function Test-IsElevated, Expand-RecipeString, Expand-RecipeToken,
-Add-NativeBitnessGuard, ConvertTo-ComparableVersion, Compare-DetectionValue, Get-InstalledPackage,
+ConvertTo-ComparableVersion, Compare-DetectionValue, Get-InstalledPackage,
 Get-SystemSnapshot, Compare-SystemSnapshot, Invoke-TestProcess, Invoke-CommandLine,
 Invoke-DetectionScript, Get-RegistryValueForDetection, Test-RecipeDetection

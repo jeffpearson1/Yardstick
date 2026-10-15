@@ -17,23 +17,23 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).Path
+$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).ProviderPath
 . (Join-Path $projectRoot 'ProjectLayout.ps1')
 $projectLayout = Get-YardstickProjectLayout -ProjectRoot $projectRoot
 if (-not $YardstickDevPath) { $YardstickDevPath = $projectLayout.RuntimeRoot }
 if (-not $RecipesPath) { $RecipesPath = $projectLayout.DevelopmentRecipes }
 if (-not $IconsPath) { $IconsPath = $projectLayout.IconsPath }
 
-$workspaceRecipes = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).Path
-$workspaceIcons = (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).Path
-$yardstickModule = Join-Path $YardstickDevPath 'Modules\YardstickSupport.psm1'
+$workspaceRecipes = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).ProviderPath
+$workspaceIcons = (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).ProviderPath
+$yardstickModule = Join-Path $YardstickDevPath 'Yardstick.psd1'
 $yardstickRecipes = Join-Path $YardstickDevPath 'Recipes'
 
-if ((Split-Path -Leaf $YardstickDevPath) -ne 'YardstickDev') {
-    throw "Safety check failed: YardstickDevPath must point to a folder named 'YardstickDev'."
+if (-not (Test-Path -LiteralPath (Join-Path $YardstickDevPath 'Yardstick.Project.psd1') -PathType Leaf)) {
+    throw "Safety check failed: YardstickDevPath '$YardstickDevPath' does not contain Yardstick.Project.psd1."
 }
 if (-not (Test-Path -LiteralPath $yardstickModule -PathType Leaf)) {
-    throw "Yardstick support module not found at '$yardstickModule'."
+    throw "Yardstick module manifest not found at '$yardstickModule'."
 }
 
 Import-Module powershell-yaml -MinimumVersion 0.4.12 -ErrorAction Stop
@@ -42,7 +42,7 @@ Import-Module $yardstickModule -Force -ErrorAction Stop
 if ($PSCmdlet.ParameterSetName -eq 'ById') {
     $RecipePath = Join-Path $workspaceRecipes "$Id.yaml"
 }
-$RecipePath = (Resolve-Path -LiteralPath $RecipePath -ErrorAction Stop).Path
+$RecipePath = (Resolve-Path -LiteralPath $RecipePath -ErrorAction Stop).ProviderPath
 $recipeId = [IO.Path]::GetFileNameWithoutExtension($RecipePath)
 $recipe = Get-Content -LiteralPath $RecipePath -Raw | ConvertFrom-Yaml
 
@@ -90,7 +90,7 @@ if ($errors.Count -gt 0) {
     Id = $recipeId
     RecipePath = $RecipePath
     DetectionType = $recipe.detectionType
-    AdditionalDetectionRuleCount = @($recipe.additionalDetectionRules | Where-Object { $_ }).Count
+    AdditionalDetectionRuleCount = @($recipe['additionalDetectionRules'] | Where-Object { $_ }).Count
     Valid = $true
     WarningCount = @($result.Warnings).Count
 }

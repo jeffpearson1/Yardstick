@@ -92,7 +92,7 @@ switch ($Scenario) {
     }
 }
 '@
-    $Global:YardstickPath = (Resolve-Path "$PSScriptRoot\..\..\Yardstick.ps1").ProviderPath
+    $Global:YardstickPath = (Resolve-Path "$PSScriptRoot\..\..\Private\Invoke-YardstickRun.ps1").ProviderPath
 
     function Invoke-Scenario {
         param([string]$Scenario)

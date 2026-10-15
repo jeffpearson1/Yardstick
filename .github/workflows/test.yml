@@ -23,6 +23,10 @@ jobs:
           Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
           Install-Module -Name powershell-yaml -Force -Scope CurrentUser
 
+      - name: Validate module manifest
+        shell: pwsh
+        run: Test-ModuleManifest -Path ./Yardstick.psd1 -ErrorAction Stop | Format-List Name, Version, RootModule, ExportedFunctions
+
       - name: Run Pester tests
         shell: pwsh
         run: |
@@ -66,6 +70,8 @@ jobs:
 
           $files = @(
             'Yardstick.ps1',
+            'Yardstick.psm1',
+            'Private/Invoke-YardstickRun.ps1',
             'Install-Yardstick.ps1',
             'Test-YardstickSetup.ps1',
             'Modules/YardstickSupport.psm1',
@@ -75,8 +81,7 @@ jobs:
             'Modules/YardstickIntune.psm1',
             'Modules/VersionPro.psm1',
             'Modules/Custom/GithubDownloader.psm1',
-            'Modules/Custom/JetbrainsDownloader.psm1',
-            'Modules/Custom/Invoke-SSOAutoSignIn.psm1'
+            'Modules/Custom/JetbrainsDownloader.psm1'
           )
 
           $hasErrors = $false

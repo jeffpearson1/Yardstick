@@ -87,11 +87,11 @@ if ($Runtime) {
         'Branding/**',
         'Config/Preferences.example.yaml',
         'Modules/**',
+        'Private/**',
         'Scripts/**',
         'Templates/**',
         'Tools/**',
         'LICENSE.md',
-        'Deploy-YardstickApps.ps1',
         'Get-YardstickIcon.ps1',
         'Install-Yardstick.ps1',
         'Migrate-ToSupersedenceModel.ps1',
@@ -104,7 +104,8 @@ if ($Runtime) {
         'Test-YardstickSetup.ps1',
         'Yardstick.Project.psd1',
         'Yardstick.ps1',
-        'Yardstick.psd1'
+        'Yardstick.psd1',
+        'Yardstick.psm1'
     )
     $gitArgs = @('-C', $projectRoot, 'ls-files', '--') + $runtimeSpecs
     $runtimeFiles = @(& git @gitArgs)
@@ -113,8 +114,9 @@ if ($Runtime) {
     }
 
     # These files must travel with the layout-aware runtime even before the
-    # first commit that introduces them.
-    foreach ($required in 'ProjectLayout.ps1', 'Yardstick.Project.psd1', 'Modules/YardstickConfig.psm1') {
+    # first commit that introduces them. Yardstick.ps1 is a shim over the module
+    # and the runner, so the three are only ever published together.
+    foreach ($required in 'ProjectLayout.ps1', 'Yardstick.Project.psd1', 'Modules/YardstickConfig.psm1', 'Yardstick.ps1', 'Yardstick.psm1', 'Private/Invoke-YardstickRun.ps1') {
         if ((Test-Path -LiteralPath (Join-Path $projectRoot $required)) -and $required -notin $runtimeFiles) {
             $runtimeFiles += $required
         }
@@ -126,17 +128,32 @@ if ($Runtime) {
 }
 
 foreach ($id in $RecipeId) {
+    # Standard recipes may live in subfolders (e.g. Recipes\Jetbrains); publish
+    # to the same relative path so production layout mirrors development.
+    $standardMatches = @(Get-ChildItem -LiteralPath $layout.RecipesPath -Recurse -File -Filter "$id.yaml" |
+        Where-Object {
+            -not $_.FullName.StartsWith($layout.DevelopmentRecipes + '\', [StringComparison]::OrdinalIgnoreCase) -and
+            $_.FullName -notlike '*\Disabled\*'
+        })
+    if ($standardMatches.Count -gt 1) {
+        throw "Recipe '$id' exists in more than one folder: $($standardMatches.FullName -join ', ')"
+    }
+    $relativeRecipePath = if ($standardMatches.Count -eq 1) {
+        'Recipes\' + [IO.Path]::GetRelativePath($layout.RecipesPath, $standardMatches[0].FullName)
+    } else {
+        "Recipes\$id.yaml"
+    }
+
     $developmentRecipe = Join-Path $layout.DevelopmentRecipes "$id.yaml"
-    $standardRecipe = Join-Path $layout.RecipesPath "$id.yaml"
     $recipePath = if (Test-Path -LiteralPath $developmentRecipe -PathType Leaf) {
         $developmentRecipe
-    } elseif (Test-Path -LiteralPath $standardRecipe -PathType Leaf) {
-        $standardRecipe
+    } elseif ($standardMatches.Count -eq 1) {
+        $standardMatches[0].FullName
     } else {
         throw "Recipe '$id' was not found in Development or the standard recipe directory."
     }
 
-    Publish-YardstickFile -Source $recipePath -RelativePath "Recipes\$id.yaml"
+    Publish-YardstickFile -Source $recipePath -RelativePath $relativeRecipePath
 
     if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
         Import-Module powershell-yaml -ErrorAction Stop

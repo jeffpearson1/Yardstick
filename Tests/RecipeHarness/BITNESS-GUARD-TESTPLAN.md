@@ -2,8 +2,8 @@
 
 Tracks validation still owed for the change that makes every generated
 `install.ps1` / `uninstall.ps1` re-launch itself under native PowerShell
-(`Add-NativeBitnessGuard` in `Yardstick.ps1`, mirrored in
-`Tests/RecipeHarness/RecipeTestSupport.psm1`).
+(`Add-NativeBitnessGuard` in `Modules/YardstickSupport.psm1`, shared by the
+runner and the recipe harness).
 
 **Status: the mechanism is proven; per-recipe coverage is not.**
 

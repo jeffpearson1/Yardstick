@@ -19,8 +19,6 @@
 !/Icons/.gitkeep
 /Scripts/*
 !/Scripts/.gitkeep
-!/Scripts/AdobeDownloader.psm1
-!/Scripts/YardstickSupport.psm1
 /Tools/*
 !/Tools/.gitkeep
 

@@ -198,6 +198,50 @@ Describe "Start-YardstickWatchdog" {
         Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
         @(Get-Job -Name 'YardstickWatchdog').Count | Should -Be 1
     }
+
+    It "with -NoExit, logs a stuck stage once and leaves the process running" {
+        # Without -NoExit this would end the Pester process itself - which is the
+        # point: in an interactive session the watchdog must not close the console.
+        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit
+        $state = Get-YardstickWatchdogState
+        $state['StageStarted'] = (Get-Date).AddMinutes(-5)
+
+        $deadline = (Get-Date).AddSeconds(20)
+        while (-not $state['ExpiredFor'] -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+        Start-Sleep -Seconds 3   # more polls on the same stuck stage
+
+        $state['ExpiredFor'] | Should -Be $state['StageStarted']
+        $logged = @(Get-Content -LiteralPath (Join-Path $Global:LogLocation $Global:LogFile) |
+            Where-Object { $_ -match 'WATCHDOG: no progress' })
+        $logged.Count | Should -Be 1 -Because 'one stuck stage is reported once, not on every poll'
+        $logged[0] | Should -Match 'Not ending the run'
+        (Get-Job -Name 'YardstickWatchdog').State | Should -Be 'Running'
+    }
+}
+
+Describe "Test-YardstickDedicatedProcess" {
+    # Decides whether the watchdog may end the process: only when pwsh was started
+    # to run a script or command and will exit afterwards anyway.
+    It "is true for <Case>" -ForEach @(
+        @{ Case = 'the scheduled task';       Arguments = @('pwsh.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\Yardstick\Yardstick.ps1', '-All', '-NoInteractive') }
+        @{ Case = 'pwsh -Command';            Arguments = @('pwsh.exe', '-Command', 'Invoke-Yardstick -All') }
+        @{ Case = 'abbreviated -f';           Arguments = @('pwsh.exe', '-f', 'Yardstick.ps1') }
+        @{ Case = '-EncodedCommand as -ec';   Arguments = @('pwsh.exe', '-ec', 'AAAA') }
+        @{ Case = 'a Windows-style /File';    Arguments = @('pwsh.exe', '/File', 'Yardstick.ps1') }
+        @{ Case = 'a script parameter named -NoExit'; Arguments = @('pwsh.exe', '-File', 'Yardstick.ps1', '-NoExit') }
+    ) {
+        Test-YardstickDedicatedProcess -CommandLineArgs $Arguments | Should -BeTrue
+    }
+
+    It "is false for <Case>" -ForEach @(
+        @{ Case = 'an interactive console';   Arguments = @('pwsh.exe') }
+        @{ Case = 'a console with -NoLogo';   Arguments = @('pwsh.exe', '-NoLogo') }
+        @{ Case = '-NoExit before -File';     Arguments = @('pwsh.exe', '-NoExit', '-File', 'Yardstick.ps1') }
+        @{ Case = 'an editor host (-NoExit -Command)'; Arguments = @('pwsh.exe', '-NoProfile', '-NoExit', '-Command', 'Import-Module x') }
+        @{ Case = '-ExecutionPolicy alone';   Arguments = @('pwsh.exe', '-ExecutionPolicy', 'Bypass') }
+    ) {
+        Test-YardstickDedicatedProcess -CommandLineArgs $Arguments | Should -BeFalse
+    }
 }
 
 Describe "Stop-YardstickWatchdog" {
@@ -424,7 +468,7 @@ Describe "Module web calls are bounded" {
 
 
 Describe "Main processing loop control flow" {
-    # Yardstick.ps1 sets $ErrorActionPreference = 'Stop' at the top, which makes
+    # The runner sets $ErrorActionPreference = 'Stop' at the top, which makes
     # Write-Error a TERMINATING error. Every per-stage failure handler in the main
     # loop was written as `Add-FailedApplication; Write-Error; continue`, so the
     # Write-Error threw, the continue never ran, and control landed in the outer
@@ -433,7 +477,7 @@ Describe "Main processing loop control flow" {
     # real cause. The loop is top-level script code and cannot be executed here,
     # so assert its shape.
     BeforeAll {
-        $script:YardstickPath = "$PSScriptRoot\..\..\Yardstick.ps1"
+        $script:YardstickPath = "$PSScriptRoot\..\..\Private\Invoke-YardstickRun.ps1"
         $script:YardstickAst = [System.Management.Automation.Language.Parser]::ParseFile(
             $script:YardstickPath, [ref]$null, [ref]$null)
 

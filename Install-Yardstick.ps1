@@ -190,11 +190,11 @@ $ScriptBound = $PSBoundParameters
 $Global:LogLocation = $Root
 $Global:LogFile = 'YInstall.log'
 
-Import-Module "$Root\Modules\YardstickSupport.psm1" -Scope Global -Force
-Import-Module "$Root\Modules\YardstickCredential.psm1" -Scope Global -Force
-Import-Module "$Root\Modules\YardstickConfig.psm1" -Scope Global -Force
-Import-Module "$Root\Modules\YardstickSetup.psm1" -Scope Global -Force
-Import-Module "$Root\Modules\YardstickIntune.psm1" -Scope Global -Force
+# Reload the module so a session that imported it before an update runs the
+# current code. Not when Install-Yardstick in the module runs this script: that
+# would unload the module out from under the command.
+$calledFromModule = [bool](Get-PSCallStack | Where-Object { $_.InvocationInfo.MyCommand.ModuleName -eq 'Yardstick' })
+Import-Module (Join-Path $Root 'Yardstick.psd1') -Force:(-not $calledFromModule)
 
 Write-Log -Init
 Set-YardstickSetupMode -NonInteractive:$NonInteractive
@@ -245,7 +245,7 @@ function Test-StoredIntuneCredential {
     } catch {
         return "it could not sign in: $($_.Exception.Message)"
     }
-    $missing = @((Get-YardstickRequiredGraphPermissions -RequiredOnly).Name | Where-Object { $roles -notcontains $_ })
+    $missing = @((Get-YardstickRequiredGraphPermissions -RequiredOnly).Name | Where-Object { -not (Test-YardstickGraphRoleGranted -Roles $roles -Name $_) })
     if ($missing.Count -gt 0) { return "it is missing these Graph permissions: $($missing -join ', ')" }
     $null
 }

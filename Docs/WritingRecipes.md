@@ -93,6 +93,8 @@ All script blocks execute with `-NoNewScope`, meaning they run directly in the c
 1. **All scripts share the same scope.** Variables set in `preDownloadScript` are visible to `downloadScript`, `postDownloadScript`, and `postRunScript`.
 2. **Any `$Script:` variable can be set or overridden.** Writing `$version = "1.2.3"` in a script block writes directly to `$Script:Version` (PowerShell is case-insensitive).
 
+That scope is the top level of the runner script, `Private\Invoke-YardstickRun.ps1`, whether the run was started with `.\Yardstick.ps1` or `Invoke-Yardstick`. This is what lets plain assignments such as `$version`, `$url` and `$fileName` reach Yardstick, and it is why the runner is a script rather than a module function. The Yardstick functions (`Write-Log` and the rest) and the [Modules/Custom](../Modules/Custom) helpers are loaded globally, so recipes can call them directly. Scripts that are not given a working directory below start in the Yardstick folder, so `using module .\Modules\...` resolves there.
+
 Scripts execute in this order:
 
 1. `preDownloadScript` - Before download and version validation
@@ -971,7 +973,7 @@ downloadScript: |
 
 ### Selenium-Based Downloads
 
-For complex download scenarios (JavaScript-heavy pages, multi-step auth), see `Modules/Custom/AdobeDownloader.psm1` for Selenium patterns.
+For complex download scenarios (JavaScript-heavy pages, multi-step auth), see `Recipes/keepass.yaml` for the Selenium pattern. Automation shared by several recipes belongs in a helper under `Modules/Custom`.
 
 ## Getting Help
 

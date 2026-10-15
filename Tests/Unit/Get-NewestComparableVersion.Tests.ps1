@@ -85,13 +85,13 @@ Describe "Get-NewestComparableVersion" {
 
 Describe "Yardstick.ps1 version comparison" {
     BeforeAll {
-        $Global:YardstickSource = Get-Content "$PSScriptRoot\..\..\Yardstick.ps1" -Raw
+        $Global:YardstickSource = Get-Content "$PSScriptRoot\..\..\Private\Invoke-YardstickRun.ps1" -Raw
     }
 
     It "Never indexes into a displayVersion projection" {
         # .displayVersion[0] is the unrolling trap this fix removed. Comment lines
         # are stripped first -- the fix documents the old expression in a comment.
-        $code = (Get-Content "$PSScriptRoot\..\..\Yardstick.ps1") |
+        $code = (Get-Content "$PSScriptRoot\..\..\Private\Invoke-YardstickRun.ps1") |
             Where-Object { $_ -notmatch '^\s*#' }
         ($code | Select-String -Pattern '\.displayVersion\[0\]' -SimpleMatch:$false) |
             Should -BeNullOrEmpty

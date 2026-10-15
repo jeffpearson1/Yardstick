@@ -123,9 +123,11 @@ if (-not (Get-Module -ListAvailable -Name 'powershell-yaml')) {
 }
 
 Import-Module powershell-yaml
-foreach ($module in 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune') {
-    Import-Module (Join-Path $PSScriptRoot "Modules\$module.psm1") -Force
-}
+# Reload the module so a session that imported it before an update runs the
+# current code. Not when Test-YardstickSetup in the module runs this script: that
+# would unload the module out from under the command.
+$calledFromModule = [bool](Get-PSCallStack | Where-Object { $_.InvocationInfo.MyCommand.ModuleName -eq 'Yardstick' })
+Import-Module (Join-Path $PSScriptRoot 'Yardstick.psd1') -Force:(-not $calledFromModule)
 
 $prefs = Import-YardstickPreferences -ProjectRoot $ProjectRoot -AllowMissing
 $prerequisites = Test-Prerequisites -ToolsPath $prefs.Tools
@@ -232,7 +234,7 @@ if (-not $credential) {
             # The token's roles claim lists the permissions that have admin consent,
             # so this needs no extra Graph permission to check.
             foreach ($permission in Get-YardstickRequiredGraphPermissions) {
-                if ($roles -contains $permission.Name) {
+                if (Test-YardstickGraphRoleGranted -Roles $roles -Name $permission.Name) {
                     Add-Check $permission.Name OK "$($permission.Name) is granted."
                 } elseif ($permission.Required) {
                     Add-Check $permission.Name Fail "$($permission.Name) is not granted ($($permission.Reason)). Grant it with admin consent on the app registration."

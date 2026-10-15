@@ -11,7 +11,7 @@
 
     Only the targeted group's block is rewritten; every other group in the file is
     left untouched, comments and all. Recipes inside a Disabled folder are ignored,
-    matching how Deploy-YardstickApps.ps1 resolves recipes.
+    matching how Yardstick.ps1 resolves recipes.
 
 .PARAMETER GroupName
     The group in RecipeGroups.yaml to sync. Defaults to "Development".
@@ -55,7 +55,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module powershell-yaml -ErrorAction Stop
 
 if (-not $RecipeFolder) {
-    Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Force
+    Import-Module "$PSScriptRoot\Yardstick.psd1" -Force
     try {
         $prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot
     } catch {

@@ -73,11 +73,7 @@ $Global:LogLocation = $PSScriptRoot
 $Global:LogFile = 'YLog.log'
 
 Import-Module powershell-yaml -ErrorAction Stop
-Import-Module "$PSScriptRoot\Modules\YardstickGraph.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickIntune.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Yardstick.psd1" -Force
 
 # Credentials can be stored before preferences.yaml exists, so a missing file
 # just means the built-in defaults (credential target names) apply.

@@ -1,5 +1,9 @@
 Set-StrictMode -Version 3.0
 
+# Every request goes through Invoke-YardstickGraphRequest. Imported here so this
+# module works on its own; no -Force, so an already-loaded copy is reused.
+Import-Module (Join-Path $PSScriptRoot 'YardstickGraph.psm1')
+
 function Get-YardstickPropertyValue {
     param($InputObject, [Parameter(Mandatory)][string]$Name)
     if ($null -eq $InputObject) { return $null }
