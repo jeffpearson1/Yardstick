@@ -33,23 +33,21 @@ $Script:DefaultNotificationIntervalHours = 24
 $Script:CredNotFound = 1168
 
 
+# No -Force, so an already-loaded copy is reused.
+Import-Module (Join-Path $PSScriptRoot 'YardstickLog.psm1')
+
+
 function Write-CredentialLog {
     <#
     .SYNOPSIS
-    Logs through Yardstick's Write-Log when available, otherwise to the console.
+    Logs a credential message through Write-Log.
     #>
     param(
         [string]$Content,
         [switch]$Warning
     )
 
-    if ($Warning) { Write-Warning $Content }
-
-    if (Get-Command -Name Write-Log -ErrorAction SilentlyContinue) {
-        Write-Log ($(if ($Warning) { "WARNING: $Content" } else { $Content }))
-    } elseif (-not $Warning) {
-        Write-Host "$(Get-Date -Format 'MM/dd/yyyy HH:mm:ss') - $Content"
-    }
+    Write-Log $Content -Level $(if ($Warning) { 'Warning' } else { 'Info' })
 }
 
 

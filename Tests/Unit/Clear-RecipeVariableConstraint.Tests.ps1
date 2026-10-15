@@ -10,7 +10,7 @@ BeforeAll {
     Set-Content -Path $Global:Fixture -Value @'
 param([Parameter(Mandatory)][string]$Scenario, [string]$YardstickPath)
 
-function Write-Log { param([string]$Message) }
+function Write-Log { param([string]$Content, [string]$Level) }
 
 # Clear-RecipeVariableConstraint lives in Yardstick.ps1, which cannot be dot-sourced
 # (its top level runs a whole update pass), so extract just the function via the AST.
@@ -105,7 +105,7 @@ switch ($Scenario) {
     Set-Content -Path $Global:PathFixture -Value @'
 param([Parameter(Mandatory)][string]$Scenario, [string]$YardstickPath)
 
-function Write-Log { param([string]$Message) }
+function Write-Log { param([string]$Content, [string]$Level) }
 
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($YardstickPath, [ref]$null, [ref]$null)
 $fn = $ast.Find({ param($n)

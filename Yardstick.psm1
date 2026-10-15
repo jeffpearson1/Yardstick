@@ -6,15 +6,16 @@ module once and adds three commands: Invoke-Yardstick, Install-Yardstick and
 Test-YardstickSetup.
 
 The components are imported into the global session state, as the scripts have
-always done. Recipes, the Custom helper modules and the backup and watchdog
-threads all call component functions (Write-Log above all) through the global
-scope, so they cannot be private to this module yet. What changes is that each
-loads exactly once: components import each other without -Force, which reuses
-the loaded copy instead of replacing it - replacing YardstickGraph also threw
-away its cached access token.
+always done. Recipes and the Custom helper modules call component functions
+(Write-Log, Get-RedirectedUrl, ...) through the global scope, so they cannot be
+private to this module yet. What changes is that each loads exactly once:
+components import each other without -Force, which reuses the loaded copy
+instead of replacing it - replacing YardstickGraph also threw away its cached
+access token. YardstickLog has no dependencies and loads first.
 #>
 
 $script:ComponentModules = @(
+    'YardstickLog'
     'YardstickGraph'
     'YardstickIntune'
     'YardstickSupport'
@@ -185,6 +186,9 @@ function Invoke-Yardstick {
         # watchdog thread left behind could end it hours later.
         Stop-YardstickWatchdog
         Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
+        # Likewise the app tag, so later Write-Log calls in this session are not
+        # attributed to the recipe the run stopped in.
+        Clear-YardstickLogContext
         Pop-Location
         if ($null -ne $Global:PSDefaultParameterValues) {
             foreach ($key in $timeoutKeys) {

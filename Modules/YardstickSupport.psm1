@@ -3,69 +3,11 @@ using module .\VersionPro.psm1
 # Global because the runner and the recipes it executes call these directly. No
 # -Force: when Yardstick.psm1 (or a test) has already loaded them, re-importing
 # would load a second copy and throw away the first one's state, including
-# YardstickGraph's cached access token.
+# YardstickGraph's cached access token. YardstickLog comes first: the watchdog
+# and backup threads import this module by path, and get Write-Log through it.
+Import-Module $PSScriptRoot\YardstickLog.psm1 -Scope Global
 Import-Module $PSScriptRoot\YardstickGraph.psm1 -Scope Global
 Import-Module $PSScriptRoot\YardstickIntune.psm1 -Scope Global
-
-function Write-YardstickHost {
-    # A console that a child process left in a bad state makes Write-Host throw a
-    # HostException. Losing the echo is acceptable; losing the run is not.
-    param([string]$Message)
-    try { Write-Host $Message } catch { }
-}
-
-function Write-Log {
-    <#
-    .SYNOPSIS
-    Writes timestamped log entries to both console and log file.
-    
-    .DESCRIPTION
-    This function writes log messages with timestamps to both the console output
-    and a log file. It can also initialize the log file with a header.
-    
-    .PARAMETER Content
-    The content to write to the log.
-    
-    .PARAMETER Init
-    Switch to initialize/clear the log file and write a header.
-    #>
-    param(
-        [String]$Content,
-        [Switch]$Init
-    )
-    
-    if (-not $LogLocation -or -not $LogFile) {
-        Write-YardstickHost "WARNING: LogLocation or LogFile variables are not set. Cannot write to log."
-        if ($Content) {
-            Write-YardstickHost "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
-        }
-        return
-    }
-    
-    Push-Location $LogLocation
-    try {
-        if ($Init) {
-            if (Test-Path $LogLocation\$LogFile) {
-                Remove-Item $LogLocation\$LogFile -Force
-            }
-            Write-Output "#######################################################" | Out-File $LogFile -Append
-            Write-Output "LOGGING STARTED AT $(Get-Date -Format "MM/dd/yyyy HH:mm:ss")" | Out-File $LogFile -Append
-            Write-Output "#######################################################" | Out-File $LogFile -Append
-        }
-        if ($Content) {
-            $Content = "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
-            Write-Output $Content | Out-File $LogFile -Append
-            Write-YardstickHost $Content
-        }
-    } catch {
-        Write-YardstickHost "WARNING: Failed to write to log file: $_"
-        if ($Content) {
-            Write-YardstickHost "$(Get-Date -Format "MM/dd/yyyy HH:mm:ss") - $Content"
-        }
-    } finally {
-        Pop-Location -ErrorAction SilentlyContinue
-    }
-}
 
 
 
@@ -313,16 +255,15 @@ function Get-RedirectedUrl {
             if ($Response.IsSuccessStatusCode) {
                 $RedirectedURL = $Response.RequestMessage.RequestUri.AbsoluteUri
             } else {
-                throw "HTTP request failed with status: $($Response.StatusCode)"
+                throw "HTTP request for '$URL' failed with status $($Response.StatusCode)."
             }
             return $RedirectedURL
         } catch {
             if ($attempt -lt $MaximumAttempts -and (Test-YardstickTransientNetworkError -ErrorRecord $_)) {
-                Write-Log "Transient network error resolving '$URL' on attempt $attempt of ${MaximumAttempts}: $($_.Exception.Message)"
+                Write-Log "Transient network error resolving '$URL' (attempt $attempt/${MaximumAttempts}): $($_.Exception.Message)" -Level Warning
                 Start-Sleep -Seconds ([math]::Pow(2, $attempt))
                 continue
             }
-            Write-Error "Error getting redirected URL for '$URL': $_"
             throw
         } finally {
             if ($Response) {
@@ -531,7 +472,7 @@ function Invoke-WithRetry {
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         if ((Get-Date) -gt $deadline) {
             $lastError = "Timed out after $TimeoutSeconds seconds"
-            Write-Log "[$Label] $lastError"
+            Write-Log "$Label timed out after $TimeoutSeconds seconds." -Level Warning
             break
         }
 
@@ -542,7 +483,7 @@ function Invoke-WithRetry {
                 $verified = & $VerifyBlock
                 if (-not $verified) {
                     $lastError = "Verification failed"
-                    Write-Log "[$Label] Verification failed on attempt $attempt of $MaxRetries."
+                    Write-Log "$Label failed verification (attempt $attempt/$MaxRetries)." -Level Warning
                     if ($attempt -lt $MaxRetries -and (Get-Date) -lt $deadline) {
                         Start-Sleep -Seconds $DelaySeconds
                     }
@@ -554,7 +495,7 @@ function Invoke-WithRetry {
         }
         catch {
             $lastError = $_.Exception.Message
-            Write-Log "[$Label] Failed on attempt $attempt of ${MaxRetries}: $lastError"
+            Write-Log "$Label failed (attempt $attempt/${MaxRetries}): $lastError" -Level Warning
 
             if ($attempt -lt $MaxRetries -and (Get-Date) -lt $deadline) {
                 Start-Sleep -Seconds $DelaySeconds
@@ -562,13 +503,13 @@ function Invoke-WithRetry {
         }
     }
 
-    Write-Log "[$Label] All $MaxRetries attempts failed. Last error: $lastError"
+    Write-Log "$Label failed after $MaxRetries attempts: $lastError" -Level Error
     if ($OnFailure) {
         try {
             & $OnFailure
         }
         catch {
-            Write-Log "[$Label] OnFailure callback also failed: $_"
+            Write-Log "$Label failure handler failed: $_" -Level Error
         }
     }
 
@@ -778,7 +719,7 @@ function Invoke-YardstickBackupCopy {
     try {
         if (-not (Test-Path -LiteralPath $SourcePath)) {
             $status = "failed: source missing"
-            $log.Add("Backup for $AppId skipped - source file no longer exists: $SourcePath")
+            $log.Add("Skipped the backup of $AppId because the source file no longer exists ($SourcePath).")
             throw $bail
         }
 
@@ -818,7 +759,7 @@ function Invoke-YardstickBackupCopy {
             $log.Add("Backed up $AppId to $target")
         } catch {
             $status = "failed: $($_.Exception.Message)"
-            $log.Add("ERROR: Failed to back up $AppId to '$target': $_")
+            $log.Add("ERROR: Could not back up $AppId to '$target': $_")
             Remove-Item -LiteralPath $tempTarget -Force -ErrorAction SilentlyContinue
             throw $bail
         }
@@ -830,7 +771,7 @@ function Invoke-YardstickBackupCopy {
                 Where-Object { $_.Extension -eq '.tmp' -and $_.LastWriteTimeUtc -lt $tmpCutoff } |
                 ForEach-Object {
                     Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-                    $log.Add("Removed stale partial backup $($_.Name)")
+                    $log.Add("Removed stale partial backup $($_.Name).")
                 }
         } catch {
             $log.Add("WARNING: Could not sweep stale partial backups in '$appDir': $_")
@@ -858,7 +799,7 @@ function Invoke-YardstickBackupCopy {
                 foreach ($old in ($existing | Select-Object -Skip $VersionsToKeep)) {
                     Remove-Item -LiteralPath $old.FullName -Force
                     $removed.Add($old.FullName)
-                    $log.Add("Pruned old backup $($old.Name)")
+                    $log.Add("Pruned old backup $($old.Name).")
                 }
                 $status = "ok ($([Math]::Min($existing.Count, $VersionsToKeep)) kept)"
             } catch {
@@ -1037,7 +978,7 @@ function Get-YardstickTimeoutPreference {
 
     $parsed = $Value -as [int]
     if ($null -eq $parsed -or $parsed -lt 0) {
-        Write-Log "WARNING: Preference '$Name' is set to '$Value', which is not a valid number of units. Using $Default instead."
+        Write-Log "Preference '$Name' is set to '$Value', which is not a valid number of units. Using $Default instead." -Level Warning
         return $Default
     }
 
@@ -1351,13 +1292,15 @@ function Start-YardstickWatchdog {
                     $State['ExpiredFor'] = $started
                     $minutes = [math]::Round(($now - $started).TotalMinutes, 1)
                     $outcome = if ($NoExit) { 'Not ending the run, because it shares this PowerShell session.' } else { 'Ending the run.' }
-                    Write-Log "#######################################################"
-                    Write-Log "WATCHDOG: no progress for $minutes minutes (limit $TimeoutMinutes). $outcome"
-                    Write-Log "WATCHDOG: application '$appId' is stuck in stage '$stage'."
-                    Write-Log "WATCHDOG: that stage began at $(Get-Date $started -Format 'MM/dd/yyyy HH:mm:ss')."
-                    Write-Log "WATCHDOG: raise recipeStageTimeoutMinutes in preferences.yaml if this app is legitimately slow."
-                    if ($NoExit) { Write-Log "WATCHDOG: press Ctrl+C to stop the run, or close the window if that does not respond." }
-                    Write-Log "#######################################################"
+                    # One multi-line entry: the log report folds the indented lines into it.
+                    $banner = @(
+                        "WATCHDOG: no progress for $minutes minutes (limit $TimeoutMinutes). $outcome"
+                        "  '$appId' is stuck in stage '$stage', which began at $(Get-Date $started -Format 'MM/dd/yyyy HH:mm:ss')."
+                        "  Raise recipeStageTimeoutMinutes in preferences.yaml if this app is legitimately slow."
+                    )
+                    if ($NoExit) { $banner += "  Press Ctrl+C to stop the run, or close the window if that does not respond." }
+                    $level = if ($NoExit) { 'Warning' } else { 'Error' }
+                    Write-Log ($banner -join [Environment]::NewLine) -Level $level -NoContext
                     if (-not $NoExit) {
                         Start-Sleep -Milliseconds 500
                         [Environment]::Exit($ExitCode)
@@ -1370,7 +1313,7 @@ function Start-YardstickWatchdog {
                     ($State['WarnedFor'] -ne $started)) {
                     $State['WarnedFor'] = $started
                     $minutes = [math]::Round(($now - $started).TotalMinutes, 1)
-                    Write-Log "WARNING: '$appId' has been in stage '$stage' for $minutes minutes (watchdog limit $TimeoutMinutes)."
+                    Write-Log "'$appId' has been in stage '$stage' for $minutes minutes (watchdog limit $TimeoutMinutes)." -Level Warning -NoContext
                 }
             }
         }
@@ -1616,7 +1559,7 @@ function Wait-YardstickBackup {
 
             if (-not $finished) {
                 Stop-Job -Job $entry.Job -ErrorAction SilentlyContinue
-                Write-Log "WARNING: Backup of $($entry.AppId) timed out after $TimeoutSeconds seconds and was stopped."
+                Write-Log "Backup of $($entry.AppId) timed out after $TimeoutSeconds seconds and was stopped." -Level Warning
                 $result = [PSCustomObject]@{
                     AppId = $entry.AppId; Success = $false; Status = "timed out"
                     BackupPath = $null; Removed = [string[]]@(); SourceRemoved = $false
@@ -1628,7 +1571,7 @@ function Wait-YardstickBackup {
                 $result = Receive-Job -Job $entry.Job -ErrorAction Stop | Select-Object -Last 1
             }
         } catch {
-            Write-Log "WARNING: Backup of $($entry.AppId) failed: $_"
+            Write-Log "Backup of $($entry.AppId) failed: $_" -Level Warning
             $result = [PSCustomObject]@{
                 AppId = $entry.AppId; Success = $false; Status = "failed: $_"
                 BackupPath = $null; Removed = [string[]]@(); SourceRemoved = $false
@@ -1646,7 +1589,15 @@ function Wait-YardstickBackup {
             }
         }
 
-        foreach ($line in @($result.Log)) { Write-Log $line }
+        # The job cannot call Write-Log, so it returns its lines with the old text
+        # prefixes. Turn those back into levels; routine lines are Detail.
+        foreach ($line in @($result.Log)) {
+            switch -Regex ($line) {
+                '^ERROR: ([\s\S]*)$'   { Write-Log $Matches[1] -Level Error; continue }
+                '^WARNING: ([\s\S]*)$' { Write-Log $Matches[1] -Level Warning; continue }
+                default                { Write-Log $line -Level Detail }
+            }
+        }
 
         # Record on the email report entry for this app, if it has one.
         if ($Script:SuccessfulApplications) {
@@ -1724,7 +1675,7 @@ function Test-YardstickAssignmentPresent {
     try {
         $assignments = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments")
     } catch {
-        Write-Log "WARNING: Could not read assignments on $AppId to verify $CountKey : $_"
+        Write-Log "Could not read the assignments on $AppId to verify ${CountKey}: $_" -Level Warning
         return $false
     }
 
@@ -1868,7 +1819,7 @@ function Move-AssignmentsAndDependencies {
             }
         }
     }
-    Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)"
+    Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)..."
     # The native projection preserves zero, one, and many assignment results.
     $FromAssignments = Get-YardstickAppAssignment -Id $From.id
     $FromDependencies = Get-YardstickWin32AppDependency -Id $From.id
@@ -1965,12 +1916,12 @@ function Move-AssignmentsAndDependencies {
             }
 
             if (-not $assignmentLabel) {
-                Write-Log "Skipping assignment with no GroupID and unsupported target type '$targetType'. $($From.id) will not be deleted while it is there."
+                Write-Log "Skipping an assignment with no group ID and unsupported target type '$targetType'. $($From.id) will not be deleted while it is there." -Level Warning
                 & $addProtectedSourceId $From.id
                 continue
             }
             if ($IntentFilter -and ($Assignment.Intent -ne $IntentFilter)) {
-                Write-Log "Skipping assignment for $assignmentLabel - intent $($Assignment.Intent) does not match filter $IntentFilter"
+                Write-Log "Skipping the $assignmentLabel assignment: intent $($Assignment.Intent) does not match filter $IntentFilter." -Level Detail
                 continue
             }
             # Add-YardstickWin32AppAssignmentAllDevices/AllUsers take a filter by
@@ -1980,7 +1931,7 @@ function Move-AssignmentsAndDependencies {
             # and protect $From from deletion, because pruning it would destroy
             # targeting that cannot be recreated from what Intune reports.
             if ($isVirtualTarget -and $hasFilter) {
-                Write-Log "WARNING: Skipping $assignmentLabel assignment because filter $($Assignment.FilterID) ($($Assignment.FilterType)) cannot be reapplied by ID. Migrate this assignment manually; $($From.id) will not be deleted while it is there."
+                Write-Log -Level Warning "Skipping $assignmentLabel assignment because filter $($Assignment.FilterID) ($($Assignment.FilterType)) cannot be reapplied by ID. Migrate this assignment manually; $($From.id) will not be deleted while it is there."
                 & $addProtectedSourceId $From.id
                 continue
             }
@@ -1989,7 +1940,7 @@ function Move-AssignmentsAndDependencies {
             $try = 0
             $successfullyAdded = $false
             Write-Verbose $Assignment
-            Write-Log "Processing $assignmentLabel assignment with intent $($Assignment.Intent)$(if ($isExclusion) { ' (exclusion)' })"
+            Write-Log "Processing $assignmentLabel assignment with intent $($Assignment.Intent)$(if ($isExclusion) { ' (exclusion)' })." -Level Detail
 
             # Hoisted out of the removal block below: the post-add verification
             # needs the same key, and computing it twice invites the two copies
@@ -2033,12 +1984,12 @@ function Move-AssignmentsAndDependencies {
                     $nowInDeadlineClock = if ($useLocalTime) { Get-Date } else { [datetime]::UtcNow }
                     if ($deadlineDateTime -lt $nowInDeadlineClock) {
                         $adjustedDeadline = [datetime]::SpecifyKind($nowInDeadlineClock.AddMinutes(5), [System.DateTimeKind]::Unspecified)
-                        Write-Log "WARNING: Rebased deadline $deadlineDateTime for $assignmentLabel is in the past; moving it to $adjustedDeadline so the assignment is still accepted."
+                        Write-Log -Level Warning "Rebased deadline $deadlineDateTime for $assignmentLabel is in the past; moving it to $adjustedDeadline so the assignment is still accepted."
                         $deadlineDateTime = $adjustedDeadline
                     }
                 }
 
-                Write-Log "Install time settings - UseLocalTime: $useLocalTime, StartDateTime: $startDateTime, DeadlineDateTime: $deadlineDateTime"
+                Write-Log "Install time settings: UseLocalTime $useLocalTime, StartDateTime $startDateTime, DeadlineDateTime $deadlineDateTime." -Level Detail
             }
 
             $assignmentParams = @{
@@ -2106,7 +2057,7 @@ function Move-AssignmentsAndDependencies {
                     # reaches the log, which is how a BadRequest ended up
                     # recorded as a successful add.
                     foreach ($addWarning in $addWarnings) {
-                        Write-Log "WARNING from Intune while adding $assignmentLabel to $($To.id): $addWarning"
+                        Write-Log "Intune warned while adding $assignmentLabel to $($To.id): $addWarning" -Level Warning
                         # Both the client-side duplicate guard and the server-side
                         # "The MobileApp Assignment already exists" BadRequest are
                         # idempotent - the assignment is already where we want it,
@@ -2119,7 +2070,7 @@ function Move-AssignmentsAndDependencies {
                         # read-back: the assignment could be present on $To for
                         # unrelated reasons, and treating that as success here
                         # would delete the source copy.
-                        Write-Log "Add of $assignmentLabel assignment to $($To.id) aborted before returning. Check the preceding warning for the reason."
+                        Write-Log "Adding the $assignmentLabel assignment to $($To.id) aborted before returning. Check the preceding warning for the reason." -Level Warning
                     }
                     else {
                         # A returned assignment object is the one unambiguous
@@ -2133,23 +2084,23 @@ function Move-AssignmentsAndDependencies {
                         }
 
                         if ($successfullyAdded) {
-                            Write-Log "Added $assignmentLabel assignment to $($To.id)."
+                            Write-Log "Added $assignmentLabel assignment to $($To.id)." -Level Detail
                         }
                         else {
-                            Write-Log "ERROR: $assignmentLabel assignment is not present on $($To.id) after the add."
+                            Write-Log "$assignmentLabel assignment is not present on $($To.id) after the add." -Level Error
                         }
                     }
                 }
                 catch {
-                    Write-Log "Failed to add $assignmentLabel assignment to $($To.id): $_"
+                    Write-Log "Could not add the $assignmentLabel assignment to $($To.id): $_" -Level Warning
                 }
 
                 if (!$successfullyAdded -and $conflicted) {
-                    Write-Log "Not retrying $assignmentLabel on $($To.id): Intune reported a conflict that a retry cannot resolve."
+                    Write-Log "Not retrying $assignmentLabel on $($To.id): Intune reported a conflict that a retry cannot resolve." -Level Detail
                     break
                 }
                 if (!$successfullyAdded -and ($try -lt $maxRetries)) {
-                    Write-Log "Retrying to add $assignmentLabel assignment to $($To.id). Attempt $($try) of $($maxRetries)."
+                    Write-Log "Retrying the $assignmentLabel assignment on $($To.id) (attempt $try/$maxRetries)..." -Level Detail
                     Start-Sleep -Seconds $RetryDelaySeconds
                 }
             }
@@ -2157,7 +2108,7 @@ function Move-AssignmentsAndDependencies {
             # Remove the old assignment
             if ($successfullyAdded -and -not $CopyOnly) {
                 if ([int]$targetCounts[$countKey] -gt 1) {
-                    Write-Log "WARNING: $($From.id) has $($targetCounts[$countKey]) assignments for $assignmentLabel. Removing one removes them all."
+                    Write-Log -Level Warning "$($From.id) has $($targetCounts[$countKey]) assignments for $assignmentLabel. Removing one removes them all."
                 }
 
                 # No second verification pass: $successfullyAdded already means
@@ -2186,7 +2137,7 @@ function Move-AssignmentsAndDependencies {
                         }
                         if ($removeReturned) {
                             $successfullyRemoved = $true
-                            Write-Log "Successfully removed $assignmentLabel assignment from $($From.id)."
+                            Write-Log "Removed the $assignmentLabel assignment from $($From.id)." -Level Detail
                         }
                         else {
                             $removeFailure = "aborted before returning. Check the preceding warning for the reason"
@@ -2196,12 +2147,12 @@ function Move-AssignmentsAndDependencies {
                         $removeFailure = $_
                     }
                     if (-not $successfullyRemoved) {
-                        Write-Log "Failed to remove $assignmentLabel assignment from $($From.id): $removeFailure"
+                        Write-Log "Could not remove the $assignmentLabel assignment from $($From.id): $removeFailure" -Level Warning
                         if ($i -eq $maxRemovalAttempts) {
-                            Write-Log "Failed to remove assignment after $maxRemovalAttempts attempts. Skipping removal."
+                            Write-Log "Gave up removing the $assignmentLabel assignment from $($From.id) after $maxRemovalAttempts attempts." -Level Error
                         }
                         else {
-                            Write-Log "Retrying removal of $assignmentLabel assignment from $($From.id). Attempt $($i + 1) of $maxRemovalAttempts."
+                            Write-Log "Retrying removal of the $assignmentLabel assignment from $($From.id) (attempt $($i + 1)/$maxRemovalAttempts)..." -Level Detail
                             Start-Sleep -Seconds $RetryDelaySeconds
                         }
                     }
@@ -2210,13 +2161,13 @@ function Move-AssignmentsAndDependencies {
             elseif (-not $successfullyAdded) {
                 # The source assignment is the only surviving copy, so $From must
                 # not be pruned out from under it.
-                Write-Log "ERROR: $assignmentLabel assignment was not added to $($To.id); leaving the source assignment on $($From.id) intact and protecting it from deletion."
+                Write-Log -Level Error "$assignmentLabel assignment was not added to $($To.id); leaving the source assignment on $($From.id) intact and protecting it from deletion."
                 & $addProtectedSourceId $From.id
             }
         }
     }
     if ($SkipDependencies) {
-        Write-Log "Skipping dependency migration as requested."
+        Write-Log "Skipping dependency migration as requested." -Level Detail
         return
     }
     # Child dependencies are the apps that $From depends on; $To needs to depend
@@ -2242,7 +2193,7 @@ function Move-AssignmentsAndDependencies {
                 continue
             }
             if ($excludedTargets.Contains([string]$existing.targetId)) {
-                Write-Log "Dropping existing dependency $($existing.targetId) from $($To.id) because that app is scheduled for deletion."
+                Write-Log "Dropping existing dependency $($existing.targetId) from $($To.id) because that app is scheduled for deletion." -Level Detail
                 continue
             }
             $desiredDependencies[$existing.targetId] = ConvertTo-DependencyType $existing.dependencyType
@@ -2251,18 +2202,18 @@ function Move-AssignmentsAndDependencies {
             # An app cannot depend on itself, and $To must not inherit a
             # dependency on the app it is replacing.
             if (($dependency.targetId -eq $To.id) -or ($dependency.targetId -eq $From.id)) {
-                Write-Log "Skipping child dependency $($dependency.targetId) because it points at the source or target app."
+                Write-Log "Skipping child dependency $($dependency.targetId) because it points at the source or target app." -Level Detail
                 continue
             }
             if ($excludedTargets.Contains([string]$dependency.targetId)) {
-                Write-Log "Skipping child dependency $($dependency.targetId) because that app is scheduled for deletion."
+                Write-Log "Skipping child dependency $($dependency.targetId) because that app is scheduled for deletion." -Level Detail
                 continue
             }
             $desiredDependencies[$dependency.targetId] = ConvertTo-DependencyType $dependency.dependencyType
         }
 
         if ($desiredDependencies.Count -eq 0) {
-            Write-Log "No child dependencies to migrate to $($To.id)."
+            Write-Log "No child dependencies to migrate to $($To.id)." -Level Detail
         }
         else {
             $maxRetries = 3
@@ -2278,11 +2229,11 @@ function Move-AssignmentsAndDependencies {
                             $dependencyObjects += $dependencyObject
                         }
                         else {
-                            Write-Log "Unable to build a dependency object for $targetId. It may no longer exist in Intune."
+                            Write-Log "Could not build a dependency object for $targetId. It may no longer exist in Intune." -Level Warning
                         }
                     }
                     if ($dependencyObjects.Count -eq 0) {
-                        Write-Log "None of the child dependencies could be resolved. Skipping dependency migration to $($To.id)."
+                        Write-Log "None of the child dependencies could be resolved. Skipping dependency migration to $($To.id)." -Level Warning
                         break
                     }
 
@@ -2300,11 +2251,11 @@ function Move-AssignmentsAndDependencies {
                         Write-Log "Migrated $($dependencyObjects.Count) child dependency(ies) to $($To.id): $($dependencyObjects.targetId -join ', ')"
                     }
                     else {
-                        Write-Log "Dependencies missing from $($To.id) after attempt $($try) of $($maxRetries): $($missingTargets -join ', ')"
+                        Write-Log "Dependencies missing from $($To.id) after attempt $try/${maxRetries}: $($missingTargets -join ', ')" -Level Warning
                     }
                 }
                 catch {
-                    Write-Log "Failed to migrate child dependencies to $($To.id) on attempt $($try) of $($maxRetries): $_"
+                    Write-Log "Could not migrate child dependencies to $($To.id) (attempt $try/${maxRetries}): $_" -Level Warning
                 }
 
                 if (!$successfullyAdded -and ($try -lt $maxRetries)) {
@@ -2312,7 +2263,7 @@ function Move-AssignmentsAndDependencies {
                 }
             }
             if (!$successfullyAdded) {
-                Write-Log "Unable to migrate child dependencies to $($To.id) after $maxRetries attempts."
+                Write-Log "Could not migrate child dependencies to $($To.id) after $maxRetries attempts." -Level Error
             }
         }
     }
@@ -2320,7 +2271,7 @@ function Move-AssignmentsAndDependencies {
     if ($parentDependencies -and $parentDependencies.Count -gt 0) {
         $parentGroups = $parentDependencies | Group-Object -Property targetId
         if (-not $AllowDependentLinkUpdates) {
-            Write-Log "Skipping dependent app link updates because AllowDependentLinkUpdates is disabled for this recipe."
+            Write-Log "Skipping dependent app link updates because AllowDependentLinkUpdates is disabled for this recipe." -Level Detail
             foreach ($group in $parentGroups) {
                 $displayName = $group.Group[0].targetDisplayName
                 if (-not $displayName) { $displayName = $group.Name }
@@ -2329,7 +2280,7 @@ function Move-AssignmentsAndDependencies {
             & $addProtectedSourceId $From.id
         }
         elseif (-not [bool]$resolvedDependentOptions.Enabled) {
-            Write-Log "Skipping dependent app link updates because dependentLinkUpdateEnabled is disabled in preferences."
+            Write-Log "Skipping dependent app link updates because dependentLinkUpdateEnabled is disabled in preferences." -Level Detail
             foreach ($group in $parentGroups) {
                 $displayName = $group.Group[0].targetDisplayName
                 if (-not $displayName) { $displayName = $group.Name }
@@ -2350,7 +2301,7 @@ function Move-AssignmentsAndDependencies {
                     $parentApp = Get-YardstickWin32App -Id $parentId
                     $parentDisplayName = $parentApp.DisplayName
                 } catch {
-                    Write-Log "Unable to retrieve metadata for dependent app $($parentId): $_"
+                    Write-Log "Could not read the metadata of dependent app ${parentId}: $_" -Level Warning
                 }
             }
             if (-not $parentDisplayName) {
@@ -2415,12 +2366,12 @@ function Move-AssignmentsAndDependencies {
                 }
                 catch {
                     $lastError = $_.Exception.Message
-                    Write-Log "Failed to update dependent app $parentDisplayName on attempt $($attempt + 1): $lastError"
+                    Write-Log "Failed to update dependent app $parentDisplayName on attempt $($attempt + 1): $lastError" -Level Warning
                     if ($dependenciesCleared -and $originalDependencies.Count -gt 0) {
                         try {
                             Add-YardstickWin32AppDependency -ID $parentId -Dependency $originalDependencies | Out-Null
                         } catch {
-                            Write-Log "Unable to restore original dependencies for $parentDisplayName after failure."
+                            Write-Log "Could not restore the original dependencies of $parentDisplayName after the failure." -Level Error
                         }
                     }
 
@@ -2468,18 +2419,19 @@ function Get-SameAppAllVersions {
         [String]$DisplayName
     )
 
-    Write-Log "Retrieving all versions of application with display name: $DisplayName"
+    # The log report reads the display name from this line; keep its wording.
+    Write-Log "Retrieving all versions of application with display name: $DisplayName" -Level Detail
 
     # Attempt to retrieve applications with retry logic
     $AllSimilarApps = Invoke-WithRetry -Label "Retrieve applications for $DisplayName" -MaxRetries 3 -DelaySeconds 5 -ScriptBlock {
         Get-YardstickWin32App -DisplayName "$DisplayName" -ErrorAction Stop
     } -OnFailure {
-        Write-Log "Intune API failed to retrieve applications after 3 attempts. Exiting."
+        Write-Log "Could not retrieve the versions of $DisplayName from Intune after 3 attempts. Exiting." -Level Error
         exit 1001
     }
     
     if (-not $AllSimilarApps) {
-        Write-Log "No applications found with the name $DisplayName"
+        Write-Log "No applications found with the name $DisplayName." -Level Detail
         return , @()
     }
     
@@ -2706,7 +2658,7 @@ function Set-DetectAnchor {
     )
     $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
     if ($App.DisplayName -eq $anchorName) {
-        Write-Log "App $($App.Id) is already the Ω DETECT - anchor for $DisplayName"
+        Write-Log -Level Detail "App $($App.Id) is already the Ω DETECT - anchor for $DisplayName"
         return
     }
     Write-Log "Pinning $($App.DisplayName) ($($App.Id)) as Ω DETECT - anchor for $DisplayName"
@@ -2748,7 +2700,7 @@ function Get-YardstickSupersedenceRelationship {
         $relationships = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$Id/relationships" |
             Where-Object { $_.'@odata.type' -eq '#microsoft.graph.mobileAppSupersedence' })
     } catch {
-        Write-Log "WARNING: Failed to read supersedence relationships for $Id : $_"
+        Write-Log "Could not read the supersedence relationships of ${Id}: $_" -Level Warning
         return @()
     }
 
@@ -2816,17 +2768,17 @@ function Remove-SupersedenceReference {
 
     $remaining = @($forward | Where-Object targetId -ne $TargetId)
     if ($remaining.Count -eq 0) {
-        Write-Log "Clearing supersedence on $ParentId (was its only target: $TargetId)"
+        Write-Log "Clearing supersedence on $ParentId (it was the only target: $TargetId)." -Level Detail
         Remove-YardstickWin32AppSupersedence -ID $ParentId | Out-Null
         return
     }
 
     $rebuilt = New-SupersedenceObject -Relationships $remaining
     if ($rebuilt.Count -eq 0) {
-        Write-Log "WARNING: Could not rebuild supersedence for $ParentId; leaving it untouched"
+        Write-Log "Could not rebuild supersedence for $ParentId; leaving it untouched." -Level Warning
         return
     }
-    Write-Log "Rebuilding supersedence on $ParentId without target $TargetId ($($rebuilt.Count) remaining)"
+    Write-Log "Rebuilding supersedence on $ParentId without target $TargetId ($($rebuilt.Count) remaining)." -Level Detail
     Add-YardstickWin32AppSupersedence -ID $ParentId -Supersedence $rebuilt | Out-Null
 }
 
@@ -2890,7 +2842,7 @@ function Remove-DependencyReference {
 
     $remaining = @($children | Where-Object targetId -ne $TargetId)
     if ($remaining.Count -eq 0) {
-        Write-Log "Clearing dependencies on $ParentId (was its only target: $TargetId)"
+        Write-Log "Clearing dependencies on $ParentId (it was the only target: $TargetId)." -Level Detail
         Remove-YardstickWin32AppDependency -ID $ParentId | Out-Null
         return
     }
@@ -2903,7 +2855,7 @@ function Remove-DependencyReference {
             $rebuilt += $dependencyObject
         }
         else {
-            Write-Log "WARNING: Could not rebuild dependency on $ParentId for target $($entry.targetId) - it may no longer exist in Intune"
+            Write-Log "Could not rebuild the dependency on $ParentId for target $($entry.targetId). It may no longer exist in Intune." -Level Warning
         }
     }
 
@@ -2911,12 +2863,12 @@ function Remove-DependencyReference {
         # Every survivor failed to resolve. Clearing outright is still correct -
         # the caller needs $TargetId detached and the leftovers point at apps
         # Intune can no longer find.
-        Write-Log "Clearing dependencies on $ParentId - none of the $($remaining.Count) remaining target(s) could be rebuilt"
+        Write-Log "Clearing dependencies on ${ParentId}: none of the $($remaining.Count) remaining target(s) could be rebuilt." -Level Warning
         Remove-YardstickWin32AppDependency -ID $ParentId | Out-Null
         return
     }
 
-    Write-Log "Rebuilding dependencies on $ParentId without target $TargetId ($($rebuilt.Count) remaining)"
+    Write-Log "Rebuilding dependencies on $ParentId without target $TargetId ($($rebuilt.Count) remaining)." -Level Detail
     Add-YardstickWin32AppDependency -ID $ParentId -Dependency $rebuilt | Out-Null
 }
 
@@ -2968,7 +2920,7 @@ function New-SupersedenceObject {
         if ($object) {
             $built.Add([System.Collections.Specialized.OrderedDictionary]$object) | Out-Null
         } else {
-            Write-Log "WARNING: Could not build supersedence object for target $($pair.TargetId) - skipping"
+            Write-Log "Could not build a supersedence object for target $($pair.TargetId). Skipping it." -Level Warning
         }
     }
     return , $built.ToArray()
@@ -3014,7 +2966,7 @@ function Set-YardstickSupersedence {
     $targets = @($targets | Where-Object { $seen.Add($_.id) })
 
     if ($targets.Count -eq 0) {
-        Write-Log "No supersedence targets for $($NewApp.DisplayName) - clearing any stale links"
+        Write-Log "No supersedence targets for $($NewApp.DisplayName). Clearing any stale links."
         if (@(Get-YardstickSupersedenceRelationship -Id $NewApp.id -Direction Forward).Count -gt 0) {
             Remove-YardstickWin32AppSupersedence -ID $NewApp.id | Out-Null
         }
@@ -3029,7 +2981,7 @@ function Set-YardstickSupersedence {
     # exactly the target that catches stale installs.
     $maxTargets = 9
     if ($targets.Count -gt $maxTargets) {
-        Write-Log "WARNING: $($targets.Count) supersedence targets exceeds Intune's limit of $maxTargets; trimming the oldest"
+        Write-Log "$($targets.Count) supersedence targets exceed Intune's limit of ${maxTargets}. Trimming the oldest." -Level Warning
         $reserved = @($targets | Where-Object { $updateOnly.Contains($_.id) } | Select-Object -First $maxTargets)
         $fill = @($targets |
             Where-Object { -not $updateOnly.Contains($_.id) } |
@@ -3042,11 +2994,11 @@ function Set-YardstickSupersedence {
     foreach ($target in $targets) {
         try {
             if (@(Get-YardstickSupersedenceRelationship -Id $target.id -Direction Forward).Count -gt 0) {
-                Write-Log "Clearing stale supersedence on $($target.DisplayName) ($($target.id))"
+                Write-Log "Clearing stale supersedence on $($target.DisplayName) ($($target.id))." -Level Detail
                 Remove-YardstickWin32AppSupersedence -ID $target.id | Out-Null
             }
         } catch {
-            Write-Log "WARNING: Failed to clear existing supersedence on $($target.DisplayName) ($($target.id)): $_"
+            Write-Log "Could not clear the existing supersedence on $($target.DisplayName) ($($target.id)): $_" -Level Warning
         }
     }
 
@@ -3058,10 +3010,11 @@ function Set-YardstickSupersedence {
     }
 
     if ($supersedence.Count -eq 0) {
-        Write-Log "WARNING: No resolvable supersedence targets for $($NewApp.DisplayName) - skipping"
+        Write-Log "No resolvable supersedence targets for $($NewApp.DisplayName). Skipping supersedence." -Level Warning
         return 0
     }
 
+    # The log report matches this line; keep its wording (and no trailing period).
     Write-Log "Attaching supersedence ($Type) from $($NewApp.DisplayName) to $($supersedence.Count) target(s)"
     # Add-YardstickWin32AppSupersedence replaces the parent's whole supersedence set,
     # so there is no need to clear it first.
@@ -3071,7 +3024,7 @@ function Set-YardstickSupersedence {
     # report what Intune actually stored rather than what we asked for.
     $attached = @(Get-YardstickSupersedenceRelationship -Id $NewApp.id -Direction Forward)
     if ($attached.Count -ne $supersedence.Count) {
-        Write-Log "ERROR: Expected $($supersedence.Count) supersedence target(s) on $($NewApp.DisplayName) but Intune reports $($attached.Count)"
+        Write-Log "Expected $($supersedence.Count) supersedence target(s) on $($NewApp.DisplayName), but Intune reports $($attached.Count)." -Level Error
     }
     return $attached.Count
 }
@@ -3116,7 +3069,7 @@ function Set-AssignmentAutoUpdate {
     try {
         $assignments = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments")
     } catch {
-        Write-Log "WARNING: Failed to read assignments for $AppId while setting auto-update: $_"
+        Write-Log "Could not read the assignments of $AppId while setting auto-update: $_" -Level Warning
         return 0
     }
 
@@ -3124,7 +3077,7 @@ function Set-AssignmentAutoUpdate {
         $assignments = @($assignments | Where-Object intent -eq $IntentFilter)
     }
     if ($assignments.Count -eq 0) {
-        Write-Log "No $(if ($IntentFilter) { "$IntentFilter-intent " })assignments on $AppId to configure auto-update on"
+        Write-Log "No $(if ($IntentFilter) { "$IntentFilter-intent " })assignments on $AppId to configure auto-update on."
         return 0
     }
 
@@ -3165,13 +3118,13 @@ function Set-AssignmentAutoUpdate {
                 -Method Patch -Body @{ settings = $settings } | Out-Null
             if ($isSkipped) { $skipped++ } else { $count++ }
         } catch {
-            Write-Log "WARNING: Failed to set auto-update on assignment $($assignment.id) for app $AppId : $_"
+            Write-Log "Could not set auto-update on assignment $($assignment.id) of ${AppId}: $_" -Level Warning
         }
     }
     $desiredStateForApp = if ($Enabled) { 'enabled' } else { 'notConfigured' }
-    Write-Log "Auto-update ($desiredStateForApp) is set on $count assignment(s) for $AppId"
+    Write-Log "Auto-update ($desiredStateForApp) is set on $count assignment(s) for $AppId."
     if ($skipped -gt 0) {
-        Write-Log "Auto-update held at notConfigured on $skipped assignment(s) for $AppId (group in the auto-update skip list)"
+        Write-Log "Auto-update held at notConfigured on $skipped assignment(s) for $AppId (group in the auto-update skip list)."
     }
     return $count
 }
@@ -3252,10 +3205,10 @@ function Clear-YardstickAppLink {
                 $ok = $true
             }
             if (-not $ok) {
-                Write-Log "WARNING: Reading $What on $label aborted before returning. Check the preceding warning for the reason."
+                Write-Log "Reading $What on $label aborted before returning. Check the preceding warning for the reason." -Level Warning
             }
         } catch {
-            Write-Log "WARNING: Could not read $What on $label : $_"
+            Write-Log "Could not read $What on ${label}: $_" -Level Warning
         }
         [PSCustomObject]@{ Ok = $ok; Items = $items; What = $What }
     }
@@ -3297,7 +3250,7 @@ function Clear-YardstickAppLink {
                 $true
             }
         if ($removed) {
-            Write-Log "Removed $($assignment.intent) assignment for $target from $label"
+            Write-Log "Removed $($assignment.intent) assignment for $target from $label." -Level Detail
         }
     }
 
@@ -3315,7 +3268,7 @@ function Clear-YardstickAppLink {
                     Where-Object { (($_.targetType -eq "child") -or (-not $_.targetType)) -and ($_.targetId -eq $appId) })
             }
         if ($detached) {
-            Write-Log "Detached $label from dependent app $currentDependentId"
+            Write-Log "Detached $label from dependent app $currentDependentId." -Level Detail
         }
     }
 
@@ -3331,7 +3284,7 @@ function Clear-YardstickAppLink {
                 $recheck.Ok -and ($recheck.Items.Count -eq 0)
             }
         if ($cleared) {
-            Write-Log "Cleared dependencies from $label ($($dependencyIds -join ', '))"
+            Write-Log "Cleared dependencies from $label ($($dependencyIds -join ', '))." -Level Detail
         }
     }
 
@@ -3435,13 +3388,10 @@ function Remove-YardstickApp {
 
     $surviving = @(Clear-YardstickAppLink -App $App)
     if ($surviving.Count -gt 0) {
-        foreach ($link in $surviving) {
-            Write-Log "ERROR: $($App.DisplayName) ($($App.id)) still holds a link that blocks deletion: $link"
-        }
         throw "Cannot delete $($App.DisplayName) ($($App.id)): $($surviving.Count) link(s) could not be removed - $($surviving -join '; ')"
     }
 
-    Write-Log "Removing app $($App.DisplayName) ($($App.id))"
+    Write-Log "Removing $($App.DisplayName) ($($App.id))..."
 
     # Intune is eventually consistent about relationship teardown: Clear-YardstickAppLink
     # can report every link removed and the delete still be refused a second later with
@@ -3458,7 +3408,7 @@ function Remove-YardstickApp {
                                  $message -match 'MetadataBehaviorValidateRelationshipsForAppToDelete'
             if (-not $isRelationshipLag -or $attempt -ge $deleteBackoff.Count) { throw }
             $delay = $deleteBackoff[$attempt]
-            Write-Log "Intune is not ready to delete $($App.DisplayName) ($($App.id)) yet; retrying in $delay second(s) (attempt $($attempt + 1) of $($deleteBackoff.Count + 1))."
+            Write-Log "Intune is not ready to delete $($App.DisplayName) ($($App.id)) yet. Retrying in $delay second(s) (attempt $($attempt + 1)/$($deleteBackoff.Count + 1))..." -Level Detail
             Start-Sleep -Seconds $delay
         }
     }
@@ -3557,7 +3507,7 @@ function Complete-YardstickDropbox {
     )
 
     if ([string]::IsNullOrWhiteSpace($ArchiveRoot)) {
-        Write-Log "WARNING: No SoftwareArchive path configured - leaving the payload in $DropboxPath."
+        Write-Log "No SoftwareArchive path is configured. Leaving the payload in $DropboxPath." -Level Warning
         return
     }
 
@@ -3572,7 +3522,7 @@ function Complete-YardstickDropbox {
     foreach ($item in @(Get-ChildItem -LiteralPath $DropboxPath -Force)) {
         Move-Item -LiteralPath $item.FullName -Destination $destination -Force
     }
-    Write-Log "Archived manual drop to $destination"
+    Write-Log "Archived the manual drop to $destination."
 }
 
 
@@ -3941,7 +3891,7 @@ function Test-VersionExcluded {
 
     # Guard: null/empty version — treat as excluded to safely skip the update
     if ([string]::IsNullOrWhiteSpace($Version)) {
-        Write-Log "WARNING: Version is null or empty in Test-VersionExcluded check"
+        Write-Log "Test-VersionExcluded was given an empty version." -Level Warning
         return $true
     }
 
@@ -4251,7 +4201,8 @@ function Add-SuccessfulApplication {
     }
     
     $Script:SuccessfulApplications.Add($appInfo)
-    Write-Log "Tracked successful application: $DisplayName $Version"
+    # The log report reads the outcome from this line; keep its wording.
+    Write-Log "Done: $DisplayName $Version ($Action)."
 }
 
 
@@ -4307,12 +4258,13 @@ function Add-FailedApplication {
         Timestamp = Get-Date
     }
 
-    # Check if app with same ID already exists in failed list
+    # The single failure line for the app. The log report reads the stage and
+    # message from it, so keep its wording.
+    Write-Log "$FailureStage failed: $ErrorMessage" -Level Error
+
+    # The email report lists each app once, under its first failure.
     if (-not ($Script:FailedApplications | Where-Object { $_.ApplicationId -eq $ApplicationId })) {
         $Script:FailedApplications.Add($appInfo)
-        Write-Log "Tracked failed application: $ApplicationId - $ErrorMessage"
-    } else {
-        Write-Log "Application $ApplicationId already exists in failed applications list. Skipping duplicate entry."
     }
 }
 
@@ -4337,7 +4289,7 @@ function Test-OutlookAvailability {
         [System.GC]::Collect()
         return $true
     } catch {
-        Write-Log "Outlook COM object not available: $_"
+        Write-Log "Outlook COM object not available: $_" -Level Detail
         return $false
     }
 }
@@ -4506,7 +4458,7 @@ function Send-YardstickEmailReport {
     
     # Check if email notifications are enabled
     if (-not $Preferences.emailNotificationEnabled) {
-        Write-Log "Email notifications are disabled in preferences"
+        Write-Log "Email notifications are disabled in preferences."
         return
     }
 
@@ -4533,12 +4485,12 @@ function Send-YardstickEmailReport {
 
     # Validate required email settings
     if (-not $recipients) {
-        Write-Log "WARNING: No recipients configured for the $Audience email report. Skipping."
+        Write-Log "No recipients are configured for the $Audience email report. Skipping it." -Level Warning
         return
     }
     foreach ($setting in @('emailSubject', 'emailSenderName')) {
         if (-not $Preferences[$setting]) {
-            Write-Log "WARNING: Email setting '$setting' not configured. Skipping email notification."
+            Write-Log "Email setting '$setting' is not configured. Skipping the email report." -Level Warning
             return
         }
     }
@@ -4564,17 +4516,17 @@ function Send-YardstickEmailReport {
     if ($method -eq 'smtp') {
         foreach ($setting in @('smtpServer', 'emailSendFromAddress')) {
             if (-not $Preferences[$setting]) {
-                Write-Log "WARNING: Email setting '$setting' is required for SMTP delivery. Skipping email notification."
+                Write-Log "Email setting '$setting' is required for SMTP delivery. Skipping the email report." -Level Warning
                 return
             }
         }
     } elseif (-not (Test-OutlookAvailability)) {
-        Write-Log "WARNING: Outlook is not available. Cannot send email notification."
+        Write-Log "Outlook is not available. Cannot send the email report." -Level Warning
         return
     }
 
     try {
-        Write-Log "Creating $Audience email report for Yardstick run"
+        Write-Log "Creating the $Audience email report..." -Level Detail
 
         # Load branding logo. Use a cid: reference for the email itself (Outlook
         # desktop does not render base64 data URIs reliably) and a base64 data URI
@@ -4595,10 +4547,10 @@ function Send-YardstickEmailReport {
                     $logoHtml = "<img src=`"cid:$logoCid`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
                     $logoHtmlForBrowser = "<img src=`"data:image/png;base64,$logoBase64`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
                 } else {
-                    Write-Log "WARNING: Branding logo not found at $candidatePath"
+                    Write-Log "Branding logo not found at $candidatePath." -Level Warning
                 }
             } catch {
-                Write-Log "WARNING: Failed to embed branding logo: $($_.Exception.Message)"
+                Write-Log "Could not embed the branding logo: $($_.Exception.Message)" -Level Warning
             }
         }
 
@@ -5025,9 +4977,9 @@ $summaryRows
                     $htmlForFile = $htmlForFile.Replace($logoHtml, $logoHtmlForBrowser)
                 }
                 Set-Content -Path $HtmlOutputPath -Value $htmlForFile -Encoding UTF8
-                Write-Log "Rendered email HTML written to $HtmlOutputPath"
+                Write-Log "Wrote the rendered email HTML to $HtmlOutputPath."
             } catch {
-                Write-Log "WARNING: Failed to write rendered HTML to $HtmlOutputPath`: $_"
+                Write-Log "Could not write the rendered HTML to ${HtmlOutputPath}: $_" -Level Warning
             }
         }
 
@@ -5044,8 +4996,7 @@ $summaryRows
             } else {
                 Send-YardstickSmtpMessage -Preferences $Preferences -To $recipients `
                     -Subject $subject -HtmlBody $emailBody
-                Write-Log "$Audience email report sent successfully via SMTP to the following email addresses:"
-                Write-Log ($recipients -join ", ")
+                Write-Log "$Audience email report sent via SMTP to: $($recipients -join ', ')."
             }
             return
         }
@@ -5077,7 +5028,7 @@ $summaryRows
                 # support SetProperty; attempting it would cause an error. The cid: reference still
                 # works for inline rendering even if the attachment is visible in the attachment list.
             } catch {
-                Write-Log "WARNING: Failed to attach logo with CID: $($_.Exception.Message)"
+                Write-Log "Could not attach the logo with CID: $($_.Exception.Message)" -Level Warning
             }
         }
 
@@ -5086,8 +5037,7 @@ $summaryRows
             Write-Log "Email opened in Outlook for preview (not sent)."
         } else {
             $mail.Send()
-            Write-Log "$Audience email report sent successfully to the following email addresses:"
-            Write-Log ($recipients -join ", ")
+            Write-Log "$Audience email report sent to: $($recipients -join ', ')."
         }
 
         # Clean up COM objects
@@ -5095,7 +5045,7 @@ $summaryRows
         $outlook = $null
         [System.GC]::Collect()
     } catch {
-        Write-Log "ERROR: Failed to send email report: $_"
+        Write-Log "Could not send the email report: $_" -Level Error
         # Clean up COM objects even on error
         try {
             $mail = $null
@@ -5139,10 +5089,10 @@ function Get-Secrets {
     
     # Placeholder for secret retrieval logic
     # Implement actual secret retrieval from your secure vault here
-    Write-Log "Retrieving secrets from vault here: $($SecretsDir)\$VaultName.yaml"
+    Write-Log "Reading secrets from $($SecretsDir)\$VaultName.yaml..." -Level Detail
     $Secrets = Get-Content -Path "$($SecretsDir)\$VaultName.yaml" | ConvertFrom-Yaml
     
-    Write-Log "Retrieved secrets from vault: $VaultName"
+    Write-Log "Read secrets from vault $VaultName." -Level Detail
     
     return $Secrets
 }

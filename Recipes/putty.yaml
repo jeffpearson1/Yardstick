@@ -21,7 +21,7 @@ preDownloadScript: |
     $URL = ($Content.links | Where-Object href -match "putty-64bit-[0-9]{1}\.[0-9]{1,3}-installer.msi$").href
     if (-not $URL) { throw "No 64-bit installer link was found on $canonicalUrl." }
   } catch {
-    Write-Log "PuTTY: chiark did not answer ($($_.Exception.Message)). Falling back to the the.earth.li mirror."
+    Write-Log "chiark did not answer ($($_.Exception.Message)). Falling back to the the.earth.li mirror." -Level Warning
     # The mirror's latest/ path redirects to the versioned one, so resolving the
     # redirect is what yields the version - there is no version listing to read.
     # Done with HttpWebRequest rather than Invoke-WebRequest because the resolved

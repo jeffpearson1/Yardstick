@@ -39,7 +39,7 @@ AfterAll {
     # session state, while this file imported them into Pester's, so two copies of
     # each are loaded now. Unload both or Mock -ModuleName in the test files that
     # run next refuses to choose.
-    Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph' -All |
+    Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph', 'YardstickLog' -All |
         Remove-Module -Force -ErrorAction SilentlyContinue
 }
 

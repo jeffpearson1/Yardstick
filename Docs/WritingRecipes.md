@@ -95,6 +95,14 @@ All script blocks execute with `-NoNewScope`, meaning they run directly in the c
 
 That scope is the top level of the runner script, `Private\Invoke-YardstickRun.ps1`, whether the run was started with `.\Yardstick.ps1` or `Invoke-Yardstick`. This is what lets plain assignments such as `$version`, `$url` and `$fileName` reach Yardstick, and it is why the runner is a script rather than a module function. The Yardstick functions (`Write-Log` and the rest) and the [Modules/Custom](../Modules/Custom) helpers are loaded globally, so recipes can call them directly. Scripts that are not given a working directory below start in the Yardstick folder, so `using module .\Modules\...` resolves there.
 
+To log from a recipe, call `Write-Log "message"`. Lines are tagged with the recipe's id automatically. Add `-Level Warning` or `-Level Error` for problems (don't type the `WARNING:`/`ERROR:` prefix yourself), or `-Level Detail` for routine steps that should only reach the console when the run is started with `-Verbose`:
+
+```powershell
+Write-Log "The primary mirror did not answer. Falling back to the secondary mirror." -Level Warning
+```
+
+Logging an error does not stop the recipe; `throw` to fail it.
+
 Scripts execute in this order:
 
 1. `preDownloadScript` - Before download and version validation

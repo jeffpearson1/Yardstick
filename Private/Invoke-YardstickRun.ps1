@@ -97,19 +97,22 @@ $Script:Applications = [System.Collections.Generic.List[PSObject]]::new()
 # puts the caller back where they were afterwards.
 Set-Location $YardstickModuleRoot
 
-# Initialize the log file
-Write-Log -Init
+# Initialize the log file. -Verbose shows the routine (Detail) log lines on the
+# console; it is not meant to turn on every cmdlet's own verbose output.
+$showDetail = $VerbosePreference -eq 'Continue'
+$VerbosePreference = 'SilentlyContinue'
+Write-Log -Init -ShowDetail:$showDetail
 
 # Validate parameters
 if ((-not $ApplicationId) -and (($All -eq $false) -and (!$Group))) {
-    Write-Log "Please provide parameter -ApplicationId"
+    Write-Log "Specify -ApplicationId, -Group or -All." -Level Error
     exit 1
 }
 
 # powershell-yaml is needed to read the preferences file itself, so it is checked
 # here rather than waiting for Test-Prerequisites below.
 if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
-    Write-Log "ERROR: The PowerShell module 'powershell-yaml' is not installed. Install it with: Install-Module powershell-yaml -Scope CurrentUser (or run .\Install-Yardstick.ps1)."
+    Write-Log "The PowerShell module 'powershell-yaml' is not installed. Install it with: Install-Module powershell-yaml -Scope CurrentUser (or run .\Install-Yardstick.ps1)." -Level Error
     exit 1
 }
 
@@ -118,14 +121,14 @@ if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
 try {
     $Prefs = Import-YardstickPreferences -ProjectRoot $ProjectRoot -CreateFolders
 } catch {
-    Write-Log "ERROR: Unable to load Yardstick preferences: $($_.Exception.Message)"
+    Write-Log "Unable to load Yardstick preferences: $($_.Exception.Message)" -Level Error
     exit 1
 }
 $prefsResult = Test-YardstickPreferences -Preferences $Prefs
-foreach ($w in $prefsResult.Warnings) { Write-Log "WARNING: $w" }
+foreach ($w in $prefsResult.Warnings) { Write-Log $w -Level Warning }
 if (-not $prefsResult.IsValid) {
-    foreach ($e in $prefsResult.Errors) { Write-Log "ERROR: $e" }
-    Write-Log "Preference checks failed. Fix preferences.yaml (or run .\Test-YardstickSetup.ps1) and try again."
+    foreach ($e in $prefsResult.Errors) { Write-Log $e -Level Error }
+    Write-Log "Preference checks failed. Fix preferences.yaml (or run .\Test-YardstickSetup.ps1) and try again." -Level Error
     exit 1
 }
 
@@ -141,10 +144,10 @@ Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
 
 # Validate prerequisites before importing external modules
 $prereqResult = Test-Prerequisites -ToolsPath $Prefs.Tools
-foreach ($w in $prereqResult.Warnings) { Write-Log "WARNING: $w" }
+foreach ($w in $prereqResult.Warnings) { Write-Log $w -Level Warning }
 if (-not $prereqResult.IsValid) {
-    foreach ($e in $prereqResult.Errors) { Write-Log "ERROR: $e" }
-    Write-Log "Prerequisite checks failed. Exiting."
+    foreach ($e in $prereqResult.Errors) { Write-Log $e -Level Error }
+    Write-Log "Prerequisite checks failed." -Level Error
     exit 1
 }
 
@@ -287,7 +290,7 @@ function Clear-RecipeVariableConstraint {
         }
         if (-not $isConstrained) { continue }
 
-        Write-Log "Clearing leaked type constraint on `$$($variable.Name) from a previous recipe."
+        Write-Log "Clearing leaked type constraint on `$$($variable.Name) from a previous recipe." -Level Detail
         Remove-Variable -Name $variable.Name -Scope Script -Force -ErrorAction SilentlyContinue
     }
 }
@@ -331,7 +334,7 @@ function Restore-RunnerPathVariable {
         # an array here would make -eq return a filtered collection, which an if()
         # reads as true and would silently skip the restore.
         if ([string]$current -ceq [string]$expected) { continue }
-        Write-Log "Restoring `$$name - a recipe overwrote it with '$current'."
+        Write-Log "Restoring `$${name}: the recipe overwrote it with '$current'." -Level Warning
         Set-Variable -Name $name -Value $expected -Scope Script
     }
 }
@@ -375,12 +378,12 @@ function Invoke-YardstickAppMaintenance {
 
     # Refresh the version list from Intune (retry in case a new upload has not
     # yet propagated to Get-YardstickWin32App list results).
-    Write-Log "Updating local application manifest..."
+    Write-Log "Refreshing the list of versions in Intune..." -Level Detail
     if ($NewAppId) { Start-Sleep -Seconds 4 }
     try {
         $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
         if ($NewAppId -and !($AllMatchingApps | Where-Object id -eq $NewAppId)) {
-            Write-Log "Newly created app not found in list of all matching apps. Waiting 5 seconds and trying again..."
+            Write-Log "The new app is not in the version list yet. Retrying in 5 seconds..." -Level Detail
             Start-Sleep -Seconds 5
             $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
         }
@@ -389,7 +392,7 @@ function Invoke-YardstickAppMaintenance {
             # by id and splice it in - skipping here would leave a freshly
             # uploaded app with no assignments and no supersedence, and the next
             # run would consider the version already published and skip it.
-            Write-Log "Newly created app still missing from the list. Fetching it directly by id."
+            Write-Log "The new app is still not in the version list. Fetching it directly by id." -Level Detail
             $DirectApp = Get-YardstickWin32App -Id $NewAppId -ErrorAction Stop
             if (-not $DirectApp) {
                 throw "Intune returned no application for id $NewAppId"
@@ -400,10 +403,10 @@ function Invoke-YardstickAppMaintenance {
         if (-not $NewAppId) {
             # Nothing was published this run, so there is no half-finished app to
             # protect. Give up on this recipe rather than the whole run.
-            Write-Log "ERROR: Could not fetch existing versions of $($Script:DisplayName) for the maintenance sweep: $_"
+            Write-Log "Could not fetch the existing versions of $($Script:DisplayName) for the maintenance sweep: $_" -Level Error
             return $null
         }
-        Write-Log "There was an error fetching information about existing applications. Exiting"
+        Write-Log "Could not fetch the existing versions of $($Script:DisplayName) after uploading $NewAppId. Exiting: $_" -Level Error
         # exit does not wait for background threads, so drain the backup queued
         # by the caller before tearing the process down.
         Wait-YardstickBackup -TimeoutSeconds 120 | Out-Null
@@ -430,7 +433,7 @@ function Invoke-YardstickAppMaintenance {
             Write-Log "No published version of $($Script:DisplayName) to maintain."
             return $null
         }
-        Write-Log "Maintenance sweep for $($Script:DisplayName) against $($CurrentApp.DisplayName) ($($CurrentApp.displayVersion))"
+        Write-Log "Sweeping the versions of $($Script:DisplayName) against $($CurrentApp.DisplayName) $($CurrentApp.displayVersion)..."
     }
 
     $OtherApps = @($AllMatchingApps | Where-Object id -ne $CurrentApp.id)
@@ -524,10 +527,10 @@ function Invoke-YardstickAppMaintenance {
         if ($ToKeep[$i].DisplayName -ne $targetName) {
             try {
                 Set-YardstickWin32App -Id $ToKeep[$i].Id -DisplayName $targetName | Out-Null
-                Write-Log "Renamed $($ToKeep[$i].DisplayName) -> $targetName"
+                Write-Log "Renamed $($ToKeep[$i].DisplayName) to $targetName."
                 $renamedCount++
             } catch {
-                Write-Log "ERROR: Failed to rename $($ToKeep[$i].Id) to $targetName : $_"
+                Write-Log "Could not rename $($ToKeep[$i].DisplayName) to ${targetName}: $_" -Level Error
             }
         }
     }
@@ -597,7 +600,7 @@ function Invoke-YardstickAppMaintenance {
                 -ExcludeDependencyTargetIds $ToPruneIds `
                 -SkipDependencies:$isAnchor
         } catch {
-            Write-Log "ERROR: Failed required-intent move from $($old.DisplayName): $_"
+            Write-Log "Could not move the required assignments from $($old.DisplayName): $_" -Level Error
         }
 
         $availOnOld = @(Get-YardstickAppAssignment -Id $old.id | Where-Object Intent -eq 'available')
@@ -614,7 +617,7 @@ function Invoke-YardstickAppMaintenance {
                     -ProtectedSourceIds $ProtectedDependencyAppIds `
                     -IntentFilter 'available' -CopyOnly:$willBeSuperseded -SkipDependencies
             } catch {
-                Write-Log "ERROR: Failed available-intent migration from $($old.DisplayName): $_"
+                Write-Log "Could not migrate the available assignments from $($old.DisplayName): $_" -Level Error
             }
         }
     }
@@ -626,7 +629,7 @@ function Invoke-YardstickAppMaintenance {
         $CurrentlyDeployedIDs = (Get-YardstickAppAssignment -Id $ID).GroupID
         foreach ($DeploymentGroupID in $Script:DefaultDeploymentGroups) {
             if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
-                Write-Log "Deploying $ID to $DeploymentGroupID because it is in the default list"
+                Write-Log "Deploying $($CurrentApp.DisplayName) to default group $DeploymentGroupID."
                 Add-YardstickWin32AppAssignmentGroup -Include -ID $ID -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
             }
         }
@@ -640,14 +643,14 @@ function Invoke-YardstickAppMaintenance {
     if (!$NoDelete) {
         foreach ($old in $ToPrune) {
             if ($ProtectedDependencyAppIds.Contains($old.id)) {
-                Write-Log "Skipping removal of $($old.displayName) because dependent applications are still targeting this version."
+                Write-Log "Keeping $($old.displayName): dependent apps still target this version."
                 continue
             }
             try {
                 Remove-YardstickApp -App $old
                 $Pruned += $old.id
             } catch {
-                Write-Log "ERROR: Failed to remove $($old.DisplayName) ($($old.id)): $_"
+                Write-Log "Could not remove $($old.DisplayName) ($($old.id)): $_" -Level Error
             }
         }
     }
@@ -671,10 +674,10 @@ function Invoke-YardstickAppMaintenance {
             $supersededCount = Set-YardstickSupersedence -NewApp $CurrentApp -SupersededApps $SupersedenceTargets -Type $Type `
                 -UpdateOnlyIds @(if ($Anchor) { $Anchor.id })
         } catch {
-            Write-Log "ERROR: Failed to configure supersedence for $($CurrentApp.DisplayName): $_"
+            Write-Log "Could not configure supersedence for $($CurrentApp.DisplayName): $_" -Level Error
         }
     } else {
-        Write-Log "Supersedence disabled for this recipe - skipping"
+        Write-Log "Supersedence is disabled for this recipe." -Level Detail
     }
 
     # 10. Native auto-update. Intune only honours this on available-intent
@@ -685,7 +688,7 @@ function Invoke-YardstickAppMaintenance {
             $autoUpdateApplied = Set-AssignmentAutoUpdate -AppId $CurrentApp.Id -Enabled $true -IntentFilter 'available' `
                 -SkipGroupIds $Script:GroupsSkipAutoUpdates
         } catch {
-            Write-Log "ERROR: Failed to enable auto-update on assignments for $($CurrentApp.DisplayName): $_"
+            Write-Log "Could not enable auto-update on the assignments of $($CurrentApp.DisplayName): $_" -Level Error
         }
     }
 
@@ -747,7 +750,7 @@ function Invoke-YardstickSkip {
                 -Dependents $DependentUpdateStatus -AutoUpdateStatus ($sweepParts -join ', ')
         }
     } catch {
-        Write-Log "ERROR: Maintenance sweep failed for $($Script:DisplayName): $_"
+        Write-Log "Maintenance sweep failed: $_" -Level Error
     }
 }
 
@@ -858,7 +861,7 @@ function Set-ScriptVariables {
     if ($Script:VersionLock) {
         $Script:NumVersionsToKeep = 1
         if ($Parameters.numVersionsToKeep -gt 1) {
-            Write-Log "Warning: Version lock is set, but numVersionsToKeep is set to $($Parameters.numVersionsToKeep). This will be ignored."
+            Write-Log "versionLock is set, so numVersionsToKeep ($($Parameters.numVersionsToKeep)) is ignored." -Level Warning
         }
     } else {
         $Script:NumVersionsToKeep = if ($null -ne $Parameters.numVersionsToKeep) { $Parameters.numVersionsToKeep } else { $Preferences.defaultNumVersionsToKeep }
@@ -943,7 +946,7 @@ if ($ApplicationId) {
     foreach ($AppIdToValidate in $ApplicationId) {
         $MatchingApps = Get-ChildItem $Recipes | Where-Object Name -ne 'Disabled' | Get-ChildItem -File | Where-Object Name -match "$AppIdToValidate\.ya{0,1}ml"
         if ($null -eq $MatchingApps) {
-            Write-Log "ERROR: Application $AppIdToValidate not found. (Excluding Disabled Folder)"
+            Write-Log "No recipe named $AppIdToValidate (the Disabled folder is not searched)." -Level Error
             exit 1
         }
     }
@@ -997,7 +1000,7 @@ function Get-ApplicationsToProcess {
                 $applications.Add([String]$_) | Out-Null
             }
         } catch {
-            Write-Log "ERROR: There was an issue importing the application group! Exiting."
+            Write-Log "Could not read group $Group from RecipeGroups.yaml. Exiting: $_" -Level Error
             exit 3
         }
     } else {
@@ -1170,7 +1173,7 @@ function New-DetectionRule {
         $Rules += New-YardstickDetectionRuleFromSpec -Spec $AdditionalRule @RuleArgs
     }
     if ($Rules.Count -gt 1) {
-        Write-Log "Using $($Rules.Count) detection rules (all must match)"
+        Write-Log "Using $($Rules.Count) detection rules (all must match)." -Level Detail
     }
     return $Rules
 }
@@ -1189,18 +1192,18 @@ function Invoke-Cleanup {
     # none are still in flight before anything here deletes their source.
     Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
 
-    Write-Log "Cleaning up the Buildspace..."
+    Write-Log "Cleaning up the buildspace..." -Level Detail
     try {
         Get-ChildItem $BuildSpace -Exclude ".gitkeep" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     } catch {
-        Write-Log "Warning: Could not clean buildspace completely: $_"
+        Write-Log "Could not clean up the buildspace completely: $_" -Level Warning
     }
     
-    Write-Log "Removing .intunewin files..."
+    Write-Log "Removing .intunewin files..." -Level Detail
     try {
         Get-ChildItem $Published -Exclude ".gitkeep" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     } catch {
-        Write-Log "Warning: Could not clean published files completely: $_"
+        Write-Log "Could not remove the .intunewin files completely: $_" -Level Warning
     }
 }
 
@@ -1229,8 +1232,8 @@ try {
     Connect-YardstickGraph
     $Script:IntuneCredential = Update-YardstickSecretExpiration -Credential $Script:IntuneCredential
 } catch {
-    Write-Log "ERROR: Unable to authenticate to Microsoft Graph: $_"
-    Write-Log "If the client secret was rotated, store the new one with .\Set-YardstickCredential.ps1"
+    Write-Log "Could not authenticate to Microsoft Graph: $_" -Level Error
+    Write-Log "If the client secret was rotated, store the new one with .\Set-YardstickCredential.ps1."
     exit 1
 }
 Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences $Prefs -NoEmail:$NoEmail | Out-Null
@@ -1243,8 +1246,12 @@ Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences
 Start-YardstickWatchdog -TimeoutMinutes $Script:RecipeStageTimeoutMinutes -NoExit:(-not (Test-YardstickDedicatedProcess))
 
 # Main processing loop
+Write-Log "Processing $(@($Applications).Count) recipe(s)."
 foreach ($AppId_Processing in $Applications) {
+    # This line stays untagged: the log report starts a new app at it. Everything
+    # logged after it, until the finally below, carries the app's tag.
     Write-Log "Starting update for $AppId_Processing..."
+    Set-YardstickLogContext $AppId_Processing
     Set-YardstickWatchdogStage -AppId $AppId_Processing -Stage 'Starting up'
     Set-Location $YardstickModuleRoot
 
@@ -1274,7 +1281,7 @@ foreach ($AppId_Processing in $Applications) {
         # Get-ChildItem $Temp -Exclude ".gitkeep" -Recurse quietly returns nothing
         # when $Temp does not exist, because -Exclude turns -Path into a wildcard
         # container query. That hid a missing temp directory for a whole run.
-        Write-Log "Clearing the temp directory..."
+        Write-Log "Clearing the temp directory..." -Level Detail
         if (-not (Test-Path -LiteralPath $Temp -PathType Container)) {
             throw "The Yardstick temp directory '$Temp' does not exist."
         }
@@ -1287,8 +1294,7 @@ foreach ($AppId_Processing in $Applications) {
             $AppName = (Get-ChildItem $Recipes -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "^$AppId_Processing\.ya{0,1}ml")[0].FullName
             $Parameters = Get-Content "$AppName" | ConvertFrom-Yaml
         } catch {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Unable to open parameters file for $AppId_Processing" -FailureStage "Configuration"
-            Write-Log "ERROR: Unable to open parameters file for $AppId_Processing"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not open the recipe: $_" -FailureStage "Configuration"
             continue
         }
 
@@ -1297,19 +1303,16 @@ foreach ($AppId_Processing in $Applications) {
             try {
                 $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $Recipes
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Failed to resolve base recipe: $_" -FailureStage "Configuration"
-                Write-Log "ERROR: Failed to resolve base recipe for ${AppId_Processing}: $_"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not resolve the base recipe: $_" -FailureStage "Configuration"
                 continue
             }
         }
 
         # Validate recipe schema before processing
         $validation = Test-RecipeSchema -Recipe $Parameters -RecipeId $AppId_Processing
-        foreach ($w in $validation.Warnings) { Write-Log "WARNING: [Recipe $AppId_Processing] $w" }
+        foreach ($w in $validation.Warnings) { Write-Log "Recipe check: $w" -Level Warning }
         if (-not $validation.IsValid) {
-            $errorMsg = "Recipe validation failed: $($validation.Errors -join '; ')"
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage $errorMsg -FailureStage "Recipe Validation"
-            Write-Log "ERROR: [Recipe $AppId_Processing] $errorMsg"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage ($validation.Errors -join '; ') -FailureStage "Recipe Validation"
             continue
         }
 
@@ -1336,8 +1339,8 @@ foreach ($AppId_Processing in $Applications) {
             $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName | Where-Object DisplayName -ne $anchorName)
             for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
                 if ($CurrentApps[$i].DisplayName -ne "$($Script:DisplayName) (N-$i)") {
-                    Write-Log "Setting name for $($Script:DisplayName) (N-$i)"
-                    Set-YardstickWin32App -Id $CurrentApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)"
+                    Write-Log "Renaming $($CurrentApps[$i].DisplayName) to $($Script:DisplayName) (N-$i)..."
+                    Set-YardstickWin32App -Id $CurrentApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)" | Out-Null
                 }
             }
         }
@@ -1361,7 +1364,6 @@ foreach ($AppId_Processing in $Applications) {
                 $DropboxPayload = Get-YardstickDropboxPayload -DropboxRoot $Script:SoftwareDropbox -Folder $Script:ManualDownloadFolder
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage "$_" -FailureStage "Manual Drop"
-                Write-Log "ERROR: [Manual Drop $AppId_Processing] $_"
                 continue
             }
             if (-not $DropboxPayload) {
@@ -1370,12 +1372,12 @@ foreach ($AppId_Processing in $Applications) {
             }
             $dropboxPath = $DropboxPayload.Path
             $dropboxFiles = $DropboxPayload.Files
-            Write-Log "Found $($dropboxFiles.Count) staged file(s) in $dropboxPath"
+            Write-Log "Found $($dropboxFiles.Count) staged file(s) in $dropboxPath."
         }
 
         # Run the pre-download script
         if ($Script:PreDownloadScript) {
-            Write-Log "Running pre-download script..."
+            Write-Log "Running the pre-download script..." -Level Detail
             Set-YardstickWatchdogStage -Stage 'Pre-Download Script'
             try {
                 # Pre-download scripts are almost all version probes against a vendor
@@ -1389,18 +1391,17 @@ foreach ($AppId_Processing in $Applications) {
                         break
                     } catch {
                         if ($preDownloadAttempt -ge $preDownloadAttempts -or -not (Test-YardstickTransientNetworkError -ErrorRecord $_)) { throw }
-                        Write-Log "Pre-download script hit a transient network error on attempt $preDownloadAttempt of ${preDownloadAttempts}: $($_.Exception.Message)"
+                        Write-Log "Pre-download script failed (attempt $preDownloadAttempt/$preDownloadAttempts) on a transient network error: $($_.Exception.Message)" -Level Warning
                         Start-Sleep -Seconds ([math]::Pow(2, $preDownloadAttempt))
                     }
                 }
-                Write-Log "Pre-download script ran successfully."
+                Write-Log "Ran the pre-download script." -Level Detail
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running pre-download PowerShell script: $_" -FailureStage "Pre-Download Script"
-                Write-Log "ERROR: Error while running pre-download PowerShell script: $_"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Pre-Download Script"
                 continue
             }
         } else {
-            Write-Log "Skipping Pre-download script"
+            Write-Log "No pre-download script." -Level Detail
         }
 
         # Validate the extracted version before proceeding
@@ -1417,30 +1418,28 @@ foreach ($AppId_Processing in $Applications) {
 
         $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $AppId_Processing -ExistingVersion $NewestExistingVersion
         foreach ($w in $versionValidation.Warnings) {
-            Write-Log "WARNING: [Version Check $AppId_Processing] $w"
+            Write-Log "Version check: $w" -Level Warning
         }
         if (-not $versionValidation.IsValid) {
-            $versionErrorMsg = "Version validation failed: $($versionValidation.Errors -join '; ')"
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage $versionErrorMsg -FailureStage "Version Validation"
-            Write-Log "ERROR: [Version Check $AppId_Processing] $versionErrorMsg"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage ($versionValidation.Errors -join '; ') -FailureStage "Version Validation"
             continue
         }
 
         # Trim whitespace from version if present (warned but not blocked above)
         if ($Script:Version -ne $Script:Version.Trim()) {
             $Script:Version = $Script:Version.Trim()
-            Write-Log "Trimmed whitespace from version: '$($Script:Version)'"
+            Write-Log "Trimmed whitespace from the version: '$($Script:Version)'." -Level Detail
         }
 
         # Check if there is an up-to-date version in the repo already
         Write-Log "Checking if $($Script:DisplayName) $($Script:Version) is a new version..."
         
         if (-not $ExistingVersions) {
-            Write-Log "No existing versions found for $($Script:DisplayName). Continuing with update."
+            Write-Log "No existing versions of $($Script:DisplayName) in Intune. Continuing with the update." -Level Detail
             $VersionCompareResult = 0
         }
         elseif (-not $NewestExistingVersion) {
-            Write-Log "No existing version of $($Script:DisplayName) has a usable version number to compare against. Continuing with update."
+            Write-Log "No existing version of $($Script:DisplayName) has a version number to compare against. Continuing with the update."
             $VersionCompareResult = 0
         }
         else {
@@ -1450,13 +1449,13 @@ foreach ($AppId_Processing in $Applications) {
         # Check various conditions to determine if we should proceed
         $SkipReason = $null
         if ($Force) {
-            Write-Log "Force flag is set. Forcing update of $($Script:DisplayName) $($Script:Version)"
+            Write-Log "-Force is set: updating $($Script:DisplayName) $($Script:Version) regardless of the versions in Intune."
         } elseif (Test-VersionExcluded -Version $Script:Version -VersionLock $Script:VersionLock) {
             $SkipReason = "Version is locked to $($Script:VersionLock)."
         } elseif (@($ExistingVersions.displayVersion) -contains $Script:Version) {
-            $SkipReason = "$($Script:Id) $($Script:DisplayName) $($Script:Version) is already in the repo."
+            $SkipReason = "$($Script:DisplayName) $($Script:Version) is already in Intune."
         } elseif ($VersionCompareResult -eq 1) {
-            Write-Log "$($Script:DisplayName) $($Script:Version) is a newer version. Continuing with update."
+            Write-Log "$($Script:DisplayName) $($Script:Version) is newer than $NewestExistingVersion. Updating."
         } elseif ($VersionCompareResult -eq -1) {
             $SkipReason = "$($Script:DisplayName) $($Script:Version) is older than the currently newest available version $NewestExistingVersion."
         }
@@ -1470,55 +1469,52 @@ foreach ($AppId_Processing in $Applications) {
         # See if this has been run before. If there are previous files, move them to a folder called "Old"
         if (Test-Path $BuildSpace\$($Script:Id)) {
             if (-not (Test-Path $BuildSpace\Old)) {
-                New-Item -Path $BuildSpace -ItemType Directory -Name "Old"
+                New-Item -Path $BuildSpace -ItemType Directory -Name "Old" | Out-Null
             }
-            Write-Log "Removing old Buildspace..."
+            Write-Log "Moving the previous buildspace to Old..." -Level Detail
             Move-Item -Path $BuildSpace\$($Script:Id) $BuildSpace\Old\$($Script:Id)-$(Get-Date -Format "MMddyyhhmmss")
         }
         if (Test-Path $Scripts\$($Script:Id)) {
             if (-not (Test-Path $Scripts\Old)) {
-                New-Item -Path $Scripts -ItemType Directory -Name "Old"
+                New-Item -Path $Scripts -ItemType Directory -Name "Old" | Out-Null
             }
-            Write-Log "Removing old script space..."
+            Write-Log "Moving the previous script folder to Old..." -Level Detail
             Move-Item -Path $Scripts\$($Script:Id) $Scripts\Old\$($Script:Id)-$(Get-Date -Format "MMddyyhhmmss")
         }
 
         # Make the new BUILDSPACE directory
-        New-Item -Path $BuildSpace\$($Script:Id) -ItemType Directory -Name $Script:Version
+        New-Item -Path $BuildSpace\$($Script:Id) -ItemType Directory -Name $Script:Version | Out-Null
         Set-Location $BuildSpace\$($Script:Id)\$Script:Version
 
         Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $productCode -Version $Script:Version 
 
         # Download the new installer
-        Write-Log "Starting download..."
+        Write-Log "Downloading..."
         Set-YardstickWatchdogStage -Stage 'Download'
         if ($Script:Url) {
-            Write-Log "URL: $($Script:Url)"
+            Write-Log "URL: $($Script:Url)" -Level Detail
         }
         if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript)) -and (-not ($Script:ManualDownload))) {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "URL is empty - cannot continue" -FailureStage "Download"
-            Write-Log "ERROR: URL is empty - cannot continue."
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "The recipe sets no URL, download script or manual drop." -FailureStage "Download"
             continue
         }
         
         if ($Script:ManualDownload) {
-            Write-Log "Copying staged payload from $dropboxPath"
+            Write-Log "Copying the staged payload from $dropboxPath..."
             try {
                 Copy-Item -Path (Join-Path $dropboxPath '*') -Destination . -Recurse -Force
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error copying staged payload from $dropboxPath : $_" -FailureStage "Download"
-                Write-Log "ERROR: Error copying staged payload from $dropboxPath : $_"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not copy the staged payload from ${dropboxPath}: $_" -FailureStage "Download"
                 continue
             }
         } elseif ($Script:DownloadScript) {
             Push-Location $BuildSpace\$Script:Id\$Script:Version
             try {
                 Invoke-Command -ScriptBlock $Script:DownloadScript -NoNewScope
-                Write-Log "Download script ran successfully."
+                Write-Log "Ran the download script." -Level Detail
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running download PowerShell script: $_" -FailureStage "Download Script"
-                Write-Log "ERROR: Error while running download PowerShell script: $_"
-                Write-Log "Script Contents: $Script:DownloadScript"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download Script"
+                Write-Log "Download script contents: $Script:DownloadScript" -Level Detail
                 continue
             }
             Pop-Location
@@ -1529,10 +1525,9 @@ foreach ($AppId_Processing in $Applications) {
                 Invoke-YardstickBitsDownload -Source "$($Script:Url)" `
                     -Destination "$BuildSpace\$Script:Id\$Script:Version\$Script:FileName" `
                     -StallTimeoutMinutes $Script:BitsStallTimeoutMinutes
-                Write-Log "File downloaded successfully using BITS transfer."
+                Write-Log "Downloaded via BITS." -Level Detail
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error downloading file: $_" -FailureStage "Download"
-                Write-Log "ERROR: Error downloading file: $_"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download"
                 continue
             }
         }
@@ -1540,15 +1535,14 @@ foreach ($AppId_Processing in $Applications) {
         Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $ProductCode -Version $Script:Version 
         # Run the post-download script
         if ($Script:PostDownloadScript) {
-            Write-Log "Running post download script..."
+            Write-Log "Running the post-download script..." -Level Detail
             Set-YardstickWatchdogStage -Stage 'Post-Download Script'
             Push-Location $BuildSpace\$Script:Id\$Script:Version
             try {
                 Invoke-Command -ScriptBlock $Script:PostDownloadScript -NoNewScope
-                Write-Log "Post download script ran successfully."
+                Write-Log "Ran the post-download script." -Level Detail
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post download PowerShell script: $_" -FailureStage "Post-Download Script"
-                Write-Log "ERROR: Error while running post download PowerShell script: $_"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Download Script"
                 continue
             }
             Pop-Location
@@ -1557,10 +1551,9 @@ foreach ($AppId_Processing in $Applications) {
         $ProductCode = ""
         if ($Script:FileName -match "\.msi$") {
             $ProductCode = Get-MSIProductCode $BuildSpace\$Script:Id\$Script:Version\$Script:FileName | Where-Object { $_ -match "^\{[0-9A-Fa-f\-]{36}\}$" }
-            Write-Log "Product Code: $ProductCode"
+            Write-Log "Product code: $ProductCode" -Level Detail
             if (-not $ProductCode) {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not determine MSI Product Code from $Script:FileName" -FailureStage "MSI Product Code Retrieval"
-                Write-Log "ERROR: Could not determine MSI Product Code from $Script:FileName"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not read the MSI product code from $Script:FileName." -FailureStage "MSI Product Code Retrieval"
                 continue
             }
         }
@@ -1573,8 +1566,7 @@ foreach ($AppId_Processing in $Applications) {
             $Script:UninstallScript -match "<filename>|<productcode>|<version>" -or
             $Script:PowerShellUninstallScript -match "<filename>|<productcode>|<version>" -or
             $Script:DetectionScript -match "<filename>|<productcode>|<version>") {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in scripts." -FailureStage "Placeholder Replacement"
-            Write-Log "ERROR: One or more placeholder strings were not replaced in scripts."
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in the scripts." -FailureStage "Placeholder Replacement"
             continue
         }
 
@@ -1592,7 +1584,7 @@ foreach ($AppId_Processing in $Applications) {
 
         # Generate the .intunewin file
         Set-Location $YardstickModuleRoot
-        Write-Log "Generating .intunewin file..."
+        Write-Log "Packaging the .intunewin file..." -Level Detail
         Set-YardstickWatchdogStage -Stage 'Packaging'
         $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force -TimeoutMinutes $Script:PackagingTimeoutMinutes
 
@@ -1606,7 +1598,7 @@ foreach ($AppId_Processing in $Applications) {
             $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
         } else {
             $missingIcon = if ($Script:IconFile) { [string]$Script:IconFile } else { '(no iconFile set)' }
-            Write-Log "WARNING: Icon file $($Script:IconFile) not found in Icons folder. Uploading $($Script:DisplayName) without an icon."
+            Write-Log "Icon file $($Script:IconFile) is not in the Icons folder. Uploading without an icon." -Level Warning
         }
         if (-not $Script:FileDetectionVersion) {
             $Script:FileDetectionVersion = $Script:Version
@@ -1618,7 +1610,7 @@ foreach ($AppId_Processing in $Applications) {
         $RequirementRule = New-YardstickWin32AppRequirementRule -Architecture $Script:Architecture -MinimumSupportedWindowsRelease $Script:MinOSVersion
 
         # Create the Intune App
-        Write-Log "Uploading $Script:DisplayName to Intune..."
+        Write-Log "Uploading $Script:DisplayName $Script:Version to Intune..."
         Set-YardstickWatchdogStage -Stage 'Upload'
         Connect-YardstickGraph
         try {
@@ -1627,8 +1619,7 @@ foreach ($AppId_Processing in $Applications) {
             } else {
                 $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
             }
-            Write-Log "Successfully uploaded $Script:DisplayName to Intune"
-            Write-Log "Waiting for Intune to process the uploaded application..."
+            Write-Log "Uploaded. Waiting for Intune to publish it..."
             $PublishTimeout = (Get-Date).AddMinutes(30)
             do {
                 Start-Sleep -Seconds 15
@@ -1639,8 +1630,7 @@ foreach ($AppId_Processing in $Applications) {
             } while ($LiveWin32App.publishingState -ne "published")
             $UploadedAt = Get-Date
         } catch {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Failed to upload application to Intune: $_" -FailureStage "Intune Upload"
-            Write-Log "ERROR: Failed to upload application to Intune: $_"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Upload"
             continue
         }
 
@@ -1667,9 +1657,10 @@ foreach ($AppId_Processing in $Applications) {
                 }
                 Start-YardstickBackup -SourcePath $StagedPath -BackupRoot $Script:Backup -AppId $Script:Id `
                     -FileName $BackupFileName -VersionsToKeep $Script:BackupVersionsToKeep
-                Write-Log "Queued backup of $BackupFileName to $Script:Backup"
+                Write-Log "Queued a backup of $BackupFileName to $Script:Backup." -Level Detail
             } catch {
-                Write-Log "WARNING: Could not queue backup for $($Script:Id): $_"
+                # Send-YardstickLogReport.ps1 matches "Could not queue backup for <id>: ".
+                Write-Log "Could not queue backup for $($Script:Id): $_" -Level Warning
             }
         }
 
@@ -1682,7 +1673,7 @@ foreach ($AppId_Processing in $Applications) {
                 Complete-YardstickDropbox -DropboxPath $dropboxPath -ArchiveRoot $Script:SoftwareArchive `
                     -Folder $Script:ManualDownloadFolder -Version $Script:Version
             } catch {
-                Write-Log "WARNING: Could not archive the manual drop for $($Script:Id): $_"
+                Write-Log "Could not archive the manual drop: $_" -Level Warning
             }
         }
 
@@ -1704,12 +1695,10 @@ foreach ($AppId_Processing in $Applications) {
         if ($anchorStatus)            { $autoStatusParts += "anchor: $anchorStatus" }
         $autoStatus = if ($autoStatusParts.Count -gt 0) { $autoStatusParts -join ', ' } else { $null }
         Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus -AutoUpdateStatus $autoStatus -MissingIcon $missingIcon
-        Write-Log "Updates complete for $Script:DisplayName"
 
     } catch {
         # Catch any unexpected errors during processing
-        Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Unexpected error during processing: $_" -FailureStage "General Processing"
-        Write-Log "ERROR: Unexpected error processing $AppId_Processing : $_"
+        Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "General Processing"
         if (-not((Get-Location).ProviderPath -eq $YardstickModuleRoot)) {
             Set-Location $YardstickModuleRoot
         }
@@ -1723,16 +1712,15 @@ foreach ($AppId_Processing in $Applications) {
 
         # Run the post-run script
         if ($Script:PostRunScript) {
-            Write-Log "Running post run script..."
+            Write-Log "Running the post-run script..." -Level Detail
             Set-YardstickWatchdogStage -Stage 'Post-Run Script'
             try {
                 Invoke-Command -ScriptBlock $Script:PostRunScript -NoNewScope
-                Write-Log "Post run script ran successfully."
+                Write-Log "Ran the post-run script." -Level Detail
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Error while running post run PowerShell script: $_" -FailureStage "Post-Run Script"
-                # Write-Log, not Write-Error: $ErrorActionPreference is 'Stop', so a
-                # Write-Error here would throw out of the finally and kill the run.
-                Write-Log "ERROR: Error while running post run PowerShell script: $_"
+                # Not Write-Error: $ErrorActionPreference is 'Stop', so a Write-Error
+                # here would throw out of the finally and kill the run.
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Run Script"
             }
         }
 
@@ -1741,8 +1729,10 @@ foreach ($AppId_Processing in $Applications) {
         # thread still ran concurrently with all the supersedence and assignment work
         # above, which is where the time actually goes.
         Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
+        Clear-YardstickLogContext
     }
 }
+Write-Log "Finished processing $(@($Applications).Count) recipe(s)."
 
 # The watchdog stops at the end of the loop, not at the end of the script. What
 # follows is the email report, which can sit on a Read-Host waiting for an
@@ -1767,19 +1757,19 @@ if ($sendReport -and $Prefs.emailPromptBeforeSending -and -not $NoInteractive) {
             $sound = New-Object System.Media.SoundPlayer($Prefs.emailNotificationSoundFile)
             $sound.Play()
         } catch {
-            Write-Log "WARNING: Failed to play notification sound: $_"
+            Write-Log "Could not play the notification sound: $_" -Level Warning
         }
     }
     try {
         $confirmation = Read-Host "Do you want to send the email report now? (Y/N)"
     } catch {
         # Read-Host throws when PowerShell was started with -NonInteractive.
-        Write-Log "WARNING: Could not ask whether to send the email report: $_"
+        Write-Log "Could not ask whether to send the email report: $_" -Level Warning
         $confirmation = 'N'
     }
     # A flag rather than an early return, so cleanup below still runs.
     if ($confirmation -ne 'Y' -and $confirmation -ne 'y') {
-        Write-Log "Email report sending skipped by user."
+        Write-Log "Not sending the email report: declined at the prompt."
         $sendReport = $false
     }
 }
@@ -1791,24 +1781,23 @@ if ($sendReport) {
 
         switch ($emailMethod.ToLower()) {
             "mailkit" {
-                Write-Log "ERROR: MailKit email delivery method is not yet implemented. Set emailDeliveryMethod to 'outlook' or 'smtp' in preferences.yaml or remove it to use the default."
-                throw "MailKit email delivery method is not yet implemented."
+                throw "The MailKit email delivery method is not implemented yet. Set emailDeliveryMethod to 'outlook' or 'smtp' in preferences.yaml, or remove it to use the default."
             }
             "outlook" {
-                Write-Log "Sending email report using Outlook"
+                Write-Log "Sending the email report through Outlook..."
                 Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters
             }
             "smtp" {
-                Write-Log "Sending email report via SMTP ($($Prefs.smtpServer))"
+                Write-Log "Sending the email report via SMTP ($($Prefs.smtpServer))..."
                 Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters
             }
             default {
-                Write-Log "WARNING: Unknown email delivery method '$emailMethod'. Defaulting to Outlook."
+                Write-Log "Unknown email delivery method '$emailMethod'. Using Outlook." -Level Warning
                 Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters
             }
         }
     } catch {
-        Write-Log "WARNING: Failed to send email report: $_"
+        Write-Log "Could not send the email report: $_" -Level Warning
     }
 }
 
