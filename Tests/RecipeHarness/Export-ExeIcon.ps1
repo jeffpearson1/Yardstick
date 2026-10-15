@@ -25,7 +25,7 @@ if (-not ('Win32IconExtractor' -as [type])) {
     Add-Type -MemberDefinition $signature -Name 'Win32IconExtractor' -Namespace '' -PassThru | Out-Null
 }
 
-$ExePath = (Resolve-Path -LiteralPath $ExePath).Path
+$ExePath = (Resolve-Path -LiteralPath $ExePath).ProviderPath
 
 foreach ($size in @($PreferredSize, 128, 64, 48, 32)) {
     $handles = New-Object IntPtr[] 1
@@ -48,7 +48,7 @@ foreach ($size in @($PreferredSize, 128, 64, 48, 32)) {
 
     return [PSCustomObject]@{
         Source = $ExePath
-        Output = (Resolve-Path -LiteralPath $OutputPath).Path
+        Output = (Resolve-Path -LiteralPath $OutputPath).ProviderPath
         Size   = $size
     }
 }

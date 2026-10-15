@@ -115,7 +115,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).Path
+$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).ProviderPath
 . (Join-Path $projectRoot 'ProjectLayout.ps1')
 $projectLayout = Get-YardstickProjectLayout -ProjectRoot $projectRoot
 if (-not $YardstickDevPath) { $YardstickDevPath = $projectLayout.RuntimeRoot }
@@ -129,14 +129,14 @@ if (-not $ArtifactsPath) { $ArtifactsPath = $projectLayout.HarnessArtifacts }
 $requestedWhatIf = [bool]$WhatIfPreference
 $WhatIfPreference = $false
 
-$workspaceRecipes = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).Path
-$workspaceIcons = (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).Path
+$workspaceRecipes = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).ProviderPath
+$workspaceIcons = (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).ProviderPath
 $artifactsRoot = $ArtifactsPath
 $schemaScript = Join-Path $PSScriptRoot 'Test-RecipeSchema.ps1'
 
 Import-Module (Join-Path $PSScriptRoot 'RecipeTestSupport.psm1') -Force -ErrorAction Stop
 Import-Module powershell-yaml -MinimumVersion 0.4.12 -ErrorAction Stop
-Import-Module (Join-Path $YardstickDevPath 'Modules\YardstickSupport.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $YardstickDevPath 'Yardstick.psd1') -Force -ErrorAction Stop
 Import-Module BitsTransfer -ErrorAction Stop
 
 # Manual-download recipes use the same SoftwareDropbox setting as production
@@ -162,7 +162,7 @@ $recipePaths = switch ($PSCmdlet.ParameterSetName) {
     'All' { (Get-ChildItem -LiteralPath $workspaceRecipes -Filter '*.yaml' | Sort-Object Name).FullName }
     'FromFile' { Get-Content -LiteralPath $RecipeListFile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } }
 }
-$recipePaths = @($recipePaths | ForEach-Object { (Resolve-Path -LiteralPath $_ -ErrorAction Stop).Path })
+$recipePaths = @($recipePaths | ForEach-Object { (Resolve-Path -LiteralPath $_ -ErrorAction Stop).ProviderPath })
 if ($recipePaths.Count -eq 0) { throw 'No recipes were selected.' }
 
 function Read-Recipe {

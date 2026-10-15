@@ -35,10 +35,11 @@ BeforeAll {
 
 AfterAll {
     Remove-Variable -Name YardstickTestSecretExpiresOn -Scope Global -ErrorAction SilentlyContinue
-    # The script imports the modules into the global session state while this file
-    # imported them into Pester's, so two copies of each are loaded now. Unload both
-    # or Mock -ModuleName in the test files that run next refuses to choose.
-    Get-Module -Name 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph' -All |
+    # The script imports Yardstick.psd1, which loads the modules into the global
+    # session state, while this file imported them into Pester's, so two copies of
+    # each are loaded now. Unload both or Mock -ModuleName in the test files that
+    # run next refuses to choose.
+    Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph' -All |
         Remove-Module -Force -ErrorAction SilentlyContinue
 }
 
@@ -50,7 +51,7 @@ Describe "Test-YardstickSetup.ps1" {
         Mock Get-YardstickIntuneCredential {
             [pscustomobject]@{ Target = 'Yardstick:IntuneGraph'; TenantID = 'tenant'; ClientID = 'client'; ClientSecret = 'secret'; SecretExpiresOn = $Global:YardstickTestSecretExpiresOn; LastNotifiedOn = $null }
         }
-        Mock Get-YardstickAppTokenRoles { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementConfiguration.Read.All', 'DeviceManagementRBAC.Read.All') }
+        Mock Get-YardstickAppTokenRoles { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementRBAC.Read.All') }
         Mock Invoke-RestMethod { [pscustomobject]@{ value = @() } }
         Mock Get-ScheduledTask { $null }
         Mock Test-OutlookAvailability { $true }
@@ -85,6 +86,14 @@ Describe "Test-YardstickSetup.ps1" {
         $run.ExitCode | Should -Be 1
         ($run.Results | Where-Object Level -eq 'Fail').Check | Should -Be 'DeviceManagementRBAC.Read.All'
         ($run.Results | Where-Object Check -eq 'Group.Read.All').Level | Should -Be 'Info'
+    }
+
+    It "Accepts a ReadWrite.All permission in place of the Read.All one" {
+        Set-TestPreferences
+        Mock Get-YardstickAppTokenRoles { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementRBAC.ReadWrite.All') }
+        $run = Invoke-HealthCheck
+        ($run.Results | Where-Object Level -eq 'Fail').Message | Should -BeNullOrEmpty
+        ($run.Results | Where-Object Check -eq 'DeviceManagementRBAC.Read.All').Level | Should -Be 'OK'
     }
 
     It "Fails when the credential cannot sign in" {

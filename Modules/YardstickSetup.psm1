@@ -182,19 +182,41 @@ function Get-YardstickRequiredGraphPermissions {
     .DESCRIPTION
     Derived from every Graph endpoint the runner and its modules call. Required ones
     are needed by a normal run; optional ones only enable a side feature.
+
+    Assignment filters need no permission of their own: the runner copies existing
+    filters onto a new version by ID, through the app's assignments, and never looks
+    one up by name.
     #>
     [CmdletBinding()]
     param([switch]$RequiredOnly)
 
     $all = @(
-        [pscustomobject]@{ Name = 'DeviceManagementApps.ReadWrite.All';     Required = $true;  Reason = 'Create, update, assign and delete Win32 apps in Intune.' }
-        [pscustomobject]@{ Name = 'DeviceManagementConfiguration.Read.All'; Required = $true;  Reason = 'Read assignment filters used by app assignments.' }
-        [pscustomobject]@{ Name = 'DeviceManagementRBAC.Read.All';          Required = $true;  Reason = 'Resolve Intune scope tag names to IDs.' }
-        [pscustomobject]@{ Name = 'Group.Read.All';                         Required = $false; Reason = 'Look up groups by name (Deploy-YardstickApps.ps1 only).' }
-        [pscustomobject]@{ Name = 'Application.Read.All';                   Required = $false; Reason = 'Discover the client secret expiry date when none was recorded at setup.' }
+        [pscustomobject]@{ Name = 'DeviceManagementApps.ReadWrite.All'; Required = $true;  Reason = 'Create, update, assign and delete Win32 apps in Intune.' }
+        [pscustomobject]@{ Name = 'DeviceManagementRBAC.Read.All';      Required = $true;  Reason = 'Resolve Intune scope tag names to IDs.' }
+        [pscustomobject]@{ Name = 'Group.Read.All';                     Required = $false; Reason = 'Look up the test deployment group by name during setup.' }
+        [pscustomobject]@{ Name = 'Application.Read.All';               Required = $false; Reason = 'Discover the client secret expiry date when none was recorded at setup.' }
     )
     if ($RequiredOnly) { return @($all | Where-Object Required) }
     $all
+}
+
+
+function Test-YardstickGraphRoleGranted {
+    <#
+    .SYNOPSIS
+    Whether a Graph application permission is among the granted roles. A
+    .ReadWrite.All role covers the matching .Read.All one, so an app that already
+    holds the broader permission is not reported as missing the narrower one.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [AllowEmptyCollection()][string[]]$Roles = @(),
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ($Roles -contains $Name) { return $true }
+    ($Name -match '\.Read\.All$') -and ($Roles -contains ($Name -replace '\.Read\.All$', '.ReadWrite.All'))
 }
 
 
@@ -890,7 +912,7 @@ function Wait-YardstickAppCredential {
         try {
             $roles = @(Get-YardstickAppTokenRoles -TenantId $TenantId -ClientId $ClientId -ClientSecret $ClientSecret)
             $lastError = $null
-            $missing = @($RequiredRoles | Where-Object { $roles -notcontains $_ })
+            $missing = @($RequiredRoles | Where-Object { -not (Test-YardstickGraphRoleGranted -Roles $roles -Name $_) })
             if ($missing.Count -eq 0) {
                 return [pscustomobject]@{ Success = $true; Roles = $roles; Missing = @(); Error = $null }
             }
@@ -903,7 +925,7 @@ function Wait-YardstickAppCredential {
     [pscustomobject]@{
         Success = $false
         Roles   = $roles
-        Missing = @($RequiredRoles | Where-Object { $roles -notcontains $_ })
+        Missing = @($RequiredRoles | Where-Object { -not (Test-YardstickGraphRoleGranted -Roles $roles -Name $_) })
         Error   = $lastError
     }
 }
@@ -1110,6 +1132,7 @@ Export-ModuleMember -Function @(
     'Read-YardstickSetupYesNo'
     'Read-YardstickSetupChoice'
     'Get-YardstickRequiredGraphPermissions'
+    'Test-YardstickGraphRoleGranted'
     'ConvertFrom-YardstickJwt'
     'Install-YardstickModule'
     'Unblock-YardstickFiles'

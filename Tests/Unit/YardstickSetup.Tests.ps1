@@ -84,10 +84,9 @@ Describe "ConvertFrom-YardstickJwt" {
 
 
 Describe "Get-YardstickRequiredGraphPermissions" {
-    It "Lists the three permissions a normal run needs" {
+    It "Lists the two permissions a normal run needs" {
         (Get-YardstickRequiredGraphPermissions -RequiredOnly).Name | Should -Be @(
             'DeviceManagementApps.ReadWrite.All'
-            'DeviceManagementConfiguration.Read.All'
             'DeviceManagementRBAC.Read.All'
         )
     }
@@ -99,6 +98,29 @@ Describe "Get-YardstickRequiredGraphPermissions" {
 
     It "Gives a reason for every permission" {
         Get-YardstickRequiredGraphPermissions | ForEach-Object { $_.Reason | Should -Not -BeNullOrEmpty }
+    }
+}
+
+
+Describe "Test-YardstickGraphRoleGranted" {
+    It "Finds a role granted by name" {
+        Test-YardstickGraphRoleGranted -Roles @('DeviceManagementRBAC.Read.All') -Name 'DeviceManagementRBAC.Read.All' | Should -BeTrue
+    }
+
+    It "Counts a ReadWrite.All role as covering the matching Read.All one" {
+        Test-YardstickGraphRoleGranted -Roles @('DeviceManagementRBAC.ReadWrite.All') -Name 'DeviceManagementRBAC.Read.All' | Should -BeTrue
+    }
+
+    It "Does not count a Read.All role as covering ReadWrite.All" {
+        Test-YardstickGraphRoleGranted -Roles @('DeviceManagementApps.Read.All') -Name 'DeviceManagementApps.ReadWrite.All' | Should -BeFalse
+    }
+
+    It "Does not count a ReadWrite.All role on a different resource" {
+        Test-YardstickGraphRoleGranted -Roles @('DeviceManagementConfiguration.ReadWrite.All') -Name 'DeviceManagementRBAC.Read.All' | Should -BeFalse
+    }
+
+    It "Reports a role as missing when nothing is granted" {
+        Test-YardstickGraphRoleGranted -Roles @() -Name 'DeviceManagementRBAC.Read.All' | Should -BeFalse
     }
 }
 
@@ -587,7 +609,7 @@ Describe "Wait-YardstickAppCredential" {
             switch ($script:roleCalls) {
                 1 { throw 'AADSTS7000215: Invalid client secret provided.' }
                 2 { @('DeviceManagementApps.ReadWrite.All') }
-                default { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementConfiguration.Read.All', 'DeviceManagementRBAC.Read.All') }
+                default { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementRBAC.Read.All') }
             }
         } -ModuleName YardstickSetup
 
@@ -596,11 +618,17 @@ Describe "Wait-YardstickAppCredential" {
         $script:roleCalls | Should -Be 3
     }
 
+    It "Accepts a ReadWrite.All role in place of a required Read.All one" {
+        Mock Get-YardstickAppTokenRoles { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementRBAC.ReadWrite.All') } -ModuleName YardstickSetup
+        $result = Wait-YardstickAppCredential -TenantId 't' -ClientId 'c' -ClientSecret 's' -TimeoutSeconds 0
+        $result.Success | Should -BeTrue
+    }
+
     It "Gives up after the timeout and names what is missing" {
         Mock Get-YardstickAppTokenRoles { @('DeviceManagementApps.ReadWrite.All') } -ModuleName YardstickSetup
         $result = Wait-YardstickAppCredential -TenantId 't' -ClientId 'c' -ClientSecret 's' -TimeoutSeconds 0
         $result.Success | Should -BeFalse
-        $result.Missing | Should -Be @('DeviceManagementConfiguration.Read.All', 'DeviceManagementRBAC.Read.All')
+        $result.Missing | Should -Be @('DeviceManagementRBAC.Read.All')
     }
 }
 
@@ -650,24 +678,24 @@ Describe "New-YardstickAppRegistration" {
         $graph = @($create.Body.requiredResourceAccess)
         $graph.Count | Should -Be 1
         $graph[0].resourceAppId | Should -Be '00000003-0000-0000-c000-000000000000'
-        @($graph[0].resourceAccess.id) | Should -Be @('role-apps', 'role-config', 'role-rbac')
+        @($graph[0].resourceAccess.id) | Should -Be @('role-apps', 'role-rbac')
         @($graph[0].resourceAccess.type | Select-Object -Unique) | Should -Be @('Role')
     }
 
     It "Adds the optional roles only when asked" {
         New-YardstickAppRegistration -IncludeOptionalPermissions | Out-Null
         $create = $script:requests | Where-Object { $_.Method -eq 'POST' -and $_.Uri -match '/v1\.0/applications$' }
-        @($create.Body.requiredResourceAccess[0].resourceAccess.id) | Should -Be @('role-apps', 'role-config', 'role-rbac', 'role-group', 'role-app-read')
+        @($create.Body.requiredResourceAccess[0].resourceAccess.id) | Should -Be @('role-apps', 'role-rbac', 'role-group', 'role-app-read')
     }
 
     It "Creates the service principal, grants each role and adds a secret" {
         $result = New-YardstickAppRegistration
         ($script:requests | Where-Object { $_.Method -eq 'POST' -and $_.Uri -match '/v1\.0/servicePrincipals$' }).Body.appId | Should -Be 'app-id'
         $grants = @($script:requests | Where-Object { $_.Uri -match 'appRoleAssignedTo$' })
-        $grants.Count | Should -Be 3
+        $grants.Count | Should -Be 2
         $grants.Body.principalId | Select-Object -Unique | Should -Be 'app-sp'
         $grants.Body.resourceId | Select-Object -Unique | Should -Be 'graph-sp'
-        $result.Consent.Granted | Should -Be @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementConfiguration.Read.All', 'DeviceManagementRBAC.Read.All')
+        $result.Consent.Granted | Should -Be @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementRBAC.Read.All')
         ($script:requests | Where-Object { $_.Uri -match '/applications/app-obj/addPassword$' }) | Should -Not -BeNullOrEmpty
     }
 
@@ -687,7 +715,7 @@ Describe "New-YardstickAppRegistration" {
         ($script:requests | Where-Object { $_.Method -eq 'POST' -and $_.Uri -match '/v1\.0/applications$' }) | Should -BeNullOrEmpty
         $patch = $script:requests | Where-Object { $_.Method -eq 'PATCH' }
         $patch.Uri | Should -Match '/v1\.0/applications/app-obj$'
-        @($patch.Body.requiredResourceAccess[0].resourceAccess.id) | Should -Be @('role-apps', 'role-config', 'role-rbac')
+        @($patch.Body.requiredResourceAccess[0].resourceAccess.id) | Should -Be @('role-apps', 'role-rbac')
     }
 
     It "Refuses to pick between apps with the same name" {
@@ -701,7 +729,7 @@ Describe "New-YardstickAppRegistration" {
     It "Returns the consent URL and skips validation when consent cannot be granted" {
         $script:denyConsent = $true
         $result = New-YardstickAppRegistration
-        $result.Consent.Failed.Count | Should -Be 3
+        $result.Consent.Failed.Count | Should -Be 2
         $result.ConsentUrl | Should -Be 'https://login.microsoftonline.com/tenant-1/adminconsent?client_id=app-id'
         $result.Validation | Should -BeNullOrEmpty
         Should -Invoke Wait-YardstickAppCredential -ModuleName YardstickSetup -Times 0 -Exactly

@@ -71,9 +71,7 @@ $ErrorActionPreference = 'Stop'
 $Global:LogLocation = $PSScriptRoot
 $Global:LogFile = 'YEmailReport.log'
 
-Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Yardstick.psd1" -Force
 Import-Module powershell-yaml -Force
 
 

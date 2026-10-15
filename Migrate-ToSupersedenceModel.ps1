@@ -63,11 +63,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 Import-Module powershell-yaml -Force
-Import-Module "$PSScriptRoot\Modules\YardstickGraph.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickIntune.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickSupport.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickCredential.psm1" -Scope Global -Force
-Import-Module "$PSScriptRoot\Modules\YardstickConfig.psm1" -Scope Global -Force
+Import-Module "$PSScriptRoot\Yardstick.psd1" -Force
 
 # Load preferences (same loader Yardstick.ps1 uses)
 $Prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot

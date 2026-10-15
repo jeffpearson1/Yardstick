@@ -1,9 +1,16 @@
 $JetbrainsXMLURL = "https://www.jetbrains.com/updates/updates.xml"
-# -TimeoutSec explicitly: this runs at Import-Module time, before the runner has
-# set its global default and before the stage watchdog exists, so an unresponsive
-# jetbrains.com would hang the whole run at startup with nothing in the log.
-$JetbrainsXML = [xml](Invoke-WebRequest -Uri $JetbrainsXMLURL -TimeoutSec 120).Content
+$script:JetbrainsXML = $null
 
+# Fetched on first use rather than at import, so loading Yardstick stays offline
+# and only runs that process a JetBrains recipe pay for (or fail on) the request.
+function Get-JetbrainsUpdatesXml {
+    if ($null -eq $script:JetbrainsXML) {
+        # -TimeoutSec explicitly so an unresponsive jetbrains.com fails the recipe
+        # instead of relying on the runner's global web request default.
+        $script:JetbrainsXML = [xml](Invoke-WebRequest -Uri $JetbrainsXMLURL -TimeoutSec 120).Content
+    }
+    return $script:JetbrainsXML
+}
 
 function Get-JetbrainsAppLatestVersion {
     param (
@@ -16,7 +23,7 @@ function Get-JetbrainsAppLatestVersion {
     )
 
     $ProductId = Get-JetbrainsAppProductId -ProductName $ProductName -Channel $Channel
-    $App = $JetbrainsXML.products.product | Where-Object { $_.name -eq $ProductName } | Select-Object -First 1
+    $App = (Get-JetbrainsUpdatesXml).products.product | Where-Object { $_.name -eq $ProductName } | Select-Object -First 1
     $App = $App.channel | Where-Object { $_.id -eq $ProductId } | Select-Object -First 1
     $Version = ($App.build | Select-Object -First 1).version
     return $Version
@@ -182,3 +189,5 @@ function Test-JetbrainsDownloadUrl {
         return $false
     }
 }
+
+Export-ModuleMember -Function Get-JetbrainsAppLatestVersion, Get-JetbrainsAppProductId, Get-JetbrainsAppDownloadLink, Test-JetbrainsDownloadUrl

@@ -33,6 +33,13 @@ You need Windows 10/11 (or Windows Server 2019+), [PowerShell 7](https://aka.ms/
 
 Run `.\Test-YardstickSetup.ps1` at any time to check the installation. Re-run `.\Install-Yardstick.ps1` (or one step of it, such as `-Step AppRegistration` to renew the client secret) to change a setting; it skips whatever is already done.
 
+The folder is also a PowerShell module. If you prefer commands to scripts, `Import-Module .\Yardstick.psd1` gives you `Invoke-Yardstick`, `Install-Yardstick` and `Test-YardstickSetup`, which take the same parameters as the scripts:
+```powershell
+Import-Module .\Yardstick.psd1
+Invoke-Yardstick -AppId 7zip -NoEmail
+```
+A failed run then raises an error instead of exiting, and a stuck recipe is logged rather than closing your PowerShell window.
+
 [Installation.md](Docs/Installation.md) covers each step in detail: the Graph permissions and why they are needed, creating the app registration by hand, scheduled-task accounts, email, upgrading and troubleshooting.
 
 ### Dependencies

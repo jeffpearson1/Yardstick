@@ -1,7 +1,11 @@
 using module .\VersionPro.psm1
 
-Import-Module $PSScriptRoot\YardstickGraph.psm1 -Scope Global -Force
-Import-Module $PSScriptRoot\YardstickIntune.psm1 -Scope Global -Force
+# Global because the runner and the recipes it executes call these directly. No
+# -Force: when Yardstick.psm1 (or a test) has already loaded them, re-importing
+# would load a second copy and throw away the first one's state, including
+# YardstickGraph's cached access token.
+Import-Module $PSScriptRoot\YardstickGraph.psm1 -Scope Global
+Import-Module $PSScriptRoot\YardstickIntune.psm1 -Scope Global
 
 function Write-YardstickHost {
     # A console that a child process left in a bad state makes Write-Host throw a
@@ -1252,6 +1256,10 @@ function Start-YardstickWatchdog {
     can see. Write-Log closes the file after every line, and the main thread is by
     definition not logging when this fires, so the diagnosis lands on disk.
 
+    With -NoExit the thread only logs the diagnosis, once per stuck stage. That is
+    for runs inside someone's interactive session (Invoke-Yardstick at a prompt),
+    where ending the process would close their console along with the run.
+
     .PARAMETER TimeoutMinutes
     Minutes a single stage may go without progress. 0 or less disables the watchdog.
 
@@ -1269,6 +1277,9 @@ function Start-YardstickWatchdog {
 
     .PARAMETER ModulePath
     Path to this module, re-imported inside the thread.
+
+    .PARAMETER NoExit
+    Log the diagnosis but leave the process running. See the description.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '',
         Justification = 'The thread job scriptblock declares its own param() block and is fed by -ArgumentList, which is deliberate: $using: would silently capture whatever happens to be in scope instead.')]
@@ -1287,7 +1298,9 @@ function Start-YardstickWatchdog {
 
         [string]$LogFile = $Global:LogFile,
 
-        [string]$ModulePath = $PSCommandPath
+        [string]$ModulePath = $PSCommandPath,
+
+        [switch]$NoExit
     )
 
     if ($TimeoutMinutes -le 0) {
@@ -1306,14 +1319,15 @@ function Start-YardstickWatchdog {
         Stage        = 'Starting up'
         StageStarted = Get-Date
         WarnedFor    = $null
+        ExpiredFor   = $null
         Stop         = $false
     })
     $Script:YardstickWatchdogState = $state
 
     $Script:YardstickWatchdogJob = Start-ThreadJob -Name 'YardstickWatchdog' `
-        -ArgumentList $ModulePath, $state, $TimeoutMinutes, $PollSeconds, $ExitCode, $LogLocation, $LogFile `
+        -ArgumentList $ModulePath, $state, $TimeoutMinutes, $PollSeconds, $ExitCode, $LogLocation, $LogFile, $NoExit.IsPresent `
         -ScriptBlock {
-            param($ModulePath, $State, $TimeoutMinutes, $PollSeconds, $ExitCode, $LogLocation, $LogFile)
+            param($ModulePath, $State, $TimeoutMinutes, $PollSeconds, $ExitCode, $LogLocation, $LogFile, $NoExit)
             $ErrorActionPreference = 'Stop'
             Import-Module $ModulePath -Force
             $Global:LogLocation = $LogLocation
@@ -1332,16 +1346,22 @@ function Start-YardstickWatchdog {
                 $snapshot = @{ StageStarted = $started }
                 $now = Get-Date
 
-                if (Test-YardstickWatchdogExpired -State $snapshot -Now $now -TimeoutMinutes $TimeoutMinutes) {
+                if ((Test-YardstickWatchdogExpired -State $snapshot -Now $now -TimeoutMinutes $TimeoutMinutes) -and
+                    ($State['ExpiredFor'] -ne $started)) {
+                    $State['ExpiredFor'] = $started
                     $minutes = [math]::Round(($now - $started).TotalMinutes, 1)
+                    $outcome = if ($NoExit) { 'Not ending the run, because it shares this PowerShell session.' } else { 'Ending the run.' }
                     Write-Log "#######################################################"
-                    Write-Log "WATCHDOG: no progress for $minutes minutes (limit $TimeoutMinutes). Ending the run."
+                    Write-Log "WATCHDOG: no progress for $minutes minutes (limit $TimeoutMinutes). $outcome"
                     Write-Log "WATCHDOG: application '$appId' is stuck in stage '$stage'."
                     Write-Log "WATCHDOG: that stage began at $(Get-Date $started -Format 'MM/dd/yyyy HH:mm:ss')."
                     Write-Log "WATCHDOG: raise recipeStageTimeoutMinutes in preferences.yaml if this app is legitimately slow."
+                    if ($NoExit) { Write-Log "WATCHDOG: press Ctrl+C to stop the run, or close the window if that does not respond." }
                     Write-Log "#######################################################"
-                    Start-Sleep -Milliseconds 500
-                    [Environment]::Exit($ExitCode)
+                    if (-not $NoExit) {
+                        Start-Sleep -Milliseconds 500
+                        [Environment]::Exit($ExitCode)
+                    }
                 }
 
                 # One warning per stage, halfway through the budget, so a run that is
@@ -1355,7 +1375,8 @@ function Start-YardstickWatchdog {
             }
         }
 
-    Write-Log "Stage watchdog started: a recipe stage may run $TimeoutMinutes minutes without progress before the run is ended."
+    $consequence = if ($NoExit) { 'it is logged as stuck' } else { 'the run is ended' }
+    Write-Log "Stage watchdog started: a recipe stage may run $TimeoutMinutes minutes without progress before $consequence."
 }
 
 
@@ -1477,6 +1498,51 @@ function Stop-YardstickWatchdog {
 
     $Script:YardstickWatchdogState = $null
     $Script:YardstickWatchdogJob = $null
+}
+
+
+function Test-YardstickDedicatedProcess {
+    <#
+    .SYNOPSIS
+    Reports whether this PowerShell process was started just to run a script or
+    command, so ending it ends nothing but the run.
+
+    .DESCRIPTION
+    The watchdog can only stop a stuck run by ending the process. That is right for
+    the scheduled task (pwsh -File Yardstick.ps1 ...) and wrong at an interactive
+    prompt, where it would close the user's console too.
+
+    Only the pwsh switches before -File/-Command are considered, since everything
+    after belongs to the script. -NoExit there means the console outlives the
+    script, so the process is not dedicated. When unsure (pwsh started with a bare
+    script path, say) this answers false: a stuck run left waiting for Ctrl+C is
+    better than a console closed without warning.
+
+    .PARAMETER CommandLineArgs
+    The process's arguments, executable first. Defaults to this process's.
+
+    .OUTPUTS
+    Boolean.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [string[]]$CommandLineArgs = [Environment]::GetCommandLineArgs()
+    )
+
+    $noExit = $false
+    foreach ($argument in @($CommandLineArgs | Select-Object -Skip 1)) {
+        if ($argument -notmatch '^(-{1,2}|/)(?<name>\w+)') { continue }
+        $name = $Matches['name'].ToLowerInvariant()
+        if ($name -in 'noe', 'noex', 'noexi', 'noexit') { $noExit = $true; continue }
+        # pwsh accepts any unambiguous prefix; -e and -ec are documented aliases.
+        if ('file'.StartsWith($name) -or 'command'.StartsWith($name) -or
+            'encodedcommand'.StartsWith($name) -or $name -eq 'ec') {
+            return (-not $noExit)
+        }
+    }
+
+    return $false
 }
 
 
@@ -5079,6 +5145,71 @@ function Get-Secrets {
     Write-Log "Retrieved secrets from vault: $VaultName"
     
     return $Secrets
+}
+
+
+function Add-NativeBitnessGuard {
+    <#
+    .SYNOPSIS
+    Prepends a 32-bit re-launch guard to a generated install.ps1/uninstall.ps1.
+
+    .DESCRIPTION
+    The Intune Management Extension is a 32-bit process, and the command lines
+    Yardstick auto-generates for powerShellInstallScript/powerShellUninstallScript
+    invoke a bare "powershell.exe". A bare name resolves by PATH, which under
+    WOW64 means SysWOW64 - so the script runs 32-bit and silently sees a
+    redirected machine: HKLM:\SOFTWARE\... reads come from WOW6432Node, and a
+    64-bit application's ARP key and install directory are simply invisible. An
+    uninstaller written against those paths then finds nothing, removes nothing,
+    and exits 0, so Intune reports success while the app is still installed.
+
+    The guard re-launches the script once under native PowerShell and propagates
+    the child's exit code. It is deliberately a script preamble rather than a
+    "%SystemRoot%\sysnative\..." command line: sysnative is a virtual alias that
+    exists only inside a 32-bit process, so a sysnative command line fails
+    outright whenever the caller is already 64-bit. The preamble is correct in
+    both cases, which keeps these packages testable by the recipe harness and
+    keeps them working if the Management Extension ever ships 64-bit.
+
+    .PARAMETER ScriptContent
+    The recipe-authored script body, after placeholder replacement.
+
+    .OUTPUTS
+    The script body with the guard prepended.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $ScriptContent
+    )
+
+    # -WorkingDirectory is passed explicitly because Start-Process otherwise
+    # resolves against the PowerShell provider location, which is not reliably
+    # the package directory the cmd wrapper cd'd into. Install scripts routinely
+    # reference the payload by a relative path, so this has to survive.
+    $guard = @'
+# --- Begin Yardstick native-bitness guard (generated - do not edit) ---
+# The Intune Management Extension is 32-bit, so the generated command line
+# starts this script under WOW64: HKLM:\SOFTWARE reads are redirected to
+# WOW6432Node and 64-bit install paths are hidden. Re-launch once natively so
+# the script sees the real machine.
+if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem) {
+    $yardstickNativePowerShell = Join-Path $env:SystemRoot 'sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $yardstickNativePowerShell) {
+        $yardstickChild = Start-Process -FilePath $yardstickNativePowerShell -Wait -PassThru -NoNewWindow `
+            -WorkingDirectory (Get-Location -PSProvider FileSystem).ProviderPath `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
+        exit $yardstickChild.ExitCode
+    }
+    Write-Output 'WARNING: running 32-bit and native PowerShell was not found; continuing under WOW64 redirection.'
+}
+# --- End Yardstick native-bitness guard ---
+
+'@
+
+    return $guard + $ScriptContent
 }
 
 

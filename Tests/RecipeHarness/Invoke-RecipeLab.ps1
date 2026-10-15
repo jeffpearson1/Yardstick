@@ -22,7 +22,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).Path
+$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..') -ErrorAction Stop).ProviderPath
 . (Join-Path $projectRoot 'ProjectLayout.ps1')
 $projectLayout = Get-YardstickProjectLayout -ProjectRoot $projectRoot
 if (-not $YardstickDevPath) { $YardstickDevPath = $projectLayout.RuntimeRoot }
@@ -31,15 +31,15 @@ if (-not $IconsPath) { $IconsPath = $projectLayout.IconsPath }
 if (-not $ArtifactsPath) { $ArtifactsPath = $projectLayout.HarnessArtifacts }
 
 $schemaScript = Join-Path $PSScriptRoot 'Test-RecipeSchema.ps1'
-$workspaceRecipes = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).Path
-$workspaceIcons = (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).Path
+$workspaceRecipes = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).ProviderPath
+$workspaceIcons = (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).ProviderPath
 $artifactsRoot = $ArtifactsPath
 $runStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 if ($PSCmdlet.ParameterSetName -eq 'ById') {
     $RecipePath = Join-Path $workspaceRecipes "$Id.yaml"
 }
-$RecipePath = (Resolve-Path -LiteralPath $RecipePath -ErrorAction Stop).Path
+$RecipePath = (Resolve-Path -LiteralPath $RecipePath -ErrorAction Stop).ProviderPath
 $recipeId = [IO.Path]::GetFileNameWithoutExtension($RecipePath)
 
 & $schemaScript -RecipePath $RecipePath -YardstickDevPath $YardstickDevPath -RecipesPath $workspaceRecipes -IconsPath $workspaceIcons | Out-Host
@@ -48,7 +48,7 @@ if ($Stage -eq 'Schema') {
 }
 
 Import-Module powershell-yaml -MinimumVersion 0.4.12 -ErrorAction Stop
-Import-Module (Join-Path $YardstickDevPath 'Modules\YardstickSupport.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $YardstickDevPath 'Yardstick.psd1') -Force -ErrorAction Stop
 Import-Module BitsTransfer -ErrorAction Stop
 
 $recipe = Get-Content -LiteralPath $RecipePath -Raw | ConvertFrom-Yaml

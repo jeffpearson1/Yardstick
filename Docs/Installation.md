@@ -92,13 +92,18 @@ these Microsoft Graph **application** permissions, with admin consent:
 | Permission | Needed | Why |
 |---|---|---|
 | `DeviceManagementApps.ReadWrite.All` | Yes | Create, update, assign and delete Win32 apps in Intune. |
-| `DeviceManagementConfiguration.Read.All` | Yes | Read the assignment filters used by app assignments. |
 | `DeviceManagementRBAC.Read.All` | Yes | Resolve Intune scope tag names to IDs. |
-| `Group.Read.All` | No | Look up groups by name. Only `Deploy-YardstickApps.ps1` does this; the rest of Yardstick uses group IDs. |
+| `Group.Read.All` | No | Lets the installer look up the test deployment group by name. Without it you enter the group's object ID; Yardstick itself only uses group IDs. |
 | `Application.Read.All` | No | Discover the client secret's expiry date when none was recorded at setup. |
 
-The installer requests the three required permissions. Add
-`-IncludeOptionalPermissions` to request all five.
+The installer requests the two required permissions. Add
+`-IncludeOptionalPermissions` to request all four. A `.ReadWrite.All` permission the
+app already has counts for the matching `.Read.All` one.
+
+Assignment filters need no extra permission: when Yardstick replaces an app version it
+copies the existing filters by ID, which `DeviceManagementApps.ReadWrite.All` covers.
+An app registration from an earlier version of the installer may also hold
+`DeviceManagementConfiguration.Read.All`; Yardstick no longer uses it, so you can remove it.
 
 `Test-YardstickSetup.ps1` reads the permissions that were actually granted from the
 access token, and names any that are missing.
@@ -277,6 +282,18 @@ Your settings in `Local` are not touched by `git pull`. Re-running the installer
 anything a new version needs and skips what is already done; the last step runs the
 health check. If you downloaded a zip instead, extract the new version over the old
 folder (keeping `Local`, `Icons` and `Artifacts`) and run the installer.
+
+**Upgrading to the module layout.** From this version the folder is a PowerShell module:
+`Yardstick.psm1` and `Private\Invoke-YardstickRun.ps1` hold the code, and `Yardstick.ps1`
+becomes a short wrapper with the same parameters. Scheduled tasks and anything else that
+calls `.\Yardstick.ps1` keep working unchanged, but the three files must be updated
+together: a `Yardstick.ps1` copied on its own will not run. `git pull`, extracting the
+whole zip, and `Publish-Yardstick.ps1 -Runtime` all do that.
+
+The scripts always load the current code. If you use the module commands
+(`Invoke-Yardstick`, `Test-YardstickSetup`, ...) in a PowerShell window that was open
+before an update, run `Import-Module .\Yardstick.psd1 -Force` first, or open a new
+window.
 
 
 ## Troubleshooting

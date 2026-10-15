@@ -127,8 +127,8 @@ Reference: `Recipes\Jetbrains\pycharm.yaml`, `Recipes\Jetbrains\intellijidea.yam
 Last resort, only when the vendor blocks BITS or hides the artifact behind
 JavaScript. Launch headless Firefox in `downloadScript` with `Start-SeDriver`,
 target `"$buildSpace\$id\$version"` as the download directory, poll for the file,
-then `$Driver.Close()`. Reference: `Recipes\keepass.yaml`; the Adobe recipes wrap
-this inside `Modules\Custom\AdobeDownloader.psm1` to stay declarative.
+then `$Driver.Close()`. Reference: `Recipeskeepass.yaml`. Automation shared by several recipes
+belongs in a helper under `ModulesCustom` so the recipes stay declarative.
 
 ## Manual / licensed media (software dropbox)
 
