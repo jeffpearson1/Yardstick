@@ -35,7 +35,7 @@ postDownloadScript: |
   # Drop the config file in the build space
   $config | Out-File "$($Script:BUILDSPACE)\$($Script:ID)\$($Script:VERSION)\git_config.ini"
 installScript: <filename> /VERYSILENT /NORESTART /LOADINF="git_config.ini"
-uninstallScript: 'C:\Program Files\Git\unins000.exe /VERYSILENT /NORESTART'
+uninstallScript: '"C:\Program Files\Git\unins000.exe" /VERYSILENT /NORESTART'
 version:
 fileName:
 iconFile: git.png

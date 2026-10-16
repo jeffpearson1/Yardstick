@@ -3,7 +3,7 @@ urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
   $releaseScript = Invoke-WebRequest -Uri 'https://openscad.org/inc/releases.js' -UseBasicParsing -ErrorAction Stop
-  $pattern = "setSnapshotFileInfo\('WIN64_RELEASE_INSTALLER',\s*'OpenSCAD\s+(?<version>[^']+)',\s*'[^']+',\s*'(?<download>https://files\.openscad\.org/[^']+Installer\.exe)'\);"
+  $pattern = "setSnapshotFileInfo\('WIN64_(?:RELEASE_INSTALLER|INSTALLER_RELEASE)',\s*'OpenSCAD\s+(?<version>[^']+)',\s*'[^']+',\s*'(?<download>https://files\.openscad\.org/[^']+Installer\.exe)'\);"
   $match = [regex]::Match($releaseScript.Content, $pattern)
   if (-not $match.Success) { throw 'Could not find the stable OpenSCAD Windows x64 installer in releases.js.' }
   $version = $match.Groups['version'].Value

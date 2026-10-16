@@ -2,7 +2,8 @@ url: https://winscp.net/eng/download.php
 urlRedirects: false
 preDownloadScript: |
   $Content = Invoke-WebRequest $url -UseBasicParsing
-  $Target = [regex]::Match($Content.Content, 'href="(/download/WinSCP-([0-9]+\.[0-9]+\.[0-9]+)-Setup\.exe/download)"')
+  $Target = [regex]::Match($Content.Content, 'href="(/download/WinSCP-([0-9]+(?:\.[0-9]+)+)-Setup\.exe/download)"')
+  if (-not $Target.Success) { throw "Could not find the WinSCP setup link on $url" }
   $RelativeUrl = $Target.Groups[1].Value
   $version = $Target.Groups[2].Value
   $url = "https://winscp.net$RelativeUrl"
@@ -10,15 +11,19 @@ preDownloadScript: |
   $registryDetectionValue = $version
 downloadScript: |
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $url -DefaultDownloadPath "$buildSpace\$id\$version" -Arguments @('--headless')
-  $Element = Get-SeElement -By LinkText "CDN download"
-  $url = $element.GetAttribute('href')
+  try {
+    $Element = Get-SeElement -By LinkText "CDN download"
+    $url = $element.GetAttribute('href')
+  } finally {
+    # Close() leaves geckodriver running; Stop-SeDriver quits it.
+    Stop-SeDriver -Driver $Driver
+  }
   if (!(Test-Path "$buildspace/$id/$version")) {
     New-Item -ItemType Directory -Path "$buildspace/$id/$version" | Out-Null
   }
   Start-BitsTransfer -Source $url -Destination $buildspace/$id/$version/$filename
-  $Driver.Close()
 installScript: <filename> /VERYSILENT /ALLUSERS /NORESTART
-uninstallScript: '%ProgramFiles(x86)%\\WinSCP\unins000.exe /VERYSILENT /NORESTART'
+uninstallScript: '"%ProgramFiles(x86)%\WinSCP\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
 iconFile: WinSCP.png
 id: winscp
 displayName: WinSCP

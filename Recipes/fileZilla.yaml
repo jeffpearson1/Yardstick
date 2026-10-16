@@ -4,21 +4,28 @@ urlRedirects: false
 preDownloadScript: |
   $URL = "https://filezilla-project.org/download.php?show_all=1"
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')
-  $VersionElement = Get-SeElement -By Xpath "/html/body/div[1]/div[2]/div[2]/div/div/div[2]/div[1]/p/a"
-  $VersionString = [string]$($VersionElement.Text)
+  try {
+    $VersionElement = Get-SeElement -By Xpath "/html/body/div[1]/div[2]/div[2]/div/div/div[2]/div[1]/p/a"
+    $VersionString = [string]$($VersionElement.Text)
+  } finally {
+    # Close() leaves geckodriver running; Stop-SeDriver quits it.
+    Stop-SeDriver -Driver $Driver
+  }
   $FileName = ($VersionString -split "\ ")[-1]
   $Version = ($Filename -split "_")[1]
   $registryDetectionValue = $version
-  $Driver.close()
 downloadScript: |
   $URL = "https://filezilla-project.org/download.php?show_all=1"
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -DefaultDownloadPath "$buildSpace\$id\$version" -Arguments @('--headless')
-  $Element = Get-SeElement -By LinkText "FileZilla_$($version)_win64-setup.exe"
-  $Element.Click()
-  $i = 0
-  $timeout = 300
-  while ((Get-Item "$buildSpace\$id\$version\FileZilla_$($version)_win64-setup.exe").Length -le 0) { if ($i -ge $timeout) { Write-Error "Download Failed"; break; } Start-Sleep 1; $i++; }
-  $Driver.Close()
+  try {
+    $Element = Get-SeElement -By LinkText "FileZilla_$($version)_win64-setup.exe"
+    $Element.Click()
+    $i = 0
+    $timeout = 300
+    while ((Get-Item "$buildSpace\$id\$version\FileZilla_$($version)_win64-setup.exe").Length -le 0) { if ($i -ge $timeout) { Write-Error "Download Failed"; break; } Start-Sleep 1; $i++; }
+  } finally {
+    Stop-SeDriver -Driver $Driver
+  }
 installScript: '"<filename>" /S /user=all'
 uninstallScript: '"%ProgramFiles(x86)%\FileZilla FTP Client\uninstall.exe" /S'
 version:

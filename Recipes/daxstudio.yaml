@@ -9,7 +9,7 @@ preDownloadScript: |
 postDownloadScript:
   $fileDetectionVersion = [String](Get-Item $filename).VersionInfo.FileVersion.Trim()
 installScript: <filename> /VERYSILENT /NORESTART /ALLUSERS
-uninstallScript: 'C:\Program Files\DAX Studio\unins000.exe /VERYSILENT /NORESTART'
+uninstallScript: '"C:\Program Files\DAX Studio\unins000.exe" /VERYSILENT /NORESTART'
 version:
 fileName:
 iconFile: daxstudio.png

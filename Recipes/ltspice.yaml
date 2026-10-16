@@ -3,10 +3,14 @@ urlRedirects: false
 preDownloadScript: |
   $downloadPage = "https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html"
   $driver = Start-SeDriver -Browser "Firefox" -StartURL $downloadPage -Arguments @('--headless', '--width=1920', '--height=1080')
-  Start-Sleep -Seconds 10 # Wait for page to load
-  $version = ((Get-SeElement -By xpath "//a[@href='https://ltspice.analog.com/software/LTspice64.msi']/../../span[contains(text(), 'Version')]").Text -split "\ ")[1]
-  if ($driver) {
-      $driver.close()
+  try {
+    Start-Sleep -Seconds 10 # Wait for page to load
+    $version = ((Get-SeElement -By xpath "//a[@href='https://ltspice.analog.com/software/LTspice64.msi']/../../span[contains(text(), 'Version')]").Text -split "\ ")[1]
+  } finally {
+    # Close() leaves geckodriver running; Stop-SeDriver quits it.
+    if ($driver) {
+      Stop-SeDriver -Driver $driver
+    }
   }
   if ($version -notmatch "([0-9]+\.[0-9]+\.[0-9]+)") {
     throw "Unable to parse LTspice version number from Analog Devices download page."

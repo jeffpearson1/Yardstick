@@ -1,78 +1,75 @@
 url: https://endnote.com/downloads/available-updates/
 urlRedirects: false
 preDownloadScript: |
-  $updatesIndexUrl = "https://endnote.com/downloads/available-updates/"
-  $updatesIndex = Invoke-WebRequest -Uri $updatesIndexUrl -UseBasicParsing
-  $releaseYear = [regex]::Matches($updatesIndex.Content, "EndNote-(\d{4})-Updates") |
-    ForEach-Object { [int]$_.Groups[1].Value } |
-    Sort-Object -Descending |
-    Select-Object -First 1
-
-  if (-not $releaseYear) {
-    throw "Could not determine the current EndNote release year from $updatesIndexUrl"
+  # endnote.com sits behind a bot filter that intermittently 403s scripted
+  # requests, so find the current release by probing download.endnote.com,
+  # which only hosts the current release year's installer.
+  $releaseYear = $null
+  $currentYear = (Get-Date).Year
+  foreach ($candidateYear in ($currentYear + 1)..($currentYear - 3)) {
+    $candidateUrl = "https://download.endnote.com/downloads/$candidateYear/EN$($candidateYear)Inst.msi"
+    try {
+      Invoke-WebRequest -Uri $candidateUrl -Method Head -UseBasicParsing | Out-Null
+      $releaseYear = $candidateYear
+      break
+    } catch {
+      continue
+    }
   }
 
-  $majorVersion = [int]($releaseYear.ToString().Substring(2))
+  if (-not $releaseYear) {
+    throw "Could not find an EndNote base MSI on download.endnote.com for $($currentYear - 3)-$($currentYear + 1)"
+  }
+
   $downloadRoot = "https://download.endnote.com/downloads/$releaseYear"
   $fileName = "EN$($releaseYear)Inst.msi"
   $url = "$downloadRoot/$fileName"
   $updateFileName = "EN$($releaseYear)Update.msp"
   $updateUrl = "$downloadRoot/$updateFileName"
   $updateAvailable = $false
-  $version = "$majorVersion.0.0"
-  $fileDetectionVersion = $version
-  $fileDetectionPath = "C:\Program Files\EndNote $releaseYear"
+  # The MSI is 32-bit, so EndNote always lands under Program Files (x86).
+  $fileDetectionPath = "C:\Program Files (x86)\EndNote $releaseYear"
 
-  try {
-    Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing | Out-Null
-  } catch {
-    throw "EndNote base MSI was not found at $url"
+  $tempDir = Join-Path $Temp $id
+  if (-not (Test-Path $tempDir)) {
+    New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
   }
 
+  # EndNote's marketing year (2025) differs from its file version (22.x), so read
+  # the real version from the MSI rather than deriving it from the year.
+  $msiTempPath = Join-Path $tempDir $fileName
+  Start-BitsTransfer -Source $url -Destination $msiTempPath
+  $version = ([string](Get-MsiProperty -Path $msiTempPath -PropertyName ProductVersion)).Trim()
+  if (-not $version) {
+    throw "Could not read ProductVersion from $url"
+  }
+
+  # Clarivate usually re-rolls the base MSI to include the latest update, in which
+  # case the MSP no longer applies (msiexec 1642). Only ship the MSP when it moves
+  # the base MSI to a newer build.
   try {
     Invoke-WebRequest -Uri $updateUrl -Method Head -UseBasicParsing | Out-Null
-    $updateAvailable = $true
+    $updateTempPath = Join-Path $tempDir $updateFileName
+    Start-BitsTransfer -Source $updateUrl -Destination $updateTempPath
+
+    $windowsInstaller = New-Object -ComObject WindowsInstaller.Installer
+    $patchInfo = $windowsInstaller.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $windowsInstaller, @($updateTempPath, 0))
+    # PID_COMMENTS (6) holds "Version: <target build>" for EndNote patches.
+    $patchComments = [string]$patchInfo.GetType().InvokeMember('Property', 'GetProperty', $null, $patchInfo, 6)
+    if ($patchComments -match '(\d+\.\d+\.\d+\.\d+)' -and [version]$Matches[1] -gt [version]$version) {
+      $updateAvailable = $true
+      $version = $Matches[1]
+    }
   } catch {
     $updateAvailable = $false
   }
 
-  if ($updateAvailable) {
-    $tempDir = Join-Path $temp $id
-    if (-not (Test-Path $tempDir)) {
-      New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
-    }
-
-    $updateTempPath = Join-Path $tempDir $updateFileName
-    Invoke-WebRequest -Uri $updateUrl -OutFile $updateTempPath -UseBasicParsing
-
-    $versionPattern = "$majorVersion\.[0-9]+(\.[0-9]+)?"
-    $versionCandidates = @()
-    $versionCandidates += Select-String -Path $updateTempPath -Pattern $versionPattern -AllMatches -Encoding Unicode |
-      ForEach-Object { $_.Matches.Value }
-    $versionCandidates += Select-String -Path $updateTempPath -Pattern $versionPattern -AllMatches |
-      ForEach-Object { $_.Matches.Value }
-
-    $updateVersion = $versionCandidates |
-      Sort-Object -Unique |
-      Sort-Object { [version]$_ } -Descending |
-      Select-Object -First 1
-
-    if (-not $updateVersion) {
-      throw "Could not determine EndNote update version from $updateUrl"
-    }
-
-    $version = $updateVersion
-    $fileDetectionVersion = $version
-  }
+  $fileDetectionVersion = $version
 downloadScript: |
-  Start-BitsTransfer -Source $url -Destination $fileName
+  Move-Item -Path $msiTempPath -Destination $fileName -Force
 
-  if ($updateAvailable -and $updateFileName) {
-    if ($updateTempPath -and (Test-Path $updateTempPath)) {
-      Copy-Item -Path $updateTempPath -Destination $updateFileName -Force
-    } else {
-      Start-BitsTransfer -Source $updateUrl -Destination $updateFileName
-    }
+  if ($updateAvailable) {
+    Move-Item -Path $updateTempPath -Destination $updateFileName -Force
   }
 powerShellInstallScript: |
   function Invoke-EndNoteMsiexec {
@@ -96,7 +93,33 @@ powerShellInstallScript: |
     }
 installScript: |
   %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1
-uninstallScript: msiexec /x <productcode> /qn /norestart
+powerShellUninstallScript: |
+  $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList '/x <productcode> /qn /norestart' -Wait -PassThru
+  if ($process.ExitCode -notin @(0, 1605, 3010)) {
+    exit $process.ExitCode
+  }
+
+  # The MSI installs the ResearchSoft Direct Export Helper as a separate product
+  # (risweb32 /S) and does not remove it on uninstall.
+  $helperKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\ResearchSoft Direct Export Helper'
+  $helperUninstaller = Join-Path ${env:ProgramFiles(x86)} 'Common Files\Risxtd\uninstall.exe'
+  if (Test-Path -LiteralPath $helperUninstaller) {
+    Start-Process -FilePath $helperUninstaller -ArgumentList '/S' -Wait
+    # The NSIS uninstaller hands off to a temp copy and returns early.
+    for ($i = 0; $i -lt 30 -and (Test-Path -LiteralPath $helperKey); $i++) {
+      Start-Sleep -Seconds 2
+    }
+  }
+
+  # msiexec leaves empty Backup\* folders behind; remove the install folder only
+  # when no files remain in it.
+  Get-ChildItem -Path ${env:ProgramFiles(x86)} -Directory -Filter 'EndNote *' -ErrorAction SilentlyContinue |
+    Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Force -ErrorAction SilentlyContinue) } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+  # 1605 (product not installed) still counts as uninstalled.
+  if ($process.ExitCode -eq 1605) { exit 0 }
+  exit $process.ExitCode
 iconFile: endnote.png
 id: endnote
 displayName: EndNote

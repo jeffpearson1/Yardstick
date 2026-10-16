@@ -2,10 +2,14 @@ url: https://bluebook.app.collegeboard.org/windows
 urlRedirects: false
 preDownloadScript: |
   $Driver = Start-SeDriver -Browser "Firefox" -StartURL $URL -Arguments @('--headless')
-  Start-Sleep -Seconds 10
-  $element = Get-SeElement -By ClassName "downloadButton"
-  $url = $element.GetAttribute("href")
-  $Driver.close()
+  try {
+    Start-Sleep -Seconds 10
+    $element = Get-SeElement -By ClassName "downloadButton"
+    $url = $element.GetAttribute("href")
+  } finally {
+    # Close() leaves geckodriver running; Stop-SeDriver quits it.
+    Stop-SeDriver -Driver $Driver
+  }
   $filename = $url.split("/")[-1] -replace("%20"," ")
   $version = $filename.split(" ").split(".exe")[2]
   $fileDetectionVersion = "$version.0"

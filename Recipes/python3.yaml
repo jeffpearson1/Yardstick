@@ -19,6 +19,7 @@ publisher: Python Software Foundation
 description: Python is a programming language that lets you work quickly and integrate systems effectively.
 fileType: EXE
 softwareName: "Python 3*"
+uninstallPreviousVersion: true
 dependentApplicationBlacklist:
  - "Python Config"
 detectionType: script
