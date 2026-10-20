@@ -47,3 +47,6 @@ detectionScript: |
 installExperience: system
 restartBehavior: suppress
 minOSVersion: W11_24H2
+scopeTags:
+  - scopeTag1
+  - scopeTag2
