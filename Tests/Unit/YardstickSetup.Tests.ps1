@@ -789,3 +789,237 @@ Describe "Get-YardstickScheduledTaskDefinition" {
         $sets | Should -Contain 'GroupApps'
     }
 }
+
+
+Describe "Test-YardstickAclWritable" {
+    BeforeAll {
+        $script:user = 'S-1-5-21-1000-2000-3000-1001'
+        $script:group = 'S-1-5-32-545'
+        function New-TestRule {
+            param([string]$Sid, [string]$Rights, [string]$Type = 'Allow', [string]$Inherit = 'None', [string]$Propagate = 'None')
+            [Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($Sid), $Rights, $Inherit, $Propagate, $Type)
+        }
+        function New-TestAcl {
+            param([object[]]$Rule)
+            $acl = [Security.AccessControl.DirectorySecurity]::new()
+            foreach ($r in $Rule) { $acl.AddAccessRule($r) }
+            $acl
+        }
+    }
+
+    It "Is writable when the user or one of its groups may modify it" {
+        Test-YardstickAclWritable -Acl (New-TestAcl (New-TestRule $script:user Modify)) -Sid $script:user | Should -BeTrue
+        Test-YardstickAclWritable -Acl (New-TestAcl (New-TestRule $script:group FullControl)) -Sid $script:user, $script:group | Should -BeTrue
+    }
+
+    It "Is not writable with read access only, or access for someone else" {
+        Test-YardstickAclWritable -Acl (New-TestAcl (New-TestRule $script:user ReadAndExecute)) -Sid $script:user | Should -BeFalse
+        Test-YardstickAclWritable -Acl (New-TestAcl (New-TestRule 'S-1-5-32-544' FullControl)) -Sid $script:user | Should -BeFalse
+    }
+
+    It "Lets a deny entry win over an allow entry" {
+        $acl = New-TestAcl (New-TestRule $script:group FullControl), (New-TestRule $script:user WriteData -Type Deny)
+        Test-YardstickAclWritable -Acl $acl -Sid $script:user, $script:group | Should -BeFalse
+    }
+
+    It "Ignores entries that only apply to new children" {
+        $acl = New-TestAcl (New-TestRule $script:user FullControl -Inherit 'ContainerInherit, ObjectInherit' -Propagate InheritOnly)
+        Test-YardstickAclWritable -Acl $acl -Sid $script:user | Should -BeFalse
+    }
+}
+
+
+Describe "Get-YardstickUnwritablePath and Grant-YardstickFolderAccess" {
+    BeforeEach {
+        # A SID with no access to anything, standing in for the user setup runs as.
+        $script:stranger = 'S-1-5-21-1000-2000-3000-4242'
+        $script:tree = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path "$script:tree\Local", "$script:tree\.git\objects" -Force | Out-Null
+        Set-Content -LiteralPath "$script:tree\YInstall.log" -Value 'log'
+        Set-Content -LiteralPath "$script:tree\Local\preferences.yaml" -Value 'x: 1'
+        Set-Content -LiteralPath "$script:tree\.git\objects\pack" -Value 'git'
+    }
+
+    It "Returns nothing when this session can change everything" {
+        Get-YardstickUnwritablePath -ProjectRoot $script:tree | Should -BeNullOrEmpty
+    }
+
+    It "Lists the folder and everything in it, except .git, for a SID without access" {
+        $paths = @(Get-YardstickUnwritablePath -ProjectRoot $script:tree -Sid $script:stranger)
+        $paths | Should -Be @($script:tree, "$script:tree\Local", "$script:tree\YInstall.log", "$script:tree\Local\preferences.yaml")
+    }
+
+    It "Grants full control of the folder and its contents" {
+        Grant-YardstickFolderAccess -Path $script:tree -Sid $script:stranger
+        Get-YardstickUnwritablePath -ProjectRoot $script:tree -Sid $script:stranger | Should -BeNullOrEmpty
+        $rule = (Get-Acl -LiteralPath $script:tree).Access | Where-Object { $_.IdentityReference.Value -eq $script:stranger }
+        $rule.FileSystemRights | Should -Be 'FullControl'
+        $rule.InheritanceFlags | Should -Be 'ContainerInherit, ObjectInherit'
+    }
+
+    It "Grants each listed item that does not inherit from the folder" {
+        $file = "$script:tree\YInstall.log"
+        $acl = Get-Acl -LiteralPath $file
+        $acl.SetAccessRuleProtection($true, $true)
+        Set-Acl -LiteralPath $file -AclObject $acl
+
+        Grant-YardstickFolderAccess -Path $script:tree -Sid $script:stranger
+        Get-YardstickUnwritablePath -ProjectRoot $script:tree -Sid $script:stranger | Should -Be $file
+
+        Grant-YardstickFolderAccess -Path $script:tree -Sid $script:stranger -Item $file, "$script:tree\missing.txt"
+        Get-YardstickUnwritablePath -ProjectRoot $script:tree -Sid $script:stranger | Should -BeNullOrEmpty
+    }
+
+    It "Changes nothing with -WhatIf" {
+        Grant-YardstickFolderAccess -Path $script:tree -Sid $script:stranger -WhatIf
+        @(Get-YardstickUnwritablePath -ProjectRoot $script:tree -Sid $script:stranger).Count | Should -Be 4
+    }
+}
+
+
+Describe "Test-YardstickUacElevated" {
+    It "Reads the elevation type of this session's token" {
+        Get-YardstickTokenElevationType | Should -BeIn 'Default', 'Full', 'Limited'
+    }
+
+    It "Is false without administrator rights, without reading the token" {
+        Mock Test-YardstickAdministrator { $false } -ModuleName YardstickSetup
+        Mock Get-YardstickTokenElevationType { 'Full' } -ModuleName YardstickSetup
+        Test-YardstickUacElevated | Should -BeFalse
+        Should -Invoke Get-YardstickTokenElevationType -ModuleName YardstickSetup -Times 0 -Exactly
+    }
+
+    It "Is true only for a UAC-elevated token" {
+        Mock Test-YardstickAdministrator { $true } -ModuleName YardstickSetup
+        Mock Get-YardstickTokenElevationType { 'Full' } -ModuleName YardstickSetup
+        Test-YardstickUacElevated | Should -BeTrue
+        Mock Get-YardstickTokenElevationType { 'Default' } -ModuleName YardstickSetup
+        Test-YardstickUacElevated | Should -BeFalse
+    }
+}
+
+
+Describe "Invoke-YardstickElevatedSetup" {
+    BeforeEach {
+        # The mock stands in for the elevated process: it reads the request the
+        # function wrote and answers with $Global:YardstickTestReply.
+        $Global:YardstickTestReply = $null
+        $Global:YardstickTestSeen = $null
+        Mock Start-Process {
+            $text = $ArgumentList -join ' '
+            if ($text -notmatch '-File "(?<script>[^"]+)" -RequestPath "(?<request>[^"]+)" -ResultPath "(?<result>[^"]+)" -Key (?<key>\S+)$') { throw "Unexpected arguments: $text" }
+            $Global:YardstickTestSeen = [pscustomobject]@{
+                Script  = $Matches.script
+                Request = $Matches.request
+                Key     = $Matches.key
+                Actions = @(Get-Content -LiteralPath $Matches.request -Raw | ConvertFrom-Json)
+            }
+            if ($Global:YardstickTestReply) {
+                ConvertTo-Json -InputObject $Global:YardstickTestReply -Depth 4 | Set-Content -LiteralPath $Matches.result
+            }
+        } -ModuleName YardstickSetup
+    }
+
+    AfterAll {
+        Remove-Variable -Name YardstickTestReply, YardstickTestSeen -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It "Runs every action in one elevated process and returns each result in order" {
+        $Global:YardstickTestReply = @{ Results = @(@{ Success = $true; Message = $null }, @{ Success = $false; Message = 'no Outlook' }); Error = $null }
+        $results = @(Invoke-YardstickElevatedSetup -ProjectRoot 'C:\Yardstick' -Action @{ Type = 'GrantFolderAccess'; Path = 'C:\Yardstick' }, @{ Type = 'DisableOutlookPrompts' })
+
+        Should -Invoke Start-Process -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { $Verb -eq 'RunAs' -and $Wait -and $FilePath -eq (Join-Path $PSHOME 'pwsh.exe') }
+        $Global:YardstickTestSeen.Script | Should -Be 'C:\Yardstick\Private\Invoke-YardstickElevatedSetup.ps1'
+        $Global:YardstickTestSeen.Actions.Type | Should -Be @('GrantFolderAccess', 'DisableOutlookPrompts')
+        $results.Success | Should -Be @($true, $false)
+        $results[1].Message | Should -Be 'no Outlook'
+        Test-Path -LiteralPath (Split-Path $Global:YardstickTestSeen.Request) | Should -BeFalse
+    }
+
+    It "Passes a credential as a user name and a password only the key decrypts" {
+        $Global:YardstickTestReply = @{ Results = @(@{ Success = $true }); Error = $null }
+        $credential = [pscredential]::new('CONTOSO\runner', (ConvertTo-SecureString 'P@ssw0rd!' -AsPlainText -Force))
+        Invoke-YardstickElevatedSetup -ProjectRoot 'C:\Yardstick' -Action @{ Type = 'RegisterScheduledTask'; Credential = $credential } | Out-Null
+
+        $sent = $Global:YardstickTestSeen.Actions[0]
+        $sent.PSObject.Properties.Name | Should -Not -Contain 'Credential'
+        $sent.UserName | Should -Be 'CONTOSO\runner'
+        $sent.Password | Should -Not -Match 'P@ssw0rd'
+        $key = [Convert]::FromBase64String($Global:YardstickTestSeen.Key)
+        (ConvertTo-SecureString -String $sent.Password -Key $key | ConvertFrom-SecureString -AsPlainText) | Should -Be 'P@ssw0rd!'
+    }
+
+    It "Fails every action when the administrator prompt is declined" {
+        Mock Start-Process { throw 'The operation was canceled by the user.' } -ModuleName YardstickSetup
+        $results = @(Invoke-YardstickElevatedSetup -ProjectRoot 'C:\Yardstick' -Action @{ Type = 'A' }, @{ Type = 'B' })
+        $results.Success | Should -Be @($false, $false)
+        $results[0].Message | Should -Match 'did not grant administrator rights.*canceled by the user'
+    }
+
+    It "Fails the actions the elevated process did not report" {
+        $results = @(Invoke-YardstickElevatedSetup -ProjectRoot 'C:\Yardstick' -Action @{ Type = 'A' })
+        $results[0].Success | Should -BeFalse
+        $results[0].Message | Should -Match 'without reporting a result'
+
+        $Global:YardstickTestReply = @{ Results = @(@{ Success = $true }); Error = 'Could not load Yardstick.psd1' }
+        $results = @(Invoke-YardstickElevatedSetup -ProjectRoot 'C:\Yardstick' -Action @{ Type = 'A' }, @{ Type = 'B' })
+        $results.Success | Should -Be @($true, $false)
+        $results[1].Message | Should -Be 'Could not load Yardstick.psd1'
+    }
+}
+
+
+Describe "Invoke-YardstickElevatedAction" {
+    BeforeAll {
+        # The elevated script gets each action back from JSON.
+        function ConvertTo-TestAction { param([hashtable]$Action) $Action | ConvertTo-Json | ConvertFrom-Json }
+    }
+
+    It "Creates the scheduled task with the decrypted credential" {
+        Mock Register-YardstickScheduledTask { } -ModuleName YardstickSetup
+        $key = [byte[]](1..32)
+        $password = ConvertFrom-SecureString -SecureString (ConvertTo-SecureString 'secret' -AsPlainText -Force) -Key $key
+        $action = ConvertTo-TestAction @{ Type = 'RegisterScheduledTask'; ProjectRoot = 'C:\Yardstick'; At = '05:30'; Group = 'Lab'; UserName = 'CONTOSO\runner'; Password = $password }
+
+        Invoke-YardstickElevatedAction -Action $action -Key $key
+        Should -Invoke Register-YardstickScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter {
+            $ProjectRoot -eq 'C:\Yardstick' -and $Group -eq 'Lab' -and $At.Hour -eq 5 -and $At.Minute -eq 30 -and
+            $Credential.UserName -eq 'CONTOSO\runner' -and $Credential.GetNetworkCredential().Password -eq 'secret'
+        }
+    }
+
+    It "Grants folder access" {
+        Mock Grant-YardstickFolderAccess { } -ModuleName YardstickSetup
+        Invoke-YardstickElevatedAction -Action (ConvertTo-TestAction @{ Type = 'GrantFolderAccess'; Path = 'C:\Yardstick'; Sid = 'S-1-5-21-1'; Item = @('C:\Yardstick\YInstall.log') })
+        Should -Invoke Grant-YardstickFolderAccess -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter {
+            $Path -eq 'C:\Yardstick' -and $Sid -eq 'S-1-5-21-1' -and "$Item" -eq 'C:\Yardstick\YInstall.log'
+        }
+    }
+
+    It "Rejects an unknown action" {
+        { Invoke-YardstickElevatedAction -Action (ConvertTo-TestAction @{ Type = 'FormatDisk' }) } | Should -Throw "*Unknown setup action 'FormatDisk'*"
+    }
+}
+
+
+Describe "Private\Invoke-YardstickElevatedSetup.ps1" {
+    It "Runs each action and reports every result, including failures" {
+        $work = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path "$work\Target" -Force | Out-Null
+        $sid = 'S-1-5-21-1000-2000-3000-4242'
+        ConvertTo-Json -InputObject @(
+            @{ Type = 'GrantFolderAccess'; Path = "$work\Target"; Sid = $sid; Item = @() }
+            @{ Type = 'FormatDisk' }
+        ) | Set-Content -LiteralPath "$work\request.json"
+
+        # A separate process, as in setup: the script imports the whole module.
+        $arguments = "-NoProfile -File `"$script:repoRoot\Private\Invoke-YardstickElevatedSetup.ps1`" -RequestPath `"$work\request.json`" -ResultPath `"$work\result.json`""
+        Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList $arguments -Wait -NoNewWindow
+
+        $reply = Get-Content -LiteralPath "$work\result.json" -Raw | ConvertFrom-Json
+        $reply.Error | Should -BeNullOrEmpty
+        $reply.Results.Success | Should -Be @($true, $false)
+        $reply.Results[1].Message | Should -Match 'Unknown setup action'
+        Get-YardstickUnwritablePath -ProjectRoot "$work\Target" -Sid $sid | Should -BeNullOrEmpty
+    }
+}

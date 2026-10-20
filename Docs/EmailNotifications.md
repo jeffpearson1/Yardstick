@@ -61,7 +61,7 @@ Each run sends up to two emails. The **admin** email goes to `adminEmailRecipien
 
 The report is created as an Outlook mail item over COM and sent from the profile Outlook is signed into. The header logo is attached inline. The HTML refers to it as `cid:<file name>`, and Outlook matches that to the attachment by name. No Content-ID property is set, because reading `Attachment.PropertyAccessor` would raise an Outlook security prompt.
 
-Outlook asks for approval before any program sends mail ("A program is trying to send an e-mail message on your behalf") when it cannot confirm that the antivirus is up to date. It always asks on Windows Server, which has no Security Center to report the antivirus state. `.\Test-YardstickSetup.ps1` warns when this will happen. To turn the prompt off, run `.\Install-Yardstick.ps1 -Step Email` from an administrator PowerShell and accept the offer. That sets `ObjectModelGuard` (DWORD) to `2` under `HKLM\SOFTWARE\Microsoft\Office\16.0\Outlook\Security`, or under `HKLM\SOFTWARE\Wow6432Node\...` for 32-bit Office. In Outlook's Trust Center, this is **Programmatic Access > Never warn me about suspicious activity**. The setting applies to every program on the computer, not only Yardstick. If you would rather not change it, use SMTP delivery instead.
+Outlook asks for approval before any program sends mail ("A program is trying to send an e-mail message on your behalf") when it cannot confirm that the antivirus is up to date. It always asks on Windows Server, which has no Security Center to report the antivirus state. `.\Test-YardstickSetup.ps1` warns when this will happen. To turn the prompt off, run `.\Install-Yardstick.ps1 -Step Email` and accept the offer; Windows asks for administrator rights at the end of setup. That sets `ObjectModelGuard` (DWORD) to `2` under `HKLM\SOFTWARE\Microsoft\Office\16.0\Outlook\Security`, or under `HKLM\SOFTWARE\Wow6432Node\...` for 32-bit Office. In Outlook's Trust Center, this is **Programmatic Access > Never warn me about suspicious activity**. The setting applies to every program on the computer, not only Yardstick. If you would rather not change it, use SMTP delivery instead.
 
 ### SMTP
 
@@ -247,7 +247,7 @@ Comprehensive error handling includes:
 
 6. **Outlook asks "A program is trying to send an e-mail message on your behalf" for every report**
    - Outlook cannot confirm the antivirus is up to date. This always happens on Windows Server.
-   - From an administrator PowerShell, run `.\Install-Yardstick.ps1 -Step Email -EmailMethod outlook -DisableOutlookPrompts`, then restart Outlook. See [Outlook (default)](#outlook-default) for what this changes.
+   - Run `.\Install-Yardstick.ps1 -Step Email -EmailMethod outlook -DisableOutlookPrompts`, accept the administrator prompt at the end, then restart Outlook. See [Outlook (default)](#outlook-default) for what this changes.
 
 ### Logging
 

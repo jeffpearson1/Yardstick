@@ -1080,6 +1080,325 @@ function Find-YardstickGroup {
 #endregion
 
 
+#region Administrator rights
+
+# Yardstick runs without administrator rights, so setup does too. A file created
+# from an elevated session belongs to the Administrators group, and under the
+# default permissions of a fixed drive the user can then read it but not change
+# it. The few changes that do need administrator rights are collected and made
+# together by Private\Invoke-YardstickElevatedSetup.ps1, so Windows asks once.
+
+function Get-YardstickTokenElevationType {
+    <#
+    .SYNOPSIS
+    Returns the elevation type of this process's token: Default, Full or Limited.
+
+    .DESCRIPTION
+    Full is an administrator's elevated token while UAC is on ("Run as
+    administrator"), Limited the same administrator's normal token. Default is a
+    standard user, or an administrator with UAC off or the built-in Administrator
+    account, which only ever have the one token.
+    #>
+    if (-not ('Yardstick.Setup.TokenInfo' -as [type])) {
+        Add-Type -Namespace 'Yardstick.Setup' -Name 'TokenInfo' -MemberDefinition @'
+[DllImport("advapi32.dll", SetLastError = true)]
+public static extern bool GetTokenInformation(IntPtr token, int infoClass, out int info, int infoLength, out int returnLength);
+'@
+    }
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $type = 0
+        $length = 0
+        # 18 is TokenElevationType.
+        if (-not [Yardstick.Setup.TokenInfo]::GetTokenInformation($identity.Token, 18, [ref]$type, 4, [ref]$length)) {
+            throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        }
+    } finally {
+        $identity.Dispose()
+    }
+    switch ($type) {
+        2 { 'Full' }
+        3 { 'Limited' }
+        default { 'Default' }
+    }
+}
+
+
+function Test-YardstickAdministrator {
+    <#
+    .SYNOPSIS
+    Returns $true when this session has administrator rights.
+    #>
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+
+function Test-YardstickUacElevated {
+    <#
+    .SYNOPSIS
+    Returns $true in a session started with "Run as administrator".
+
+    .DESCRIPTION
+    Such a session belongs to an administrator who normally works without
+    administrator rights - and so runs Yardstick without them. An administrator
+    who always has them (UAC off, or the built-in Administrator) returns $false.
+    #>
+    # Add-Type is slow, so sessions without administrator rights skip it.
+    (Test-YardstickAdministrator) -and (Get-YardstickTokenElevationType) -eq 'Full'
+}
+
+
+function Get-YardstickTokenSids {
+    <#
+    .SYNOPSIS
+    Returns the SIDs this session's permissions are checked against.
+
+    .DESCRIPTION
+    The user and its enabled groups. Groups that only deny access, such as
+    Administrators in a session without administrator rights, are left out.
+    #>
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        @($identity.User.Value) + @($identity.Groups | ForEach-Object { $_.Value })
+    } finally {
+        $identity.Dispose()
+    }
+}
+
+
+function Test-YardstickAclWritable {
+    <#
+    .SYNOPSIS
+    Returns $true when an ACL lets any of the given SIDs write to the item.
+    #>
+    param(
+        [Parameter(Mandatory)][Security.AccessControl.FileSystemSecurity]$Acl,
+        [Parameter(Mandatory)][string[]]$Sid
+    )
+    $writeData = [int][Security.AccessControl.FileSystemRights]::WriteData
+    $genericWrite = 0x40000000 -bor 0x10000000   # GENERIC_WRITE, GENERIC_ALL
+    $allow = 0
+    $deny = 0
+    foreach ($rule in $Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($Sid -notcontains $rule.IdentityReference.Value) { continue }
+        # Inherit-only entries, such as CREATOR OWNER, apply to new children only.
+        if ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+        $rights = [int]$rule.FileSystemRights
+        if ($rights -band $genericWrite) { $rights = $rights -bor $writeData }
+        if ($rule.AccessControlType -eq 'Allow') { $allow = $allow -bor $rights } else { $deny = $deny -bor $rights }
+    }
+    (($allow -band -bnot $deny) -band $writeData) -ne 0
+}
+
+
+function Get-YardstickUnwritablePath {
+    <#
+    .SYNOPSIS
+    Lists the files and folders in the Yardstick folder this session cannot change.
+
+    .DESCRIPTION
+    Usually left behind by running setup or Yardstick from an elevated session.
+    The .git folder is skipped, and so is a Yardstick folder on a network share,
+    whose server decides access.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [string[]]$Sid = (Get-YardstickTokenSids)
+    )
+
+    $root = [IO.DirectoryInfo]::new($ProjectRoot)
+    if ($root.FullName.StartsWith('\\') -or [IO.DriveInfo]::new([IO.Path]::GetPathRoot($root.FullName)).DriveType -eq 'Network') { return }
+
+    $test = {
+        param([IO.FileSystemInfo]$Item)
+        try {
+            Test-YardstickAclWritable -Acl ([IO.FileSystemAclExtensions]::GetAccessControl($Item, 'Access')) -Sid $Sid
+        } catch {
+            $false
+        }
+    }
+    if (-not (& $test $root)) { $root.FullName }
+    $folders = [Collections.Generic.Queue[IO.DirectoryInfo]]::new()
+    $folders.Enqueue($root)
+    while ($folders.Count -gt 0) {
+        $folder = $folders.Dequeue()
+        try {
+            $entries = @($folder.EnumerateFileSystemInfos())
+        } catch {
+            continue
+        }
+        foreach ($entry in $entries) {
+            if ($entry.Name -eq '.git') { continue }
+            if (-not (& $test $entry)) { $entry.FullName }
+            if ($entry -is [IO.DirectoryInfo] -and -not ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                $folders.Enqueue($entry)
+            }
+        }
+    }
+}
+
+
+function Grant-YardstickFolderAccess {
+    <#
+    .SYNOPSIS
+    Gives a user full control of the Yardstick folder and everything in it.
+
+    .DESCRIPTION
+    Adds an inheritable entry to the folder, which reaches everything that
+    inherits permissions from it, then adds one to each of -Item that still
+    does not let the user write. Needs administrator rights when some items
+    belong to the Administrators group.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Sid,
+        [string[]]$Item
+    )
+
+    $identity = [Security.Principal.SecurityIdentifier]::new($Sid)
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $grant = {
+        param([IO.FileSystemInfo]$Target, [Security.AccessControl.InheritanceFlags]$Flags)
+        $acl = [IO.FileSystemAclExtensions]::GetAccessControl($Target, 'Access')
+        if (Test-YardstickAclWritable -Acl $acl -Sid $Sid) { return }
+        if (-not $PSCmdlet.ShouldProcess($Target.FullName, "Give $Sid full control")) { return }
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity, 'FullControl', $Flags, 'None', 'Allow'))
+        [IO.FileSystemAclExtensions]::SetAccessControl($Target, $acl)
+    }
+
+    $root = [IO.DirectoryInfo]::new($Path)
+    $acl = [IO.FileSystemAclExtensions]::GetAccessControl($root, 'Access')
+    if ($PSCmdlet.ShouldProcess($root.FullName, "Give $Sid full control of the folder and its contents")) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity, 'FullControl', $inherit, 'None', 'Allow'))
+        [IO.FileSystemAclExtensions]::SetAccessControl($root, $acl)
+    }
+    foreach ($entry in $Item) {
+        if (Test-Path -LiteralPath $entry -PathType Container) {
+            & $grant ([IO.DirectoryInfo]::new($entry)) $inherit
+        } elseif (Test-Path -LiteralPath $entry -PathType Leaf) {
+            & $grant ([IO.FileInfo]::new($entry)) ([Security.AccessControl.InheritanceFlags]::None)
+        }
+    }
+}
+
+
+function Invoke-YardstickElevatedSetup {
+    <#
+    .SYNOPSIS
+    Carries out setup actions that need administrator rights, in one elevated process.
+
+    .DESCRIPTION
+    Starts Private\Invoke-YardstickElevatedSetup.ps1 with "Run as administrator",
+    so Windows asks once for the whole list. That process can run as another
+    account - a standard user enters an administrator's name and password - so
+    each action carries everything it needs instead of reading this user's
+    profile. A Credential is passed encrypted with a one-time key that only the
+    command line carries; the request and result files are deleted afterwards.
+
+    .PARAMETER Action
+    Hashtables with a Type (see Invoke-YardstickElevatedAction) and its values.
+
+    .OUTPUTS
+    One result per action, in order, with Success and Message.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][hashtable[]]$Action
+    )
+
+    $work = Join-Path ([IO.Path]::GetTempPath()) "Yardstick-setup-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $work | Out-Null
+    try {
+        $key = [byte[]]::new(32)
+        [Security.Cryptography.RandomNumberGenerator]::Fill($key)
+        $request = foreach ($entry in $Action) {
+            $copy = @{} + $entry
+            if ($copy.Credential) {
+                $copy.UserName = $copy.Credential.UserName
+                $copy.Password = ConvertFrom-SecureString -SecureString $copy.Credential.Password -Key $key
+                $copy.Remove('Credential')
+            }
+            $copy
+        }
+        $requestPath = Join-Path $work 'request.json'
+        $resultPath = Join-Path $work 'result.json'
+        ConvertTo-Json -InputObject @($request) -Depth 5 | Set-Content -LiteralPath $requestPath -Encoding utf8
+
+        $script = Join-Path $ProjectRoot 'Private\Invoke-YardstickElevatedSetup.ps1'
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -RequestPath `"$requestPath`" -ResultPath `"$resultPath`" -Key $([Convert]::ToBase64String($key))"
+        $failure = $null
+        try {
+            Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait
+        } catch {
+            # Usually the administrator prompt was declined.
+            $failure = "Windows did not grant administrator rights: $($_.Exception.Message)"
+        }
+
+        $results = @()
+        if (-not $failure) {
+            if (Test-Path -LiteralPath $resultPath) {
+                $reply = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+                $results = @($reply.Results)
+                $failure = $reply.Error
+            }
+            if (-not $failure) { $failure = 'The administrator process ended without reporting a result.' }
+        }
+        for ($i = 0; $i -lt $Action.Count; $i++) {
+            if ($i -lt $results.Count) {
+                [pscustomobject]@{ Success = [bool]$results[$i].Success; Message = [string]$results[$i].Message }
+            } else {
+                [pscustomobject]@{ Success = $false; Message = $failure }
+            }
+        }
+    } finally {
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+
+function Invoke-YardstickElevatedAction {
+    <#
+    .SYNOPSIS
+    Carries out one action for Private\Invoke-YardstickElevatedSetup.ps1.
+
+    .DESCRIPTION
+    Types:
+      GrantFolderAccess      Path, Sid, Item (see Grant-YardstickFolderAccess)
+      DisableOutlookPrompts  (Set-YardstickOutlookObjectModelGuard)
+      RegisterScheduledTask  ProjectRoot, At (HH:mm), Group, UserName, Password
+                             (encrypted with -Key)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Action,
+        [byte[]]$Key
+    )
+
+    switch ($Action.Type) {
+        'GrantFolderAccess' {
+            Grant-YardstickFolderAccess -Path $Action.Path -Sid $Action.Sid -Item @($Action.Item | Where-Object { $_ })
+        }
+        'DisableOutlookPrompts' {
+            # From YardstickSupport, which Yardstick.psd1 loads alongside this module.
+            Set-YardstickOutlookObjectModelGuard
+        }
+        'RegisterScheduledTask' {
+            $credential = [pscredential]::new($Action.UserName, (ConvertTo-SecureString -String $Action.Password -Key $Key))
+            $at = [datetime]::ParseExact($Action.At, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+            Register-YardstickScheduledTask -ProjectRoot $Action.ProjectRoot -At $at -Credential $credential -Group $Action.Group | Out-Null
+        }
+        default { throw "Unknown setup action '$($Action.Type)'." }
+    }
+}
+
+#endregion
+
+
 #region Scheduled task
 
 function Get-YardstickScheduledTaskDefinition {
@@ -1175,6 +1494,15 @@ Export-ModuleMember -Function @(
     'New-YardstickAppRegistration'
     'Get-YardstickScopeTagNames'
     'Find-YardstickGroup'
+    'Get-YardstickTokenElevationType'
+    'Test-YardstickAdministrator'
+    'Test-YardstickUacElevated'
+    'Get-YardstickTokenSids'
+    'Test-YardstickAclWritable'
+    'Get-YardstickUnwritablePath'
+    'Grant-YardstickFolderAccess'
+    'Invoke-YardstickElevatedSetup'
+    'Invoke-YardstickElevatedAction'
     'Get-YardstickScheduledTaskDefinition'
     'Register-YardstickScheduledTask'
 )

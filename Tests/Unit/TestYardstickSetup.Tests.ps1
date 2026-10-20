@@ -76,6 +76,7 @@ Describe "Test-YardstickSetup.ps1" {
         $run.ExitCode | Should -Be 0
         ($run.Results | Where-Object Check -eq 'Missing icons').Level | Should -Be 'OK'
         ($run.Results | Where-Object Check -eq 'Intune').Level | Should -Be 'OK'
+        ($run.Results | Where-Object Check -eq 'Permissions').Level | Should -Be 'OK'
         Get-ChildItem -LiteralPath (Join-Path $script:root 'Icons') -Filter '*.tmp' | Should -BeNullOrEmpty
         Test-Path (Join-Path $script:root 'Artifacts\Temp') | Should -BeFalse
     }
@@ -148,6 +149,17 @@ Describe "Test-YardstickSetup.ps1" {
         $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Outlook prompts'
         $check.Level | Should -Be 'Warn'
         $check.Message | Should -Match 'Install-Yardstick\.ps1 -Step Email'
+    }
+
+    It "Warns about files this account cannot change, without failing" {
+        Set-TestPreferences
+        Mock Get-YardstickUnwritablePath { "$script:root\YInstall.log" }
+        $run = Invoke-HealthCheck -Offline
+        $check = $run.Results | Where-Object Check -eq 'Permissions'
+        $check.Level | Should -Be 'Warn'
+        $check.Message | Should -Match 'YInstall\.log'
+        $check.Message | Should -Match 'Install-Yardstick\.ps1 -Step Prerequisites'
+        $run.ExitCode | Should -Be 0
     }
 
     It "Warns when the scheduled task runs as another account or another folder" {

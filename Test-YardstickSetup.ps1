@@ -10,10 +10,11 @@ Runs every check a working install depends on and prints one line per check:
     [WARN]  an optional feature will not work, or something needs attention soon
     [FAIL]  normal runs will fail until this is fixed
 
-It covers PowerShell and its modules, preferences.yaml, the working folders, the
-stored Intune credential and the Graph permissions it actually has, the client
-secret's expiry, IntuneWinAppUtil.exe, email delivery, the scheduled task and
-recipes without icons.
+It covers PowerShell and its modules, preferences.yaml, the working folders and
+files the current account cannot change, the stored Intune credential and the
+Graph permissions it actually has, the client secret's expiry,
+IntuneWinAppUtil.exe, email delivery, the scheduled task and recipes without
+icons.
 
 Nothing is changed, except that a scratch file is written to (and removed from)
 each working folder to prove it is writable. Run it after Install-Yardstick.ps1,
@@ -180,6 +181,14 @@ foreach ($key in 'Temp', 'Buildspace', 'Published', 'Scripts', 'Icons', 'Tools')
     }
 }
 
+# Files left by running setup or Yardstick as administrator, which this account can read but not change.
+$unwritable = @(Get-YardstickUnwritablePath -ProjectRoot $ProjectRoot)
+if ($unwritable.Count -gt 0) {
+    Add-Check 'Permissions' Warn "$env:USERNAME cannot change $($unwritable.Count) item(s) in $ProjectRoot (for example $($unwritable[0])). Run .\Install-Yardstick.ps1 -Step Prerequisites to fix them."
+} else {
+    Add-Check 'Permissions' OK "$env:USERNAME can change every file in $ProjectRoot."
+}
+
 $recipeFolder = [string]$prefs.Recipes
 if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
     $recipeCount = @(Get-ChildItem -LiteralPath $recipeFolder -Filter '*.yaml' -File).Count
@@ -298,7 +307,7 @@ if ($prefs.emailNotificationEnabled -ne $true) {
         if (Test-OutlookAvailability) {
             Add-Check 'Outlook' OK 'Outlook is available.'
             if (Test-YardstickOutlookPromptExpected) {
-                Add-Check 'Outlook prompts' Warn 'Outlook will ask you to approve every email Yardstick sends. Run .\Install-Yardstick.ps1 -Step Email as administrator to turn the prompts off.'
+                Add-Check 'Outlook prompts' Warn 'Outlook will ask you to approve every email Yardstick sends. Run .\Install-Yardstick.ps1 -Step Email to turn the prompts off.'
             } else {
                 Add-Check 'Outlook prompts' OK 'Outlook sends without asking for approval.'
             }

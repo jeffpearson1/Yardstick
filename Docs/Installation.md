@@ -21,6 +21,10 @@ installer does, how to do each part by hand, and how to keep an installation hea
 - Windows 10 or 11, or Windows Server 2019 or later.
 - [PowerShell 7](https://aka.ms/powershell) (`pwsh`). Windows PowerShell 5.1 is not
   supported; the installer tells you how to get PowerShell 7 if you start it from 5.1.
+- A normal PowerShell window, signed in as the account that will run Yardstick.
+  Yardstick does not need administrator rights, and the installer refuses to start
+  from a window opened with **Run as administrator** (see
+  [Administrator rights](#administrator-rights)).
 - The `powershell-yaml` module. The installer installs it for the current user.
 - Enough free disk space in the Yardstick folder to download and package installers
   (a few GB covers most recipe sets).
@@ -55,7 +59,7 @@ to change.
 
 | Step | What it does |
 |---|---|
-| `Prerequisites` | Installs `powershell-yaml`, offers the optional modules, unblocks files from a zip download, checks the execution policy and downloads the Microsoft Win32 Content Prep Tool (`IntuneWinAppUtil.exe`). |
+| `Prerequisites` | Installs `powershell-yaml`, offers the optional modules, unblocks files from a zip download, checks that you can change every file in the Yardstick folder, checks the execution policy and downloads the Microsoft Win32 Content Prep Tool (`IntuneWinAppUtil.exe`). |
 | `Preferences` | Creates `Local\preferences.yaml` from `Config\Preferences.example.yaml`, creates the working folders, and asks for the app owner, the minimum Windows version and the optional Backup and SoftwareDropbox folders. |
 | `AppRegistration` | Creates an Entra app registration called Yardstick, grants it the [Graph permissions](#microsoft-graph-permissions), creates a client secret and stores it in Windows Credential Manager. Or stores the details of an app you already have. |
 | `IntuneDefaults` | Picks the scope tags for new apps and a test group that receives every new version as Available. |
@@ -71,6 +75,30 @@ Run a single step with `-Step`, for example to renew the client secret:
 ```
 
 `Get-Help .\Install-Yardstick.ps1 -Full` lists every parameter.
+
+### Administrator rights
+
+Run the installer as yourself, from a normal PowerShell window. Yardstick runs
+without administrator rights, and a file created from an elevated window belongs to
+the Administrators group: you can read it afterwards, but not change it, so later runs
+fail to update their logs, working folders or preferences.
+
+A few changes do need administrator rights:
+
+- giving you back control of files in the Yardstick folder that an elevated session
+  created (see [Troubleshooting](#troubleshooting))
+- turning off Outlook's programmatic access warnings (`Email` step)
+- creating the scheduled task, on computers that only let administrators create a task
+  that runs while nobody is signed in (`ScheduledTask` step)
+
+The installer collects these and makes them together at the end, before `Verify`, so
+Windows asks for administrator rights once. A standard user enters an administrator's
+name and password at that prompt. If you decline, the summary lists what was not done;
+run the step again later.
+
+There is one exception: if the installer cannot write to the Yardstick folder itself,
+`Local` or `Tools`, the following steps would fail, so it asks straight away in the
+`Prerequisites` step. A run that also needs one of the other changes then asks twice.
 
 ### Scripted installs
 
@@ -241,8 +269,10 @@ Things to know:
   account's password.
 - It must run as the account that stored the Intune credentials (see
   [Where the credentials are kept](#where-the-credentials-are-kept)).
-- Creating a task can need an elevated PowerShell. If Windows refuses, run PowerShell
-  as administrator and run `.\Install-Yardstick.ps1 -Step ScheduledTask` again.
+- Some computers only let administrators create a task that runs while nobody is
+  signed in. The installer then creates it with administrator rights at the end of
+  setup (see [Administrator rights](#administrator-rights)). The task still runs as
+  your account, without administrator rights.
 - If Yardstick is on a network share, the task account needs access to it, and must use
   the UNC path; mapped drive letters are not available to scheduled tasks.
 - Use SMTP rather than Outlook for email.
@@ -261,7 +291,8 @@ The health check reports OK, Warn or Fail for:
 
 - PowerShell version and modules
 - `Local\preferences.yaml`
-- that the working folders exist and are writable
+- that the working folders exist and are writable, and that the account can change
+  every file in the Yardstick folder
 - the stored Intune credential, the secret's expiry, sign-in, the granted Graph
   permissions and a test call to Intune
 - `IntuneWinAppUtil.exe`
@@ -331,3 +362,13 @@ minutes to reach the token. Wait, then run `.\Test-YardstickSetup.ps1` again.
 **Scripts are blocked or "not digitally signed"** - files from a zip download are
 marked as coming from the internet. The installer's `Prerequisites` step unblocks them,
 or run `Get-ChildItem -Recurse | Unblock-File` in the Yardstick folder.
+
+**"Run the installer from a normal PowerShell window"** - the installer was started
+with **Run as administrator**. Close that window and run it from a normal one; it asks
+for administrator rights itself when a step needs them.
+
+**"Access to the path ... is denied" for a log or working file** - setup or Yardstick
+was once run as administrator, and the files it created belong to the Administrators
+group. `.\Test-YardstickSetup.ps1` lists them under Permissions. Run
+`.\Install-Yardstick.ps1 -Step Prerequisites` and accept the administrator prompt: it
+gives your account full control of the Yardstick folder and everything in it.

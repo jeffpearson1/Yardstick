@@ -21,7 +21,7 @@ You need Windows 10/11 (or Windows Server 2019+), [PowerShell 7](https://aka.ms/
    git clone https://github.com/jeffpearson1/Yardstick.git
    cd Yardstick
    ```
-2. **Run the installer** from PowerShell 7:
+2. **Run the installer** from PowerShell 7, in a normal window (not **Run as administrator**), as the account that will run Yardstick:
    ```powershell
    .\Install-Yardstick.ps1
    ```

@@ -22,12 +22,20 @@ sensible default:
 Every step checks what is already in place, so the script is safe to run again -
 for example after a git pull, or to change one setting with -Step.
 
+Run it from a normal PowerShell window, as the user who will run Yardstick, not
+with "Run as administrator": Yardstick runs without administrator rights, and
+files created from an elevated window would belong to the Administrators group.
+The changes that need administrator rights - turning off Outlook's prompts,
+creating the scheduled task, and fixing files an earlier elevated run left
+behind - are collected and made together at the end, so Windows asks once.
+
 .PARAMETER Step
 Run only these steps. By default every step runs in order.
 
 .PARAMETER NonInteractive
 Never prompt. Values come from parameters, the existing preferences file, or the
-built-in defaults; steps that need missing information are skipped.
+built-in defaults; steps that need missing information are skipped. Windows
+still asks for administrator rights if a step needs them.
 
 .PARAMETER UseExistingApp
 Store the details of an existing app registration instead of creating one.
@@ -96,8 +104,8 @@ Use TLS for SMTP.
 .PARAMETER DisableOutlookPrompts
 With outlook, turn off Outlook's programmatic access warnings for this computer
 (ObjectModelGuard = 2) so it sends without asking for approval. Applies to every
-program and needs an elevated session. Without it, -NonInteractive leaves the
-setting alone.
+program and needs administrator rights, which Windows asks for at the end of
+setup. Without it, -NonInteractive leaves the setting alone.
 
 .PARAMETER TaskCredential
 Account the scheduled task runs as. Must be the account running this script,
@@ -203,12 +211,27 @@ $Global:LogFile = 'YInstall.log'
 $calledFromModule = [bool](Get-PSCallStack | Where-Object { $_.InvocationInfo.MyCommand.ModuleName -eq 'Yardstick' })
 Import-Module (Join-Path $Root 'Yardstick.psd1') -Force:(-not $calledFromModule)
 
+# Checked before anything is written, the log included.
+if (Test-YardstickUacElevated) {
+    Write-Host ''
+    Write-Host 'Run the installer from a normal PowerShell window, not one started with "Run as administrator".' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host 'Yardstick runs without administrator rights. Files the installer created from this'
+    Write-Host 'window would belong to the Administrators group, and Yardstick could not change them.'
+    Write-Host 'The few steps that need administrator rights ask for them, once, at the end of setup.'
+    Write-Host ''
+    exit 1
+}
+
 Write-Log -Init
 Set-YardstickSetupMode -NonInteractive:$NonInteractive
 
 $AllSteps = @('Prerequisites', 'Preferences', 'AppRegistration', 'IntuneDefaults', 'Email', 'ScheduledTask', 'Verify')
 $Selected = if ($Step) { @($AllSteps | Where-Object { $Step -contains $_ }) } else { $AllSteps }
 $Summary = [System.Collections.Generic.List[object]]::new()
+$ElevatedActions = [System.Collections.Generic.List[object]]::new()
+# What a step returns when its change is waiting in $ElevatedActions.
+$PendingResult = 'Waiting for administrator rights'
 
 
 #region Helpers
@@ -276,6 +299,49 @@ function Add-Summary {
     $Summary.Add([pscustomobject]@{ Step = $Name; Result = $Result; Detail = $Detail })
 }
 
+function Add-ElevatedAction {
+    <#
+    Queues a change that needs administrator rights. Invoke-ElevatedActions makes
+    every queued change in one elevated process, so Windows asks once.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Description,
+        [Parameter(Mandatory)][string]$DoneMessage,
+        [Parameter(Mandatory)][hashtable]$Action
+    )
+    $ElevatedActions.Add([pscustomobject]@{ Step = $Name; Description = $Description; DoneMessage = $DoneMessage; Action = $Action })
+}
+
+function Invoke-ElevatedActions {
+    if ($ElevatedActions.Count -eq 0) { return }
+    Write-YardstickSetupStep 'Administrator rights'
+    Write-Host 'Windows will ask for administrator rights once, to:' -ForegroundColor DarkGray
+    foreach ($entry in $ElevatedActions) { Write-Host "    $($entry.Description)" -ForegroundColor DarkGray }
+
+    try {
+        $results = @(Invoke-YardstickElevatedSetup -ProjectRoot $Root -Action @($ElevatedActions | ForEach-Object { $_.Action }))
+    } catch {
+        $message = $_.Exception.Message
+        $results = @($ElevatedActions | ForEach-Object { [pscustomobject]@{ Success = $false; Message = $message } })
+    }
+    for ($i = 0; $i -lt $ElevatedActions.Count; $i++) {
+        $entry = $ElevatedActions[$i]
+        $result = $results[$i]
+        if ($result.Success) {
+            Write-YardstickSetupStatus $entry.DoneMessage -Level OK
+        } else {
+            Write-YardstickSetupStatus "$($entry.Description) failed: $($result.Message)" -Level Fail
+            Write-Log "Install step $($entry.Step) failed with administrator rights: $($result.Message)"
+        }
+        foreach ($row in @($Summary | Where-Object { $_.Step -eq $entry.Step -and $_.Result -eq $PendingResult })) {
+            $row.Result = if ($result.Success) { 'Done' } else { 'Failed' }
+            $row.Detail = $result.Message
+        }
+    }
+    $ElevatedActions.Clear()
+}
+
 #endregion
 
 
@@ -317,6 +383,38 @@ function Invoke-PrerequisitesStep {
         Write-YardstickSetupStatus "Unblocked $unblocked downloaded file(s)." -Level OK
     }
 
+    $waiting = $false
+    $unwritable = @(Get-YardstickUnwritablePath -ProjectRoot $Root)
+    if ($unwritable.Count -eq 0) {
+        Write-YardstickSetupStatus "$env:USERNAME can change every file in the Yardstick folder." -Level OK
+    } else {
+        Write-YardstickSetupStatus "$env:USERNAME cannot change $($unwritable.Count) item(s) in the Yardstick folder, probably created from an elevated session (for example $($unwritable[0]))." -Level Warn
+        Add-ElevatedAction -Name 'Prerequisites' -Description "Give $env:USERDOMAIN\$env:USERNAME full control of $Root" `
+            -DoneMessage "$env:USERNAME can now change every file in the Yardstick folder." -Action @{
+                Type = 'GrantFolderAccess'
+                Path = $Root
+                Sid  = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+                Item = $unwritable
+            }
+        # Later steps write to the folder itself, Local and Tools, so those cannot
+        # wait for the end of setup like everything else.
+        $needed = @((Split-Path -Parent (Get-YardstickPreferencesPath -ProjectRoot $Root)), [string](Get-SetupPreferences).Tools) |
+            Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') + '\' }
+        $blocking = @($unwritable | Where-Object {
+                $item = $_
+                $item -eq $Root -or @($needed | Where-Object { "$item\".StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+            })
+        if ($blocking.Count -gt 0) {
+            Invoke-ElevatedActions
+            if (@(Get-YardstickUnwritablePath -ProjectRoot $Root).Count -gt 0) {
+                throw "Setup cannot write to the Yardstick folder. Give $env:USERNAME full control of $Root, then run .\Install-Yardstick.ps1 again."
+            }
+        } else {
+            Write-YardstickSetupStatus 'They will be fixed at the end of setup.' -Level Info
+            $waiting = $true
+        }
+    }
+
     if (Test-YardstickExecutionPolicy) {
         Write-YardstickSetupStatus "Execution policy ($(Get-ExecutionPolicy)) allows Yardstick's scripts." -Level OK
     } else {
@@ -343,6 +441,7 @@ function Invoke-PrerequisitesStep {
     foreach ($e in $check.Errors) { Write-YardstickSetupStatus $e -Level Fail }
     foreach ($w in $check.Warnings | Where-Object { $_ -notmatch 'Optional PowerShell module' }) { Write-YardstickSetupStatus $w -Level Warn }
     if (-not $check.IsValid) { throw 'Some required prerequisites are missing (see above).' }
+    if ($waiting) { return $PendingResult }
     'Done'
 }
 
@@ -597,6 +696,7 @@ function Invoke-EmailStep {
 
     $path = Get-SetupPreferencesPath
     $prefs = Get-SetupPreferences
+    $promptPending = $false
 
     $method = $EmailMethod
     if (-not $method) {
@@ -670,7 +770,7 @@ function Invoke-EmailStep {
         if (-not (Test-OutlookAvailability)) {
             Write-YardstickSetupStatus 'Outlook is not available on this computer, so reports cannot be sent until it is.' -Level Warn
         } elseif (Test-YardstickOutlookPromptExpected) {
-            Invoke-OutlookPromptSetup
+            $promptPending = Invoke-OutlookPromptSetup
         }
     }
 
@@ -679,6 +779,9 @@ function Invoke-EmailStep {
     Write-YardstickSetupStatus "Email reports will be sent by $method." -Level OK
 
     if (-not $NonInteractive -and (Read-YardstickSetupYesNo -Prompt 'Send a sample report now to check it works?' -Default $true)) {
+        if ($promptPending) {
+            Write-Host 'The Outlook warnings are turned off at the end of setup, so Outlook may ask you to allow this one.' -ForegroundColor DarkGray
+        }
         try {
             & (Join-Path $Root 'Test-EmailNotification.ps1') -Send | Out-Null
         } catch {
@@ -690,6 +793,7 @@ function Invoke-EmailStep {
             $Global:LogFile = 'YInstall.log'
         }
     }
+    if ($promptPending) { return $PendingResult }
     'Done'
 }
 
@@ -697,22 +801,29 @@ function Invoke-EmailStep {
 function Invoke-OutlookPromptSetup {
     # Outlook asks for approval before a program sends mail whenever it cannot
     # confirm the antivirus is up to date - always on Windows Server, which has no
-    # Security Center.
+    # Security Center. Returns $true when the change is waiting for administrator rights.
     Write-YardstickSetupStatus 'Outlook will ask you to approve every email Yardstick sends from this computer.' -Level Warn
     $disable = [bool]$DisableOutlookPrompts
     if (-not $disable -and -not $NonInteractive) {
         Write-Host 'Yardstick can turn off these warnings. The setting applies to every program on this' -ForegroundColor DarkGray
-        Write-Host 'computer, not only Yardstick, and needs an administrator PowerShell.' -ForegroundColor DarkGray
+        Write-Host 'computer, not only Yardstick, and needs administrator rights, which Windows asks for' -ForegroundColor DarkGray
+        Write-Host 'at the end of setup.' -ForegroundColor DarkGray
         $disable = Read-YardstickSetupYesNo -Prompt "Turn off Outlook's programmatic access warnings?" -Default $true
     }
-    if (-not $disable) { return }
+    if (-not $disable) { return $false }
 
+    $done = 'Outlook will no longer ask before Yardstick sends email. Restart Outlook if it is open.'
+    if (-not (Test-YardstickAdministrator)) {
+        Add-ElevatedAction -Name 'Email' -Description "Turn off Outlook's programmatic access warnings" -DoneMessage $done -Action @{ Type = 'DisableOutlookPrompts' }
+        return $true
+    }
     try {
-        Set-YardstickOutlookObjectModelGuard
-        Write-YardstickSetupStatus 'Outlook will no longer ask before Yardstick sends email. Restart Outlook if it is open.' -Level OK
+        Set-YardstickOutlookObjectModelGuard | Out-Null
+        Write-YardstickSetupStatus $done -Level OK
     } catch {
         Write-YardstickSetupStatus "$($_.Exception.Message) Rerun: .\Install-Yardstick.ps1 -Step Email -EmailMethod outlook -DisableOutlookPrompts" -Level Warn
     }
+    $false
 }
 
 
@@ -773,16 +884,25 @@ function Invoke-ScheduledTaskStep {
         Write-YardstickSetupStatus "The task will run as $taskUser, but the Intune credentials are stored for $env:USERNAME. Sign in as $taskUser and run .\Install-Yardstick.ps1 -Step AppRegistration as well." -Level Warn
     }
 
+    $what = if ($group) { "recipe group '$group'" } else { 'all recipes' }
+    $done = "Scheduled task \Yardstick\Yardstick runs $what daily at $($at.ToString('HH:mm')) as $taskUser."
     try {
         Register-YardstickScheduledTask -ProjectRoot $Root -At $at -Credential $credential -Group $group | Out-Null
     } catch {
-        if ($_.Exception.Message -match 'Access is denied|0x80070005') {
-            throw 'Windows refused to create the task. Run PowerShell as administrator and run .\Install-Yardstick.ps1 -Step ScheduledTask again.'
+        # Some computers only let administrators create a task that runs while nobody
+        # is signed in. Try again with administrator rights at the end of setup.
+        if ($_.Exception.Message -notmatch 'Access is denied|0x80070005|0x80070569|logon type' -or (Test-YardstickAdministrator)) { throw }
+        Write-YardstickSetupStatus 'Windows only lets administrators create this task. It will be created at the end of setup.' -Level Info
+        Add-ElevatedAction -Name 'ScheduledTask' -Description 'Create the scheduled task \Yardstick\Yardstick' -DoneMessage $done -Action @{
+            Type        = 'RegisterScheduledTask'
+            ProjectRoot = $Root
+            At          = $at.ToString('HH:mm')
+            Group       = $group
+            Credential  = $credential
         }
-        throw
+        return $PendingResult
     }
-    $what = if ($group) { "recipe group '$group'" } else { 'all recipes' }
-    Write-YardstickSetupStatus "Scheduled task \Yardstick\Yardstick runs $what daily at $($at.ToString('HH:mm')) as $taskUser." -Level OK
+    Write-YardstickSetupStatus $done -Level OK
     'Done'
 }
 
@@ -808,6 +928,8 @@ Write-Host "Folder: $Root" -ForegroundColor DarkGray
 
 $stopped = $false
 foreach ($name in $Selected) {
+    # The health check should see the finished setup.
+    if ($name -eq 'Verify') { Invoke-ElevatedActions }
     if ($stopped) { Add-Summary $name 'Not run' ''; continue }
     try {
         $result = & "Invoke-${name}Step"
@@ -820,6 +942,7 @@ foreach ($name in $Selected) {
         if ($name -in @('Prerequisites', 'Preferences')) { $stopped = $true }
     }
 }
+Invoke-ElevatedActions
 
 Write-YardstickSetupStep 'Summary'
 foreach ($row in $Summary) {
