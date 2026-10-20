@@ -213,6 +213,32 @@ Describe "Install-YardstickModule" {
         Install-YardstickModule -Name 'demo' | Should -BeFalse
         Should -Invoke Write-YardstickSetupStatus -ModuleName YardstickSetup -Times 1 -ParameterFilter { $Level -eq 'Fail' -and $Message -match 'psresource failed' -and $Message -match 'no repositories' }
     }
+
+    It "Installs over an older version with -Update, allowing prereleases with -Prerelease" {
+        $Global:YardstickTestModuleInstalled = $true
+        Mock Install-PSResource { } -ModuleName YardstickSetup
+        Mock Install-Module { throw 'not expected' } -ModuleName YardstickSetup
+        Install-YardstickModule -Name 'demo' -Prerelease -Update | Should -BeTrue
+        Should -Invoke Install-PSResource -ModuleName YardstickSetup -Times 1 -ParameterFilter { $Prerelease }
+    }
+
+    It "Passes -AllowPrerelease to the Install-Module fallback" {
+        Mock Install-PSResource { throw 'repository not found' } -ModuleName YardstickSetup
+        Mock Install-Module { $Global:YardstickTestModuleInstalled = $true } -ModuleName YardstickSetup
+        Install-YardstickModule -Name 'demo' -Prerelease | Should -BeTrue
+        Should -Invoke Install-Module -ModuleName YardstickSetup -Times 1 -ParameterFilter { $AllowPrerelease }
+    }
+
+    It "Passes -SkipPublisherCheck to the Install-Module fallback only when asked" {
+        Mock Install-PSResource { throw 'repository not found' } -ModuleName YardstickSetup
+        Mock Install-Module { $Global:YardstickTestModuleInstalled = $true } -ModuleName YardstickSetup
+        Install-YardstickModule -Name 'demo' | Should -BeTrue
+        Should -Invoke Install-Module -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { -not $SkipPublisherCheck }
+
+        $Global:YardstickTestModuleInstalled = $false
+        Install-YardstickModule -Name 'demo' -SkipPublisherCheck | Should -BeTrue
+        Should -Invoke Install-Module -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { $SkipPublisherCheck }
+    }
 }
 
 

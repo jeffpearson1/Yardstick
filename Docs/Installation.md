@@ -31,8 +31,14 @@ installer does, how to do each part by hand, and how to keep an installation hea
 
 Optional:
 
-- `Selenium` and `TUN.CredentialManager`, plus Firefox, for the few recipes that sign in
-  to a vendor portal through a browser.
+- `Selenium` and `TUN.CredentialManager`, plus Firefox, for the few recipes that drive a
+  browser or sign in to a vendor portal. The recipes need Selenium 4.0.0-preview3 or later,
+  which is only published as a prerelease; the installer installs it with prerelease
+  versions allowed (`Install-PSResource Selenium -Prerelease`).
+- `Pester` 5 or later, to run the unit tests in `Tests\Unit`. Windows includes Pester
+  3.4, which is too old. The installer offers to install a current version alongside
+  it; by hand, run `Install-PSResource Pester` or
+  `Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
 - `Microsoft.Graph.Authentication`. If it is installed, the installer signs you in
   through the browser; otherwise it uses a device code.
 

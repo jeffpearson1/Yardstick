@@ -80,11 +80,13 @@ function Test-Prerequisites {
         }
     }
 
-    # Optional PowerShell modules (warn only -- needed for Adobe/SSO recipes)
-    $optionalModules = @('Selenium', 'TUN.CredentialManager')
-    foreach ($mod in $optionalModules) {
-        if (-not (Get-Module -ListAvailable -Name $mod)) {
-            $warnings.Add("Optional PowerShell module '$mod' is not installed. Adobe/SSO recipes will not work without it.")
+    # Optional PowerShell modules (warn only). Pester is left out: recipes never
+    # use it, so a missing copy shouldn't be reported on every run.
+    foreach ($mod in (Get-YardstickOptionalModule | Where-Object UsedByRecipes)) {
+        if (-not $mod.InstalledVersion) {
+            $warnings.Add("Optional PowerShell module '$($mod.Name)' is not installed. It is needed for $($mod.Purpose).")
+        } elseif (-not $mod.IsCurrent) {
+            $warnings.Add("Optional PowerShell module '$($mod.Name)' $($mod.InstalledVersion) is installed, but recipes need $($mod.MinimumVersion) or later. Run .\Install-Yardstick.ps1 -Step Prerequisites to update it.")
         }
     }
 
@@ -120,6 +122,55 @@ function Test-Prerequisites {
         IsValid  = ($errors.Count -eq 0)
         Errors   = [string[]]$errors
         Warnings = [string[]]$warnings
+    }
+}
+
+
+function Get-YardstickOptionalModule {
+    <#
+    .SYNOPSIS
+    Lists the optional PowerShell modules and whether a usable version is installed.
+
+    .DESCRIPTION
+    The browser-automation recipes call Start-SeDriver and Get-SeElement, which
+    only exist in Selenium 4, and Selenium 4 is only published as a prerelease.
+    A module's Version property drops the prerelease label (every 4.0.0 preview
+    reports 4.0.0), so versions are compared as semantic versions built from
+    Version and PrivateData.PSData.Prerelease.
+
+    Pester runs the unit tests. Windows ships Pester 3.4, signed by Microsoft
+    rather than the Pester project, so Install-Module refuses a newer version
+    unless the publisher check is skipped.
+
+    .OUTPUTS
+    One object per module: Name, Purpose, UsedByRecipes, MinimumVersion (a
+    semantic version string, or $null for any version), Prerelease (install with
+    prerelease versions allowed), SkipPublisherCheck, InstalledVersion (the
+    newest installed, or $null) and IsCurrent.
+    #>
+    $definitions = @(
+        @{ Name = 'Selenium'; Purpose = 'recipes that drive a browser'; UsedByRecipes = $true; MinimumVersion = '4.0.0-preview3'; Prerelease = $true; SkipPublisherCheck = $false }
+        @{ Name = 'TUN.CredentialManager'; Purpose = 'recipes that sign in to a vendor portal'; UsedByRecipes = $true; MinimumVersion = $null; Prerelease = $false; SkipPublisherCheck = $false }
+        @{ Name = 'Pester'; Purpose = 'running the unit tests in Tests\Unit'; UsedByRecipes = $false; MinimumVersion = '5.0.0'; Prerelease = $false; SkipPublisherCheck = $true }
+    )
+    foreach ($definition in $definitions) {
+        $installed = @(Get-Module -ListAvailable -Name $definition.Name | ForEach-Object {
+            $label = $_.PrivateData.PSData.Prerelease
+            $text = "$($_.Version.Major).$($_.Version.Minor).$([Math]::Max($_.Version.Build, 0))"
+            if ($label) { $text += "-$label" }
+            [System.Management.Automation.SemanticVersion]$text
+        } | Sort-Object -Descending)
+        $newest = if ($installed.Count -gt 0) { $installed[0] } else { $null }
+        [PSCustomObject]@{
+            Name               = $definition.Name
+            Purpose            = $definition.Purpose
+            UsedByRecipes      = $definition.UsedByRecipes
+            MinimumVersion     = $definition.MinimumVersion
+            Prerelease         = $definition.Prerelease
+            SkipPublisherCheck = $definition.SkipPublisherCheck
+            InstalledVersion   = if ($newest) { $newest.ToString() } else { $null }
+            IsCurrent          = [bool]($newest -and (-not $definition.MinimumVersion -or $newest -ge [System.Management.Automation.SemanticVersion]$definition.MinimumVersion))
+        }
     }
 }
 

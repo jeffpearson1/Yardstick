@@ -292,12 +292,22 @@ function Invoke-PrerequisitesStep {
         throw "The powershell-yaml module is required. Install it with: Install-Module powershell-yaml -Scope CurrentUser"
     }
 
-    $optional = @('Selenium', 'TUN.CredentialManager') | Where-Object { -not (Get-Module -ListAvailable -Name $_) }
-    if ($optional) {
-        Write-YardstickSetupStatus "Optional modules not installed: $($optional -join ', '). They are only needed for Adobe recipes that sign in through a browser." -Level Info
-        if (Read-YardstickSetupYesNo -Prompt 'Install them now?' -Default $false) {
-            foreach ($name in $optional) {
-                if (Install-YardstickModule -Name $name) { Write-YardstickSetupStatus "$name installed." -Level OK }
+    # Asked one at a time: they serve different purposes (Pester is only for
+    # running the unit tests), so a yes to one shouldn't install the others.
+    foreach ($module in @(Get-YardstickOptionalModule | Where-Object { -not $_.IsCurrent })) {
+        if ($module.InstalledVersion) {
+            $state = "$($module.InstalledVersion) is installed, but $($module.MinimumVersion) or later is needed"
+        } else {
+            $state = 'not installed'
+        }
+        Write-YardstickSetupStatus "Optional module $($module.Name) ($state) is used for $($module.Purpose)." -Level Info
+        if (Read-YardstickSetupYesNo -Prompt "Install $($module.Name) now?" -Default $false) {
+            $installed = Install-YardstickModule -Name $module.Name -Prerelease:$module.Prerelease -Update:([bool]$module.InstalledVersion) -SkipPublisherCheck:$module.SkipPublisherCheck
+            $now = Get-YardstickOptionalModule | Where-Object Name -eq $module.Name
+            if ($installed -and $now.IsCurrent) {
+                Write-YardstickSetupStatus "$($module.Name) $($now.InstalledVersion) installed." -Level OK
+            } elseif ($installed) {
+                Write-YardstickSetupStatus "$($module.Name) is still $($now.InstalledVersion); $($module.MinimumVersion) or later is needed." -Level Warn
             }
         }
     }

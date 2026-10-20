@@ -249,11 +249,28 @@ function Install-YardstickModule {
     .SYNOPSIS
     Installs a PowerShell Gallery module for the current user when it is missing.
     Returns $true when the module is available afterwards.
+
+    .PARAMETER Prerelease
+    Allow prerelease versions, so the newest prerelease is installed when it is
+    newer than the newest stable release.
+
+    .PARAMETER Update
+    Install even when some version is already installed, for a module whose
+    installed version is too old. The new version goes in alongside it.
+
+    .PARAMETER SkipPublisherCheck
+    Let the Install-Module fallback replace a module whose installed copy has a
+    different publisher, such as the Pester that ships with Windows.
     #>
     [CmdletBinding(SupportsShouldProcess)]
-    param([Parameter(Mandatory)][string]$Name)
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [switch]$Prerelease,
+        [switch]$Update,
+        [switch]$SkipPublisherCheck
+    )
 
-    if (Get-Module -ListAvailable -Name $Name) { return $true }
+    if (-not $Update -and (Get-Module -ListAvailable -Name $Name)) { return $true }
     if (-not $PSCmdlet.ShouldProcess($Name, 'Install for the current user from the PowerShell Gallery')) { return $false }
     # PowerShell 7.4+ ships PSResourceGet, which keeps its own repository list; on
     # some machines PowerShellGet's Install-Module has no PSGallery registered, so
@@ -261,15 +278,16 @@ function Install-YardstickModule {
     $errors = @()
     if (Get-Command -Name Install-PSResource -ErrorAction SilentlyContinue) {
         try {
-            Install-PSResource -Name $Name -Scope CurrentUser -TrustRepository -Quiet -ErrorAction Stop
+            Install-PSResource -Name $Name -Scope CurrentUser -TrustRepository -Prerelease:$Prerelease -Quiet -ErrorAction Stop
             if (Get-Module -ListAvailable -Name $Name) { return $true }
         } catch {
             $errors += $_.Exception.Message
         }
     }
     try {
-        # -Force skips the "untrusted repository" prompt for PSGallery.
-        Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        # -Force skips the "untrusted repository" prompt for PSGallery, and installs
+        # alongside an older version instead of stopping at it.
+        Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -AllowPrerelease:$Prerelease -SkipPublisherCheck:$SkipPublisherCheck -ErrorAction Stop
         if (Get-Module -ListAvailable -Name $Name) { return $true }
     } catch {
         $errors += $_.Exception.Message

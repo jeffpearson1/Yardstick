@@ -44,7 +44,7 @@ A failed run then raises an error instead of exiting, and a stuck recipe is logg
 
 ### Dependencies
 
-The only required PowerShell Gallery module is [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml), which the installer installs. Selenium-Powershell and TUN.CredentialManager are optional, for recipes that use browser automation or stored vendor credentials. Yardstick calls Microsoft Graph directly and has no IntuneWin32App or MSAL.PS dependency.
+The only required PowerShell Gallery module is [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml), which the installer installs. Selenium-Powershell and TUN.CredentialManager are optional, for recipes that use browser automation or stored vendor credentials. The browser recipes need Selenium 4.0.0-preview3 or later, a prerelease, which the installer offers to install. Running the unit tests needs Pester 5 or later (Windows only includes 3.4), which the installer also offers. Yardstick calls Microsoft Graph directly and has no IntuneWin32App or MSAL.PS dependency.
 
 The official Microsoft Win32 Content Prep Tool is downloaded on first use from a commit-pinned Microsoft release and verified with SHA-256 before execution.
 
