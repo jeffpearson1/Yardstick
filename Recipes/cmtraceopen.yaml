@@ -1,0 +1,28 @@
+# The x64 MSI installs both the full and Lite editions to Program Files\CMTrace Open.
+# DISABLEUPDATECHECKS=1 is the vendor-documented MSI property that writes the
+# HKLM\Software\CMTrace Open\DisableUpdateChecks policy so users are never offered
+# self-updates; Yardstick owns updates. The vendor intentionally leaves that policy
+# value in place after uninstall.
+url: https://github.com/adamgell/cmtraceopen
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "CMTrace-Open_\d+(\.\d+){2}_x64\.msi$"
+  $versionRegex = "\d+(\.\d+){2}"
+  $Script:downloader = [GithubDownloader]::new($url, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.filename
+installScript: msiexec /i <filename> /qn /norestart DISABLEUPDATECHECKS=1
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: cmtraceopen.png
+id: cmtraceopen
+displayName: CMTrace Open
+publisher: Adam Gell
+description: Open-source replacement for Microsoft's CMTrace log viewer with built-in Intune, Autopilot ESP, DSRegCmd, and event log diagnostics. Includes both the full and Lite editions.
+fileType: msi
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

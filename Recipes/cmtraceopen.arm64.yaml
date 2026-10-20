@@ -1,0 +1,13 @@
+base: cmtraceopen
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "CMTrace-Open_\d+(\.\d+){2}_arm64\.msi$"
+  $versionRegex = "\d+(\.\d+){2}"
+  $Script:downloader = [GithubDownloader]::new($url, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.filename
+id: cmtraceopen.arm64
+displayName: CMTrace Open (ARM64)
+architecture: arm64
