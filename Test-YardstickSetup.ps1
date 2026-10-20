@@ -297,6 +297,11 @@ if ($prefs.emailNotificationEnabled -ne $true) {
     } else {
         if (Test-OutlookAvailability) {
             Add-Check 'Outlook' OK 'Outlook is available.'
+            if (Test-YardstickOutlookPromptExpected) {
+                Add-Check 'Outlook prompts' Warn 'Outlook will ask you to approve every email Yardstick sends. Run .\Install-Yardstick.ps1 -Step Email as administrator to turn the prompts off.'
+            } else {
+                Add-Check 'Outlook prompts' OK 'Outlook sends without asking for approval.'
+            }
         } else {
             Add-Check 'Outlook' Fail 'Email is set to use Outlook, but Outlook is not available. Install Outlook or switch to SMTP with .\Install-Yardstick.ps1 -Step Email.'
         }

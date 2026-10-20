@@ -55,6 +55,7 @@ Describe "Test-YardstickSetup.ps1" {
         Mock Invoke-RestMethod { [pscustomobject]@{ value = @() } }
         Mock Get-ScheduledTask { $null }
         Mock Test-OutlookAvailability { $true }
+        Mock Test-YardstickOutlookPromptExpected { $false }
     }
 
     It "Fails with a pointer to the installer when there is no preferences file" {
@@ -138,6 +139,15 @@ Describe "Test-YardstickSetup.ps1" {
         Set-TestPreferences "emailNotificationEnabled: true`nemailDeliveryMethod: outlook`nemailRecipient: 'a@contoso.com'"
         Mock Test-OutlookAvailability { $false }
         ((Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Outlook').Level | Should -Be 'Fail'
+    }
+
+    It "Warns when Outlook will ask to approve each email" {
+        Set-TestPreferences "emailNotificationEnabled: true`nemailDeliveryMethod: outlook`nemailRecipient: 'a@contoso.com'"
+        ((Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Outlook prompts').Level | Should -Be 'OK'
+        Mock Test-YardstickOutlookPromptExpected { $true }
+        $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Outlook prompts'
+        $check.Level | Should -Be 'Warn'
+        $check.Message | Should -Match 'Install-Yardstick\.ps1 -Step Email'
     }
 
     It "Warns when the scheduled task runs as another account or another folder" {
