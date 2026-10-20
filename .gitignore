@@ -33,6 +33,7 @@
 /Recipes/crowdstrikefalcon.yaml
 /Recipes/Incomplete/
 /Recipes/Disabled/*
+/Docs/ServiceNow*
 
 # Active recipe development is local until explicitly promoted
 /Recipes/Development/*
