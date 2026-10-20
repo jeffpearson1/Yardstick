@@ -81,4 +81,58 @@ Describe "Test-Prerequisites" {
         $result = Test-Prerequisites -ToolsPath $script:toolsPath
         $result.Errors | Where-Object { $_ -match "HttpClient" } | Should -BeNullOrEmpty
     }
+
+    It "Warns when only an older Selenium is installed" {
+        Mock -ModuleName YardstickSupport Get-YardstickOptionalModule {
+            [pscustomobject]@{ Name = 'Selenium'; Purpose = 'recipes that drive a browser'; UsedByRecipes = $true; MinimumVersion = '4.0.0-preview3'; Prerelease = $true; InstalledVersion = '3.0.1'; IsCurrent = $false }
+        }
+        $result = Test-Prerequisites -ToolsPath $script:toolsPath
+        $result.Warnings | Where-Object { $_ -match "Selenium' 3\.0\.1 is installed.*4\.0\.0-preview3" } | Should -Not -BeNullOrEmpty
+    }
+
+    It "Does not warn about modules recipes don't use, such as Pester" {
+        Mock -ModuleName YardstickSupport Get-YardstickOptionalModule {
+            [pscustomobject]@{ Name = 'Pester'; Purpose = 'running the unit tests'; UsedByRecipes = $false; MinimumVersion = '5.0.0'; InstalledVersion = '3.4.0'; IsCurrent = $false }
+            [pscustomobject]@{ Name = 'TUN.CredentialManager'; Purpose = 'recipes that sign in to a vendor portal'; UsedByRecipes = $true; MinimumVersion = $null; InstalledVersion = $null; IsCurrent = $false }
+        }
+        $result = Test-Prerequisites -ToolsPath $script:toolsPath
+        $result.Warnings | Where-Object { $_ -match "Pester" } | Should -BeNullOrEmpty
+        $result.Warnings | Where-Object { $_ -match "TUN\.CredentialManager' is not installed.*vendor portal" } | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe "Get-YardstickOptionalModule" {
+    It "Treats Selenium as current = <Expected> for installed versions <Installed>" -ForEach @(
+        @{ Installed = @(@{ V = '3.0.1'; P = '' }); Expected = $false }
+        @{ Installed = @(@{ V = '4.0.0'; P = 'preview2' }); Expected = $false }
+        @{ Installed = @(@{ V = '3.0.1'; P = '' }, @{ V = '4.0.0'; P = 'preview3' }); Expected = $true }
+        @{ Installed = @(@{ V = '4.0.0'; P = '' }); Expected = $true }
+        @{ Installed = @(); Expected = $false }
+    ) {
+        $Global:YardstickTestSeleniumVersions = $Installed
+        Mock -ModuleName YardstickSupport Get-Module { }
+        Mock -ModuleName YardstickSupport Get-Module {
+            foreach ($i in $Global:YardstickTestSeleniumVersions) {
+                [pscustomobject]@{ Name = 'Selenium'; Version = [version]$i.V; PrivateData = @{ PSData = @{ Prerelease = $i.P } } }
+            }
+        } -ParameterFilter { $Name -eq 'Selenium' }
+
+        $selenium = Get-YardstickOptionalModule | Where-Object Name -eq 'Selenium'
+        $selenium.IsCurrent | Should -Be $Expected
+        $selenium.Prerelease | Should -BeTrue
+        Remove-Variable -Name YardstickTestSeleniumVersions -Scope Global
+    }
+
+    It "Treats the Pester that ships with Windows as too old and skips its publisher check" {
+        Mock -ModuleName YardstickSupport Get-Module { }
+        Mock -ModuleName YardstickSupport Get-Module {
+            [pscustomobject]@{ Name = 'Pester'; Version = [version]'3.4.0'; PrivateData = $null }
+        } -ParameterFilter { $Name -eq 'Pester' }
+
+        $pester = Get-YardstickOptionalModule | Where-Object Name -eq 'Pester'
+        $pester.InstalledVersion | Should -Be '3.4.0'
+        $pester.IsCurrent | Should -BeFalse
+        $pester.SkipPublisherCheck | Should -BeTrue
+        $pester.UsedByRecipes | Should -BeFalse
+    }
 }
