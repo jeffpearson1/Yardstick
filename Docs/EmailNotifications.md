@@ -59,7 +59,9 @@ Each run sends up to two emails. The **admin** email goes to `adminEmailRecipien
 
 ### Outlook (default)
 
-The report is created as an Outlook mail item over COM and sent from the profile Outlook is signed into. The header logo is attached inline with a `cid:` reference.
+The report is created as an Outlook mail item over COM and sent from the profile Outlook is signed into. The header logo is attached inline. The HTML refers to it as `cid:<file name>`, and Outlook matches that to the attachment by name. No Content-ID property is set, because reading `Attachment.PropertyAccessor` would raise an Outlook security prompt.
+
+Outlook asks for approval before any program sends mail ("A program is trying to send an e-mail message on your behalf") when it cannot confirm that the antivirus is up to date. It always asks on Windows Server, which has no Security Center to report the antivirus state. `.\Test-YardstickSetup.ps1` warns when this will happen. To turn the prompt off, run `.\Install-Yardstick.ps1 -Step Email` from an administrator PowerShell and accept the offer. That sets `ObjectModelGuard` (DWORD) to `2` under `HKLM\SOFTWARE\Microsoft\Office\16.0\Outlook\Security`, or under `HKLM\SOFTWARE\Wow6432Node\...` for 32-bit Office. In Outlook's Trust Center, this is **Programmatic Access > Never warn me about suspicious activity**. The setting applies to every program on the computer, not only Yardstick. If you would rather not change it, use SMTP delivery instead.
 
 ### SMTP
 
@@ -167,6 +169,9 @@ Tests if Microsoft Outlook COM object is available.
 
 **Returns:** Boolean indicating availability
 
+#### `Test-YardstickOutlookPromptExpected`
+Returns `$true` when Outlook will ask for approval each time Yardstick sends an email. This is the case when `ObjectModelGuard` is `1`, or on Windows Server when it is not `2`. `Set-YardstickOutlookObjectModelGuard` sets it to `2` and needs an elevated session.
+
 #### `Get-YardstickEmailDeliveryMethod`
 Returns the configured `emailDeliveryMethod`, lowercased, or `outlook` when unset.
 
@@ -239,6 +244,10 @@ Comprehensive error handling includes:
    - If the server requires a login, store one with `.\Set-YardstickCredential.ps1 -Smtp`
    - For port 587, set `smtpUseSsl: true`
    - The SMTP credential is readable only by the Windows user that stored it, so store it as the account that runs Yardstick
+
+6. **Outlook asks "A program is trying to send an e-mail message on your behalf" for every report**
+   - Outlook cannot confirm the antivirus is up to date. This always happens on Windows Server.
+   - From an administrator PowerShell, run `.\Install-Yardstick.ps1 -Step Email -EmailMethod outlook -DisableOutlookPrompts`, then restart Outlook. See [Outlook (default)](#outlook-default) for what this changes.
 
 ### Logging
 

@@ -93,6 +93,12 @@ SMTP server port.
 .PARAMETER SmtpUseSsl
 Use TLS for SMTP.
 
+.PARAMETER DisableOutlookPrompts
+With outlook, turn off Outlook's programmatic access warnings for this computer
+(ObjectModelGuard = 2) so it sends without asking for approval. Applies to every
+program and needs an elevated session. Without it, -NonInteractive leaves the
+setting alone.
+
 .PARAMETER TaskCredential
 Account the scheduled task runs as. Must be the account running this script,
 because the stored credentials belong to it.
@@ -159,6 +165,7 @@ param(
     [string]$SmtpServer,
     [int]$SmtpPort,
     [switch]$SmtpUseSsl,
+    [switch]$DisableOutlookPrompts,
 
     [pscredential]$TaskCredential,
     [string]$TaskTime = '03:00',
@@ -652,6 +659,8 @@ function Invoke-EmailStep {
         Set-YardstickPreferenceValue -Path $path -Key 'emailSendFromAddress' -Value $from
         if (-not (Test-OutlookAvailability)) {
             Write-YardstickSetupStatus 'Outlook is not available on this computer, so reports cannot be sent until it is.' -Level Warn
+        } elseif (Test-YardstickOutlookPromptExpected) {
+            Invoke-OutlookPromptSetup
         }
     }
 
@@ -672,6 +681,28 @@ function Invoke-EmailStep {
         }
     }
     'Done'
+}
+
+
+function Invoke-OutlookPromptSetup {
+    # Outlook asks for approval before a program sends mail whenever it cannot
+    # confirm the antivirus is up to date - always on Windows Server, which has no
+    # Security Center.
+    Write-YardstickSetupStatus 'Outlook will ask you to approve every email Yardstick sends from this computer.' -Level Warn
+    $disable = [bool]$DisableOutlookPrompts
+    if (-not $disable -and -not $NonInteractive) {
+        Write-Host 'Yardstick can turn off these warnings. The setting applies to every program on this' -ForegroundColor DarkGray
+        Write-Host 'computer, not only Yardstick, and needs an administrator PowerShell.' -ForegroundColor DarkGray
+        $disable = Read-YardstickSetupYesNo -Prompt "Turn off Outlook's programmatic access warnings?" -Default $true
+    }
+    if (-not $disable) { return }
+
+    try {
+        Set-YardstickOutlookObjectModelGuard
+        Write-YardstickSetupStatus 'Outlook will no longer ask before Yardstick sends email. Restart Outlook if it is open.' -Level OK
+    } catch {
+        Write-YardstickSetupStatus "$($_.Exception.Message) Rerun: .\Install-Yardstick.ps1 -Step Email -EmailMethod outlook -DisableOutlookPrompts" -Level Warn
+    }
 }
 
 

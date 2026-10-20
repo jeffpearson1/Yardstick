@@ -337,6 +337,24 @@ Describe "Send-YardstickSmtpMessage" {
     }
 }
 
+Describe "Test-YardstickOutlookPromptExpected" {
+    It "Returns <Expected> when ObjectModelGuard is <Guard> on ProductType <ProductType>" -ForEach @(
+        @{ Guard = 2; ProductType = 3; Expected = $false }
+        @{ Guard = 1; ProductType = 1; Expected = $true }
+        @{ Guard = $null; ProductType = 3; Expected = $true }
+        @{ Guard = 0; ProductType = 2; Expected = $true }
+        @{ Guard = $null; ProductType = 1; Expected = $false }
+    ) {
+        InModuleScope YardstickSupport -Parameters $_ {
+            param($Guard, $ProductType, $Expected)
+            Mock Get-YardstickOutlookObjectModelGuard { $Guard }
+            Mock Get-CimInstance { [pscustomobject]@{ ProductType = $ProductType } }
+
+            Test-YardstickOutlookPromptExpected | Should -Be $Expected
+        }
+    }
+}
+
 Describe "Send-YardstickEmailReport over SMTP" {
     It "Sends through Send-YardstickSmtpMessage without touching Outlook or the logo" {
         InModuleScope YardstickSupport {

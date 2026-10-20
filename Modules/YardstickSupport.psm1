@@ -4295,6 +4295,82 @@ function Test-OutlookAvailability {
 }
 
 
+function Get-YardstickOutlookSecurityKey {
+    <#
+    .SYNOPSIS
+    Returns the registry key that holds Outlook's programmatic access setting.
+
+    .DESCRIPTION
+    32-bit Office on 64-bit Windows reads the setting from the Wow6432Node key;
+    otherwise it reads the native key. Office bitness comes from the Outlook
+    Bitness value, falling back to the Click-to-Run Platform value.
+    #>
+    $bitness = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Office\16.0\Outlook' -Name 'Bitness' -ErrorAction SilentlyContinue).Bitness
+    if (-not $bitness) {
+        $bitness = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration' -Name 'Platform' -ErrorAction SilentlyContinue).Platform
+    }
+    if ($bitness -eq 'x86' -and [Environment]::Is64BitOperatingSystem) {
+        return 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Office\16.0\Outlook\Security'
+    }
+    return 'HKLM:\SOFTWARE\Microsoft\Office\16.0\Outlook\Security'
+}
+
+
+function Get-YardstickOutlookObjectModelGuard {
+    <#
+    .SYNOPSIS
+    Reads Outlook's ObjectModelGuard setting.
+
+    .OUTPUTS
+    0 (warn when antivirus is inactive or out of date), 1 (always warn),
+    2 (never warn), or $null when the value is not set.
+    #>
+    $value = (Get-ItemProperty -Path (Get-YardstickOutlookSecurityKey) -Name 'ObjectModelGuard' -ErrorAction SilentlyContinue).ObjectModelGuard
+    if ($null -eq $value) { return $null }
+    return [int]$value
+}
+
+
+function Set-YardstickOutlookObjectModelGuard {
+    <#
+    .SYNOPSIS
+    Turns off Outlook's programmatic access warnings for this computer.
+
+    .DESCRIPTION
+    Sets ObjectModelGuard to 2 ("Never warn me about suspicious activity"), so
+    Outlook stops asking for approval when Yardstick sends an email. The setting
+    applies to every program on the computer and needs an elevated session.
+    #>
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw "Turning off Outlook's security prompts needs an elevated PowerShell (Run as administrator)."
+    }
+    $key = Get-YardstickOutlookSecurityKey
+    if (-not (Test-Path -Path $key)) {
+        New-Item -Path $key -Force | Out-Null
+    }
+    New-ItemProperty -Path $key -Name 'ObjectModelGuard' -PropertyType DWord -Value 2 -Force | Out-Null
+}
+
+
+function Test-YardstickOutlookPromptExpected {
+    <#
+    .SYNOPSIS
+    Tests whether Outlook will ask for approval each time Yardstick sends an email.
+
+    .DESCRIPTION
+    With the default setting, Outlook prompts only when Windows Security Center
+    reports the antivirus as inactive or out of date. Windows Server has no
+    Security Center, so there Outlook always prompts unless ObjectModelGuard is 2.
+    #>
+    $guard = Get-YardstickOutlookObjectModelGuard
+    if ($guard -eq 2) { return $false }
+    if ($guard -eq 1) { return $true }
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+    return [bool]($os -and $os.ProductType -ne 1)
+}
+
+
 function Get-YardstickEmailDeliveryMethod {
     <#
     .SYNOPSIS
@@ -4531,17 +4607,20 @@ function Send-YardstickEmailReport {
         # Load branding logo. Use a cid: reference for the email itself (Outlook
         # desktop does not render base64 data URIs reliably) and a base64 data URI
         # for the HtmlOutputPath so the standalone file stays self-contained.
+        # The cid is the attachment's file name, which Outlook resolves on its own;
+        # setting a Content-ID would need Attachment.PropertyAccessor, which raises
+        # an Outlook security prompt.
         # Send-MailMessage cannot set a Content-ID on an attachment, and many
         # clients block data URIs, so SMTP reports go out without the logo.
         $logoHtml = ""
         $logoHtmlForBrowser = ""
-        $logoCid = "yardstick-logo"
         $logoPath = $null
         if ($method -ne 'smtp') {
             try {
                 $candidatePath = Join-Path $PSScriptRoot "..\Branding\yardstick_logo_white_text_transparent_bg.png"
                 if (Test-Path $candidatePath) {
                     $logoPath = (Resolve-Path $candidatePath).ProviderPath
+                    $logoCid = [System.IO.Path]::GetFileName($logoPath)
                     $logoBytes = [System.IO.File]::ReadAllBytes($logoPath)
                     $logoBase64 = [System.Convert]::ToBase64String($logoBytes)
                     $logoHtml = "<img src=`"cid:$logoCid`" alt=`"Yardstick`" width=`"180`" height=`"180`" class=`"header-logo`" style=`"width:180px; height:180px; max-width:100%; display:block; border:0;`" />"
@@ -5013,24 +5092,18 @@ $summaryRows
             $mail.SentOnBehalfOfName = $Preferences.emailSendFromAddress
         }
 
-        # Set email body and send (or open for preview)
-        $mail.HTMLBody = $emailBody
-
-        # Attach the logo as an inline image with a Content-ID matching the cid:
-        # reference in the HTML body.
+        # Attach the logo before setting the body, so Outlook matches the
+        # cid:<file name> reference to it and shows it inline.
         if ($logoPath) {
             try {
-                $attachment = $mail.Attachments.Add($logoPath)
-                $pa = $attachment.PropertyAccessor
-                # Set the Content-ID so it can be referenced via cid: in the HTML
-                $pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", $logoCid)
-                # Note: PR_ATTACH_FLAGS (0x37140003) is often read-only in Outlook COM and doesn't
-                # support SetProperty; attempting it would cause an error. The cid: reference still
-                # works for inline rendering even if the attachment is visible in the attachment list.
+                $mail.Attachments.Add($logoPath) | Out-Null
             } catch {
-                Write-Log "Could not attach the logo with CID: $($_.Exception.Message)" -Level Warning
+                Write-Log "Could not attach the logo: $($_.Exception.Message)" -Level Warning
             }
         }
+
+        # Set email body and send (or open for preview)
+        $mail.HTMLBody = $emailBody
 
         if ($Preview) {
             $mail.Display()
