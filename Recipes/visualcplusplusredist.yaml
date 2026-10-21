@@ -37,6 +37,3 @@ detectionScript: |
       Write-Host "Current version not equal to required version."
       exit 1
   }
-scopeTags:
-  - scopeTag1
-  - scopeTag2

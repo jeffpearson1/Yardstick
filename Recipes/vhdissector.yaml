@@ -24,6 +24,3 @@ detectionScript: |
   }
   Write-Output "Not Detected"
   exit 1
-scopeTags:
-  - scopeTag1
-  - scopeTag2

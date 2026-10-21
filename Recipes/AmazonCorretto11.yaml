@@ -18,6 +18,3 @@ dependentApplicationBlocklist:
  - "Eclipse"
  - "jGRASP"
 detectionType: msi
-scopeTags:
-  - scopeTag1
-  - scopeTag2

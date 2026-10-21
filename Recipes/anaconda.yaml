@@ -43,6 +43,3 @@ detectionScript: |
   exit 1
 installExperience: system
 maximumInstallationTimeInMinutes: 90
-scopeTags:
-  - scopeTag1
-  - scopeTag2

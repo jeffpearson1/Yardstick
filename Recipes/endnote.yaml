@@ -131,6 +131,3 @@ detectionType: file
 fileDetectionName: EndNote.exe
 fileDetectionMethod: version
 fileDetectionOperator: greaterThanOrEqual
-scopeTags:
-  - scopeTag1
-  - scopeTag2

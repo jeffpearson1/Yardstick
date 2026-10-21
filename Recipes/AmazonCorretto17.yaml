@@ -16,6 +16,3 @@ publisher: Amazon
 description: An OpenJDK distribution provided by Amazon
 softwareName: "*Amazon Corretto JRE 17*"
 detectionType: msi
-scopeTags:
-  - scopeTag1
-  - scopeTag2

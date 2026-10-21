@@ -10,6 +10,7 @@
     Published           = 'Artifacts\Packages'
     Temp                = 'Artifacts\Temp'
     Preferences         = 'Local\preferences.yaml'
+    RecipeOverrides     = 'Local\recipeOverrides.yaml'
     Secrets             = 'Local\Secrets'
     Documentation       = 'Docs'
     ProductionRoot      = 'G:\Intune\Yardstick'

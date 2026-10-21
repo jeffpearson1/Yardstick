@@ -47,3 +47,19 @@ function Get-YardstickPreferencesPath {
 
     return $layout.Preferences
 }
+
+function Get-YardstickRecipeOverridesPath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProjectRoot
+    )
+
+    $layout = Get-YardstickProjectLayout -ProjectRoot $ProjectRoot
+    if ($layout.PSObject.Properties['RecipeOverrides']) {
+        return $layout.RecipeOverrides
+    }
+
+    # A project manifest from before recipe overrides existed has no entry for them.
+    return Join-Path $layout.ProjectRoot 'Local\recipeOverrides.yaml'
+}

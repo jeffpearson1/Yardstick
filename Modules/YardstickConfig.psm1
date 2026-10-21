@@ -412,5 +412,6 @@ Export-ModuleMember -Function @(
     'Test-YardstickPreferences',
     'Get-YardstickPreferenceAllowedValues',
     'Get-YardstickProjectLayout',
-    'Get-YardstickPreferencesPath'
+    'Get-YardstickPreferencesPath',
+    'Get-YardstickRecipeOverridesPath'
 )

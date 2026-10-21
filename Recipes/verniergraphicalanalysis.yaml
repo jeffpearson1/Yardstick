@@ -26,6 +26,3 @@ fileDetectionPath: 'C:\Program Files (x86)\Vernier Graphical Analysis'
 fileDetectionName: 'Vernier Graphical Analysis.exe'
 fileDetectionMethod: version
 fileDetectionOperator: greaterThanOrEqual
-scopeTags:
-  - scopeTag1
-  - scopeTag2

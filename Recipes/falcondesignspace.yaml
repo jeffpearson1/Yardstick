@@ -285,6 +285,3 @@ allowUserUninstall: false
 minOSVersion: W10_1607
 architecture: x64
 is32BitApp: false
-scopeTags:
-  - scopeTag1
-  - scopeTag2

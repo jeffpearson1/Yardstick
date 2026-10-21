@@ -19,6 +19,3 @@ fileDetectionPath: '%ProgramFiles%\Wireshark'
 fileDetectionName: Wireshark.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
-scopeTags:
-  - scopeTag1
-  - scopeTag2

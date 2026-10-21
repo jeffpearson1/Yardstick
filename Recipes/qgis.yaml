@@ -24,6 +24,3 @@ description: QGIS is a geographic information system (GIS) software that is free
 detectionType: msi
 installExperience: system
 restartBehavior: suppress
-scopeTags:
-  - scopeTag1
-  - scopeTag2

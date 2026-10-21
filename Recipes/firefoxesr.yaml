@@ -25,6 +25,3 @@ additionalDetectionRules:
     registryDetectionValueName: DisplayName
     registryDetectionOperator: equal
     registryDetectionValue: Mozilla Firefox ESR (x64 en-US)
-scopeTags:
-  - scopeTag1
-  - scopeTag2

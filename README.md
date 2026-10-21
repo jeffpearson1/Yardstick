@@ -55,6 +55,7 @@ Settings live in `Local\preferences.yaml`, which is excluded from Git. Every set
 * Email reports go out through Outlook or SMTP. See [EmailNotifications.md](Docs/EmailNotifications.md).
 * `SoftwareDropbox` and `SoftwareArchive` support recipes for vendors whose installer cannot be downloaded automatically. See [SoftwareDropbox.md](Docs/SoftwareDropbox.md).
 * Setting the optional `Backup` folder keeps a copy of every `.intunewin` file Yardstick uploads, so a bad release can be traced back to the exact package that shipped.
+* Site-specific recipe values, such as scope tags, go in `Local\recipeOverrides.yaml` rather than in the recipes, so the recipes can be shared and updated with `git pull`. See [Site-Specific Overrides](Docs/WritingRecipes.md#site-specific-overrides).
 
 ### Icons
 

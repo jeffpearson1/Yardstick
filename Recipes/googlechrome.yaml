@@ -18,6 +18,3 @@ dependentApplicationBlocklist:
  - "CheerpJ Google Chrome Extension Config"
 fileType: msi
 detectionType: msi
-scopeTags:
-  - scopeTag1
-  - scopeTag2

@@ -13,6 +13,3 @@ displayName: Amazon WorkSpaces Client
 publisher: Amazon
 description: The Amazon WorkSpaces client for Windows
 detectionType: msi
-scopeTags:
-  - scopeTag1
-  - scopeTag2
