@@ -148,3 +148,54 @@ uninstallScript: sub-uninstall.ps1
         }
     }
 }
+
+Describe "Get-YardstickRecipeFile" {
+    BeforeAll {
+        $script:root = Join-Path $TestDrive 'Finder\Recipes'
+        foreach ($relative in 'alpha.yaml', 'Vendor\beta.yml', 'Disabled\gamma.yaml', 'Vendor\Disabled\delta.yaml',
+            'Interactive\epsilon.yaml', 'Disabled\alpha.yaml', 'Vendor\Disabled\Old\zeta.yaml', 'notes.txt') {
+            $path = Join-Path $script:root $relative
+            New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+            Set-Content -LiteralPath $path -Value 'id: x'
+        }
+    }
+
+    It "Leaves out recipes in a Disabled folder at any depth" {
+        $ids = @(Get-YardstickRecipeFile -RecipesPath $script:root | ForEach-Object BaseName) | Sort-Object
+        $ids | Should -Be @('alpha', 'beta', 'epsilon')
+    }
+
+    It "Includes them with -IncludeDisabled, enabled copies first" {
+        $files = @(Get-YardstickRecipeFile -RecipesPath $script:root -Id 'alpha' -IncludeDisabled)
+        $files.Count | Should -Be 2
+        $files[0].FullName | Should -Be (Join-Path $script:root 'alpha.yaml')
+        @(Get-YardstickRecipeFile -RecipesPath $script:root -IncludeDisabled).Count | Should -Be 7
+    }
+
+    It "Finds one recipe by id, ignoring case" {
+        (Get-YardstickRecipeFile -RecipesPath $script:root -Id 'BETA').Name | Should -Be 'beta.yml'
+        Get-YardstickRecipeFile -RecipesPath $script:root -Id 'gamma' | Should -BeNullOrEmpty
+        (Get-YardstickRecipeFile -RecipesPath $script:root -Id 'gamma' -IncludeDisabled).Name | Should -Be 'gamma.yaml'
+    }
+
+    It "Leaves out the Interactive folder with -ExcludeInteractive" {
+        @(Get-YardstickRecipeFile -RecipesPath $script:root -ExcludeInteractive | ForEach-Object BaseName) |
+            Should -Not -Contain 'epsilon'
+    }
+
+    It "Only looks at folders below the recipes folder" {
+        $nested = Join-Path $TestDrive 'Disabled\Install\Recipes'
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $nested 'app.yaml') -Value 'id: app'
+        (Get-YardstickRecipeFile -RecipesPath $nested).BaseName | Should -Be 'app'
+    }
+
+    It "Resolves a base recipe that is in a Disabled folder" {
+        $recipes = Join-Path $TestDrive 'DisabledBase'
+        New-Item -ItemType Directory -Path (Join-Path $recipes 'Disabled') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $recipes 'Disabled\parent.yaml') -Value "id: parent`npublisher: Parent Publisher"
+        $merged = Merge-RecipeWithBase -Recipe @{ base = 'parent'; id = 'child' } -RecipesPath $recipes
+        $merged['publisher'] | Should -Be 'Parent Publisher'
+        $merged['id'] | Should -Be 'child'
+    }
+}

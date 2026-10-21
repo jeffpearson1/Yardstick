@@ -76,6 +76,9 @@
 # working. The run itself is Private\Invoke-YardstickRun.ps1, called through
 # Invoke-Yardstick in Yardstick.psm1.
 
+# No set named is a SingleApp run with no -ApplicationId, which the runner answers
+# with "Specify -ApplicationId, -Group or -All." rather than a binding error.
+[CmdletBinding(DefaultParameterSetName = "SingleApp")]
 param (
     [Alias("AppId", "AppIds")]
     [parameter(ParameterSetName="SingleApp")]

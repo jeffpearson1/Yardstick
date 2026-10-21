@@ -1,4 +1,4 @@
-url: \\yoursiteserver.yourcompany.com\sms_<your_org>\tools\ConsoleSetup
+url: \\<YOUR_SITE_SERVER>\SMS_<YOUR_SITE_CODE>\tools\ConsoleSetup
 urlRedirects: false
 preDownloadScript: |
   $Version = (Get-Item "$url\ConsoleSetup.exe").VersionInfo.ProductVersion

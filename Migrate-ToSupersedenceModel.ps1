@@ -79,8 +79,7 @@ Initialize-YardstickIntuneCredential -Preferences $Prefs | Out-Null
 Connect-YardstickGraph -Force
 
 # Enumerate recipes
-$recipeFiles = Get-ChildItem $Recipes -Recurse -File -Include *.yaml,*.yml |
-    Where-Object { $_.FullName -notmatch '\\Disabled\\' }
+$recipeFiles = @(Get-YardstickRecipeFile -RecipesPath $Recipes)
 
 if ($ApplicationId) {
     $recipeFiles = $recipeFiles | Where-Object BaseName -eq $ApplicationId

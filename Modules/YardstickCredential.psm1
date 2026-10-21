@@ -922,7 +922,7 @@ function Get-YardstickSmtpCredential {
         return $null
     }
 
-    $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+    $securePassword = [System.Net.NetworkCredential]::new('', $password).SecurePassword
     return [System.Management.Automation.PSCredential]::new($userName.Trim(), $securePassword)
 }
 
@@ -942,6 +942,8 @@ function Set-YardstickSmtpCredential {
     SMTP account password. Accepts a String or SecureString.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingUsernameAndPasswordParams', '',
+        Justification = 'Password takes a SecureString or a String; the value is written straight to Credential Manager.')]
     param(
         [string]$Target = $Script:DefaultSmtpCredentialTarget,
 

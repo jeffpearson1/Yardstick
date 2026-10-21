@@ -146,6 +146,20 @@ Describe "VersionPro.GetHashCode" {
         $v2 = [VersionPro]::new("2.0")
         $v1.GetHashCode() | Should -Not -Be $v2.GetHashCode()
     }
+
+    It "Versions that differ only by trailing zeros, and so are equal, hash alike" {
+        $v1 = [VersionPro]::new("1.0")
+        $v2 = [VersionPro]::new("1.0.0")
+        $v1.Equals($v2) | Should -BeTrue
+        $v1.GetHashCode() | Should -Be $v2.GetHashCode()
+        $set = [System.Collections.Generic.HashSet[object]]::new()
+        $set.Add($v1) | Should -BeTrue
+        $set.Add($v2) | Should -BeFalse
+    }
+
+    It "Hashes a long version without overflowing" {
+        { [VersionPro]::new("2147483647.2147483647.2147483647.2147483647.99").GetHashCode() } | Should -Not -Throw
+    }
 }
 
 Describe "VersionPro.ToString" {

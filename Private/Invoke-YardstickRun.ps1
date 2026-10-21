@@ -23,6 +23,9 @@
 #Requires -Version 7.0
 using module ..\Modules\VersionPro.psm1
 
+# No set named is a SingleApp run with no -ApplicationId, which the runner answers
+# with "Specify -ApplicationId, -Group or -All." rather than a binding error.
+[CmdletBinding(DefaultParameterSetName = "SingleApp")]
 param (
     [Alias("AppId", "AppIds")]
     [parameter(ParameterSetName="SingleApp")]
@@ -103,6 +106,8 @@ $showDetail = $VerbosePreference -eq 'Continue'
 $VerbosePreference = 'SilentlyContinue'
 Write-Log -Init -ShowDetail:$showDetail
 
+$yardstickVersion = try { (Import-PowerShellDataFile -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Yardstick.psd1')).ModuleVersion } catch { 'unknown' }
+Write-Log "Yardstick $yardstickVersion, PowerShell $($PSVersionTable.PSVersion)." -Level Detail
 # Session 0 is a task running while nobody is signed in, where Outlook and some
 # network shares are out of reach - worth knowing when a scheduled run misbehaves.
 Write-Log ("Running as {0} in Windows session {1}." -f [Security.Principal.WindowsIdentity]::GetCurrent().Name, (Get-Process -Id $PID).SessionId) -Level Detail
@@ -859,6 +864,9 @@ function Set-ScriptVariables {
     $Script:DependentLinkUpdateTimeoutSeconds = if ($null -ne $Parameters.dependentLinkUpdateTimeoutSeconds) { $Parameters.dependentLinkUpdateTimeoutSeconds } elseif ($null -ne $Preferences.dependentLinkUpdateTimeoutSeconds) { $Preferences.dependentLinkUpdateTimeoutSeconds } else { 60 }
     $Script:DependentApplicationBlocklist = if ($Parameters.dependentApplicationBlocklist) {
         $Parameters.dependentApplicationBlocklist
+    } elseif ($Parameters.dependentApplicationBlacklist) {
+        # The key's old name; Test-RecipeSchema asks for it to be renamed.
+        $Parameters.dependentApplicationBlacklist
     } elseif ($Preferences.dependentApplicationBlocklist) {
         $Preferences.dependentApplicationBlocklist
     } else {
@@ -962,9 +970,9 @@ $Script:IntuneCredential = Initialize-YardstickIntuneCredential -Preferences $Pr
 # Validate ApplicationId parameter
 if ($ApplicationId) {
     foreach ($AppIdToValidate in $ApplicationId) {
-        $MatchingApps = Get-ChildItem $Recipes | Where-Object Name -ne 'Disabled' | Get-ChildItem -File | Where-Object Name -match "$AppIdToValidate\.ya{0,1}ml"
-        if ($null -eq $MatchingApps) {
-            Write-Log "No recipe named $AppIdToValidate (the Disabled folder is not searched)." -Level Error
+        if (-not (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppIdToValidate)) {
+            $disabledHint = if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppIdToValidate -IncludeDisabled) { ' Its recipe is in a Disabled folder.' } else { '' }
+            Write-Log "No recipe named $AppIdToValidate.$disabledHint" -Level Error
             exit 1
         }
     }
@@ -1001,25 +1009,31 @@ function Get-ApplicationsToProcess {
     $applications = [System.Collections.Generic.List[PSObject]]::new()
     
     if ($All) {
-        $folderFilter = if ($NoInteractive) { 
-            { $_.Directory -notlike '*Disabled*' -and $_.Directory -notlike '*Interactive*' }
-        } else { 
-            { $_.Directory -notlike '*Disabled*' }
-        }
-        
-        $ApplicationFullNames = (Get-ChildItem $Recipes -Recurse -File | Where-Object $folderFilter | Where-Object Name -match ".*\.ya{0,1}ml").Name
-        foreach ($Application in $ApplicationFullNames) {
-            $applications.Add([String]($Application -split "\.ya{0,1}ml")[0]) | Out-Null
+        foreach ($recipeFile in Get-YardstickRecipeFile -RecipesPath $Recipes -ExcludeInteractive:$NoInteractive) {
+            $applications.Add([String]$recipeFile.BaseName) | Out-Null
         }
     } elseif ($Group) {
+        $groupsPath = Join-Path $ProjectRoot 'RecipeGroups.yaml'
         try {
-            $groupFile = Get-Content (Join-Path $ProjectRoot 'RecipeGroups.yaml') | ConvertFrom-Yaml
-            $groupFile[$Group] | ForEach-Object {
-                $applications.Add([String]$_) | Out-Null
-            }
+            $groupFile = Get-Content -LiteralPath $groupsPath -Raw | ConvertFrom-Yaml
         } catch {
-            Write-Log "Could not read group $Group from RecipeGroups.yaml. Exiting: $_" -Level Error
+            Write-Log "Could not read ${groupsPath}: $_" -Level Error
             exit 3
+        }
+        $groupNames = if ($groupFile -is [System.Collections.IDictionary]) { @($groupFile.Keys) } else { @() }
+        $groupName = $groupNames | Where-Object { $_ -eq $Group } | Select-Object -First 1
+        if ($null -eq $groupName) {
+            $available = if ($groupNames) { "Groups in RecipeGroups.yaml: $(($groupNames | Sort-Object) -join ', ')." } else { 'RecipeGroups.yaml has no groups.' }
+            Write-Log "There is no group named '$Group'. $available" -Level Error
+            exit 3
+        }
+        foreach ($Id in @($groupFile[$groupName])) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$Id)) {
+                $applications.Add([String]$Id) | Out-Null
+            }
+        }
+        if ($applications.Count -eq 0) {
+            Write-Log "Group '$groupName' in RecipeGroups.yaml lists no recipes." -Level Warning
         }
     } else {
         foreach ($Id in $ApplicationId) {
@@ -1308,9 +1322,20 @@ foreach ($AppId_Processing in $Applications) {
             Remove-Item -Recurse -Force
 
         # Open the YAML file and collect all necessary attributes
+        $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing)[0]
+        if (-not $recipeFile) {
+            # Only a group can list a disabled recipe: -ApplicationId is checked
+            # before the run and -All never lists one. Disabling is deliberate, so it
+            # is not reported as a failure.
+            if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing -IncludeDisabled) {
+                Write-Log "Skipping $AppId_Processing because its recipe is in a Disabled folder." -Level Warning
+            } else {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "There is no recipe named $AppId_Processing." -FailureStage "Configuration"
+            }
+            continue
+        }
         try {
-            $AppName = (Get-ChildItem $Recipes -Force -Recurse | Where-Object Name -ne 'Disabled' | Get-ChildItem -File -Recurse | Where-Object Name -match "^$AppId_Processing\.ya{0,1}ml")[0].FullName
-            $Parameters = Get-Content "$AppName" | ConvertFrom-Yaml
+            $Parameters = Get-Content -LiteralPath $recipeFile.FullName -Raw | ConvertFrom-Yaml
         } catch {
             Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not open the recipe: $_" -FailureStage "Configuration"
             continue
@@ -1330,6 +1355,16 @@ foreach ($AppId_Processing in $Applications) {
         if ($RecipeOverrides.ContainsKey($AppId_Processing)) {
             $Parameters = Merge-RecipeWithOverride -Recipe $Parameters -Override $RecipeOverrides[$AppId_Processing]
             Write-Log "Applied recipe overrides: $(@($RecipeOverrides[$AppId_Processing].Keys) -join ', ')" -Level Detail
+        }
+
+        # A shared recipe that needs a value only this site knows ships with a
+        # <YOUR_...> placeholder. Left in, it would upload an install command that
+        # cannot work.
+        $placeholders = @(Get-RecipePlaceholder -Recipe $Parameters)
+        if ($placeholders) {
+            $fields = ($placeholders | ForEach-Object { "$($_.Field) ($($_.Placeholder))" }) -join ', '
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "The recipe needs this site's values for: $fields. Set those fields for $AppId_Processing in $RecipeOverridesPath." -FailureStage "Configuration"
+            continue
         }
 
         # Validate recipe schema before processing
@@ -1532,6 +1567,9 @@ foreach ($AppId_Processing in $Applications) {
                 continue
             }
         } elseif ($Script:DownloadScript) {
+            # Pop in a finally: the continue below would otherwise leave this entry on
+            # the location stack, and Invoke-Yardstick's own Pop-Location would then
+            # return the caller to the build folder instead of where they started.
             Push-Location $BuildSpace\$Script:Id\$Script:Version
             try {
                 Invoke-Command -ScriptBlock $Script:DownloadScript -NoNewScope
@@ -1540,8 +1578,9 @@ foreach ($AppId_Processing in $Applications) {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download Script"
                 Write-Log "Download script contents: $Script:DownloadScript" -Level Detail
                 continue
+            } finally {
+                Pop-Location
             }
-            Pop-Location
         } else {
             try {
                 # Bounded by a stall timeout rather than a plain Start-BitsTransfer,
@@ -1568,8 +1607,9 @@ foreach ($AppId_Processing in $Applications) {
             } catch {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Download Script"
                 continue
+            } finally {
+                Pop-Location
             }
-            Pop-Location
         }
         # Handle script placeholder replacement
         $ProductCode = ""
@@ -1769,8 +1809,9 @@ Stop-YardstickWatchdog
 # Wait-YardstickBackup is what records each app's backup status on it.
 Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
 
-# Send email report if enabled
-$sendReport = -not $NoEmail
+# Send email report if enabled. Checked here as well as in Send-YardstickEmailReport,
+# so a run with email turned off neither prompts nor logs a send that never happens.
+$sendReport = -not $NoEmail -and $Prefs.emailNotificationEnabled
 
 # If prompt before sending is enabled, ask the user for confirmation.
 # An unattended run has nobody to answer, so it sends without asking.
@@ -1804,9 +1845,6 @@ if ($sendReport) {
         $emailMethod = if ($null -ne $Prefs.emailDeliveryMethod) { $Prefs.emailDeliveryMethod } else { "outlook" }
 
         switch ($emailMethod.ToLower()) {
-            "mailkit" {
-                throw "The MailKit email delivery method is not implemented yet. Set emailDeliveryMethod to 'outlook' or 'smtp' in preferences.yaml, or remove it to use the default."
-            }
             "outlook" {
                 Write-Log "Sending the email report through Outlook..."
                 Send-YardstickEmailReport -Preferences $Prefs -RunParameters $RunParameters

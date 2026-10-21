@@ -3577,6 +3577,58 @@ function Complete-YardstickDropbox {
 }
 
 
+function Get-YardstickRecipeFile {
+    <#
+    .SYNOPSIS
+    Finds recipe files in the recipes folder.
+
+    .DESCRIPTION
+    Returns the .yaml and .yml files under RecipesPath, searching subfolders. A
+    recipe inside a folder named Disabled, at any depth, is skipped unless
+    -IncludeDisabled is given, and is then listed after the enabled ones, so an
+    enabled recipe wins when both exist.
+
+    .PARAMETER RecipesPath
+    The recipes folder.
+
+    .PARAMETER Id
+    Return only the recipe with this id (its file name without the extension),
+    matched case-insensitively.
+
+    .PARAMETER IncludeDisabled
+    Also return recipes inside a Disabled folder.
+
+    .PARAMETER ExcludeInteractive
+    Skip recipes inside a folder named Interactive, which need someone at the
+    console.
+
+    .OUTPUTS
+    System.IO.FileInfo
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RecipesPath,
+        [string]$Id,
+        [switch]$IncludeDisabled,
+        [switch]$ExcludeInteractive
+    )
+
+    $root = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).ProviderPath.TrimEnd('\')
+    $recipes = foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force -Include '*.yaml', '*.yml') {
+        if ($Id -and $file.BaseName -ne $Id) { continue }
+        # Only the folders below the recipes folder count, so a Yardstick install
+        # under a path such as D:\Disabled\Yardstick still finds its recipes.
+        $folders = @([System.IO.Path]::GetRelativePath($root, $file.DirectoryName) -split '[\\/]')
+        if ($ExcludeInteractive -and $folders -contains 'Interactive') { continue }
+        $disabled = $folders -contains 'Disabled'
+        if ($disabled -and -not $IncludeDisabled) { continue }
+        [pscustomobject]@{ File = $file; Disabled = $disabled }
+    }
+
+    @($recipes) | Sort-Object Disabled, { $_.File.FullName } | ForEach-Object File
+}
+
+
 function Merge-RecipeWithBase {
     <#
     .SYNOPSIS
@@ -3604,10 +3656,9 @@ function Merge-RecipeWithBase {
     if (-not $Recipe.ContainsKey('base')) { return $Recipe }
 
     $baseId = $Recipe['base']
-    $baseFiles = @(Get-ChildItem $RecipesPath -Force -Recurse |
-        Where-Object Name -ne 'Disabled' |
-        Get-ChildItem -File -Recurse |
-        Where-Object Name -match "^$baseId\.ya{0,1}ml")
+    # A disabled base still serves its children: disabling a recipe stops it
+    # running, not the recipes built on it.
+    $baseFiles = @(Get-YardstickRecipeFile -RecipesPath $RecipesPath -Id $baseId -IncludeDisabled)
     $baseFile = if ($baseFiles.Count -gt 0) { $baseFiles[0].FullName } else { $null }
 
     if (-not $baseFile) {
@@ -3714,6 +3765,38 @@ function Merge-RecipeWithOverride {
     }
     return $merged
 }
+
+function Get-RecipePlaceholder {
+    <#
+    .SYNOPSIS
+    Lists the recipe fields that still hold a <YOUR_...> placeholder.
+
+    .DESCRIPTION
+    A few shared recipes need a value only your organization knows - a Zoom vanity
+    URL, an SCCM site code. They ship with a placeholder such as <YOUR_SITE_CODE>,
+    and each site sets the real field in Local\recipeOverrides.yaml. Run this on the
+    recipe after its overrides are applied; any field it returns was never filled in.
+
+    .PARAMETER Recipe
+    The recipe hashtable, merged with its base and its overrides.
+
+    .OUTPUTS
+    PSCustomObject with Field and Placeholder, one per field.
+    #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Recipe
+    )
+
+    foreach ($key in @($Recipe.Keys) | Sort-Object) {
+        foreach ($value in @($Recipe[$key])) {
+            if ($value -is [string] -and $value -cmatch '<YOUR_[A-Z0-9_]+>') {
+                [PSCustomObject]@{ Field = $key; Placeholder = $Matches[0] }
+                break
+            }
+        }
+    }
+}
+
 
 
 
@@ -3921,7 +4004,7 @@ function Test-RecipeSchema {
         'downloadScript', 'postDownloadScript', 'postRunScript', 'installScript',
         'uninstallScript', 'powerShellInstallScript', 'powerShellUninstallScript',
         'scopeTags', 'owner', 'maximumInstallationTimeInMinutes', 'minOSVersion',
-        'installExperience', 'restartBehavior', 'availableGroups', 'requiredGroups',
+        'installExperience', 'restartBehavior',
         'defaultDeploymentGroups', 'allowUserUninstall', 'is32BitApp', 'architecture',
         'deadlineDateOffset', 'availableDateOffset', 'allowDependentLinkUpdates',
         'detectionType', 'fileDetectionMethod', 'fileDetectionName',
@@ -3941,8 +4024,19 @@ function Test-RecipeSchema {
     )
     $knownFieldsLower = $knownFields | ForEach-Object { $_.ToLower() }
 
+    # Fields that used to be accepted. They are reported here rather than as unknown
+    # fields, so the warning says what to do instead.
+    $retiredFields = @{
+        dependentapplicationblacklist = "Field 'dependentApplicationBlacklist' has been renamed to 'dependentApplicationBlocklist'. It still works for now; rename it in the recipe."
+        availablegroups               = "Field 'availableGroups' has no effect. Use 'defaultDeploymentGroups' for an Available assignment on each new version."
+        requiredgroups                = "Field 'requiredGroups' has no effect. Add Required assignments in Intune; Yardstick moves them to each new version."
+    }
+
     foreach ($key in $Recipe.Keys) {
-        if ($key.ToLower() -notin $knownFieldsLower) {
+        if ($retiredFields.ContainsKey($key.ToLower())) {
+            $warnings.Add($retiredFields[$key.ToLower()])
+        }
+        elseif ($key.ToLower() -notin $knownFieldsLower) {
             $warnings.Add("Unknown field '$key' - this field is not used by Yardstick and may be a typo")
         }
         # Check for case mismatches (key exists in known fields but with different casing)

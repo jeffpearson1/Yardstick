@@ -11,7 +11,7 @@ jobs:
     name: Pester Unit Tests
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install modules
         shell: pwsh
@@ -40,7 +40,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results
           path: testResults.xml
@@ -49,7 +49,7 @@ jobs:
     name: PSScriptAnalyzer Lint
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install PSScriptAnalyzer
         shell: pwsh
@@ -68,35 +68,24 @@ jobs:
             'PSUseShouldProcessForStateChangingFunctions'
           )
 
-          $files = @(
-            'Yardstick.ps1',
-            'Yardstick.psm1',
-            'Private/Invoke-YardstickRun.ps1',
-            'Install-Yardstick.ps1',
-            'Test-YardstickSetup.ps1',
-            'Modules/YardstickLog.psm1',
-            'Modules/YardstickSupport.psm1',
-            'Modules/YardstickConfig.psm1',
-            'Modules/YardstickSetup.psm1',
-            'Modules/YardstickGraph.psm1',
-            'Modules/YardstickIntune.psm1',
-            'Modules/VersionPro.psm1',
-            'Modules/Custom/GithubDownloader.psm1',
-            'Modules/Custom/JetbrainsDownloader.psm1'
-          )
+          # Every shipped script and module, so a new file cannot be left out.
+          $files = @(git ls-files '*.ps1' '*.psm1' | Where-Object { $_ -notlike 'Tests/*' })
+          if (-not $files) { throw 'No PowerShell files found to lint.' }
 
           $hasErrors = $false
+          $warningCount = 0
           foreach ($file in $files) {
             $results = Invoke-ScriptAnalyzer -Path $file -Severity Error,Warning -ExcludeRule $excludeRules
             if ($results) {
               foreach ($r in $results) {
                 $level = if ($r.Severity -eq 'Error') { 'error' } else { 'warning' }
                 Write-Host "::${level} file=${file},line=$($r.Line)::[$($r.RuleName)] $($r.Message)"
-                if ($r.Severity -eq 'Error') { $hasErrors = $true }
+                if ($r.Severity -eq 'Error') { $hasErrors = $true } else { $warningCount++ }
               }
             }
           }
 
+          "Linted $($files.Count) files: $warningCount warning(s)." | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
           if ($hasErrors) {
             throw "PSScriptAnalyzer found errors"
           }
@@ -105,7 +94,7 @@ jobs:
     name: Validate Recipe Schemas
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install powershell-yaml
         shell: pwsh

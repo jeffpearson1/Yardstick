@@ -157,6 +157,16 @@ Describe "ConvertFrom-YardstickLog" {
 '@)
         $apps[0].Succeeded | Should -BeFalse
     }
+
+    It "reads a skipped dependent app under the old and the new list name" {
+        $apps = @(ConvertFrom-Fixture @'
+10/15/2026 08:00:01 - Starting update for foo...
+10/15/2026 08:00:02 - [foo] Skipping dependent app Old Bundle because it is included in the blacklist.
+10/15/2026 08:00:03 - [foo] Skipping dependent app New Bundle because it is included in the blocklist.
+'@)
+        $apps[0].Dependents['Old Bundle'] | Should -Be 'Skipped (blocklisted)'
+        $apps[0].Dependents['New Bundle'] | Should -Be 'Skipped (blocklisted)'
+    }
 }
 
 Describe "Get-YardstickFailureStage" {

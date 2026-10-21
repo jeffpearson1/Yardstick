@@ -81,3 +81,22 @@ Describe 'Invoke-YardstickGraphRequest' {
         }
     }
 }
+
+Describe 'Disconnect-YardstickGraph' {
+    It 'clears the token and the credentials from the session' {
+        $Global:TenantID = 'tenant'
+        $Global:ClientID = 'client'
+        $Global:ClientSecret = 'secret'
+        $Global:Token = [pscustomobject]@{ ExpiresOn = [datetimeoffset]::UtcNow.AddHours(1) }
+        $Global:AuthenticationHeader = @{ Authorization = 'Bearer cached' }
+
+        Disconnect-YardstickGraph
+
+        Get-Variable -Name TenantID, ClientID, ClientSecret, Token, AuthenticationHeader, YardstickCredential -Scope Global -ErrorAction SilentlyContinue |
+            Should -BeNullOrEmpty
+    }
+
+    It 'is safe to call when nothing is connected' {
+        { Disconnect-YardstickGraph } | Should -Not -Throw
+    }
+}

@@ -191,7 +191,7 @@ if ($unwritable.Count -gt 0) {
 
 $recipeFolder = [string]$prefs.Recipes
 if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
-    $recipeCount = @(Get-ChildItem -LiteralPath $recipeFolder -Filter '*.yaml' -File).Count
+    $recipeCount = @(Get-YardstickRecipeFile -RecipesPath $recipeFolder).Count
     $level = if ($recipeCount) { 'OK' } else { 'Warn' }
     Add-Check 'Recipes' $level "$recipeCount recipe(s) in $recipeFolder"
 }
@@ -213,6 +213,22 @@ try {
             Add-Check 'Recipe overrides' Warn "$($unmatched.Count) override(s) in $overridesPath name no recipe, so they are never applied: $($unmatched -join ', ')"
         } else {
             Add-Check 'Recipe overrides' OK "$($overrides.Count) recipe override(s) in $overridesPath"
+        }
+    }
+
+    # Recipes that ship with a <YOUR_...> placeholder fail until this site's
+    # overrides fill it in. Only those files are parsed, so this stays quick.
+    if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
+        $unfilled = foreach ($file in Get-YardstickRecipeFile -RecipesPath $recipeFolder) {
+            if ((Get-Content -LiteralPath $file.FullName -Raw) -cnotmatch '<YOUR_[A-Z0-9_]+>') { continue }
+            $recipe = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Yaml
+            if ($overrides.Contains($file.BaseName)) {
+                $recipe = Merge-RecipeWithOverride -Recipe $recipe -Override $overrides[$file.BaseName]
+            }
+            if (Get-RecipePlaceholder -Recipe $recipe) { $file.BaseName }
+        }
+        if ($unfilled) {
+            Add-Check 'Recipe overrides' Warn "$(@($unfilled).Count) recipe(s) need values only your site knows and will fail until you set them in ${overridesPath}: $(@($unfilled) -join ', '). See Site-Specific Overrides in Docs\WritingRecipes.md."
         }
     }
 } catch {
