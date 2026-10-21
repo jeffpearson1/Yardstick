@@ -13,12 +13,13 @@ Your job is to produce a recipe that **provably works**, not one that merely par
 
 ## Scope and boundaries
 
-- Work in `G:\Intune\YardstickDev`. New and in-progress recipes go in
+- Work in the Yardstick folder this skill lives in; every path below is relative
+  to it. New and in-progress recipes go in
   `Recipes\Development\` (Git-ignored — never treat an empty `git status` as
   evidence that no work exists; inspect the files).
-- `G:\Intune\Yardstick` is the **production** deployment target. Never write
-  recipes, test output, or experiments there. Promotion happens only through
-  `Publish-Yardstick.ps1`, and only when the user asks.
+- A Yardstick folder that runs on a schedule against the tenant is a **production**
+  install. Never write recipes, test output, or experiments there. Promotion happens
+  only through `Publish-Yardstick.ps1 -ProductionPath`, and only when the user asks.
 - Never run `Yardstick.ps1` itself for testing — it uploads to the live Intune
   tenant. Use the harness under `Tests\RecipeHarness\`, which never contacts Graph.
 - Never substitute a public/unlicensed installer for licensed deployment media.
@@ -65,7 +66,7 @@ pulls one out of the executable.
 ### 4. Validate schema
 
 ```powershell
-& 'G:\Intune\YardstickDev\Tests\RecipeHarness\Test-RecipeSchema.ps1' -Id <id>
+& '.\Tests\RecipeHarness\Test-RecipeSchema.ps1' -Id <id>
 ```
 
 Run it for every recipe you changed. Fix warnings too — a casing warning means
@@ -76,7 +77,7 @@ Yardstick may read a different field than you think you set.
 Batch every changed recipe into **one** invocation:
 
 ```powershell
-& 'G:\Intune\YardstickDev\Tests\RecipeHarness\Invoke-RecipeInstallTest.ps1' `
+& '.\Tests\RecipeHarness\Invoke-RecipeInstallTest.ps1' `
     -Id <id1>, <id2> -WhatIf -NoElevate -DiscardInstaller
 ```
 
@@ -90,7 +91,7 @@ commands. This catches most recipe bugs without touching the machine.
 This installs and uninstalls real software on the current machine. **Ask first.**
 
 ```powershell
-& 'G:\Intune\YardstickDev\Tests\RecipeHarness\Invoke-RecipeInstallTest.ps1' `
+& '.\Tests\RecipeHarness\Invoke-RecipeInstallTest.ps1' `
     -Id <id1>, <id2> -DiscardInstaller -InstallTimeoutMinutes 90 `
     -DetectionSettleSeconds 180 -ResidueSettleSeconds 60
 ```
@@ -140,4 +141,4 @@ Always close with:
   installer-lock and exit-code handling, evidence rules.
 - Full field documentation: `Docs\WritingRecipes.md`.
 - Dropbox operator workflow: `Docs\SoftwareDropbox.md`.
-- Harness handoff notes and known-good reference recipes: `Tests\RecipeHarness\BOT-HANDOFF.md`.
+- Harness usage: `Tests\RecipeHarness\README.md`.

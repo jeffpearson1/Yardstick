@@ -2,7 +2,7 @@
 
 PowerShell harnesses for validating Yardstick recipe YAML from schema checks through local installation, detection, uninstallation, and residue testing.
 
-The harness is part of the `G:\Intune\YardstickDev` monorepo:
+The harness lives in the Yardstick folder, and every path below is relative to it:
 
 - Harness source: `Tests\RecipeHarness`
 - Development recipes: `Recipes\Development`
@@ -26,7 +26,7 @@ The install harness runs real installers on the local machine. Use a disposable 
 ## Quick Start
 
 ```powershell
-$project = 'G:\Intune\YardstickDev'
+$project = 'C:\Path\To\Yardstick'
 $harness = "$project\Tests\RecipeHarness"
 $recipe = "$project\Recipes\Development\obsidian.yaml"
 
@@ -96,7 +96,7 @@ Each install-test run includes `summary.md`, `summary.json`, `harness.transcript
 
 ## Bot Checklist
 
-1. Read `BOT-HANDOFF.md` and `Docs\WritingRecipes.md`.
+1. Read `Docs\WritingRecipes.md`.
 2. Confirm each recipe and icon exists.
 3. Run schema validation for every changed recipe.
 4. Batch `-WhatIf -NoElevate` checks.

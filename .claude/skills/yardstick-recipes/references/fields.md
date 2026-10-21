@@ -87,7 +87,7 @@ the packaged `<version>` so supersedence can still see older installs. `sharex.y
 `marcedit.yaml`, and `sysinternals.yaml` are good models.
 
 Note that `msi` / `file:version` / `registry:version` detection types participate
-in the `{DETECT}` anchor mechanism that pulls stale endpoints forward; script and
+in the DETECT anchor mechanism that pulls stale endpoints forward; script and
 existence-only detection do not.
 
 ## Placeholders

@@ -136,6 +136,25 @@ Use the included test script to validate email functionality:
 .\Test-EmailNotification.ps1 -Send
 ```
 
+### Resending a report from the log
+
+When a run's email doesn't go out (because of `-NoEmail`, a declined prompt, a delivery failure or an aborted run), `Send-YardstickLogReport.ps1` rebuilds the report from `YLog.log` and sends it through the configured `emailDeliveryMethod`. It can only rebuild what the log recorded, so the failure stage is inferred from the error text.
+
+```powershell
+# Show what was read from the log, without sending
+.\Send-YardstickLogReport.ps1 -ParseOnly
+
+# Open the rebuilt report for inspection instead of sending it
+.\Send-YardstickLogReport.ps1 -Preview
+
+# Send the report for the most recent run in YLog.log
+.\Send-YardstickLogReport.ps1
+
+# Report on an archived log, or an earlier run in the same log (-1 is the latest)
+.\Send-YardstickLogReport.ps1 -LogPath D:\Archive\YLog-20260908.log
+.\Send-YardstickLogReport.ps1 -RunIndex -2
+```
+
 ## New PowerShell Functions
 
 ### YardstickSupport.psm1 Functions

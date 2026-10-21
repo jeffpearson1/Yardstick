@@ -1,7 +1,7 @@
 # Installer Patterns
 
-Each pattern names a recipe you can read in full. Paths are relative to
-`G:\Intune\YardstickDev`.
+Each pattern names a recipe you can read in full. Paths are relative to the
+Yardstick folder.
 
 ## Plain MSI
 
@@ -127,8 +127,8 @@ Reference: `Recipes\Jetbrains\pycharm.yaml`, `Recipes\Jetbrains\intellijidea.yam
 Last resort, only when the vendor blocks BITS or hides the artifact behind
 JavaScript. Launch headless Firefox in `downloadScript` with `Start-SeDriver`,
 target `"$buildSpace\$id\$version"` as the download directory, poll for the file,
-then `$Driver.Close()`. Reference: `Recipeskeepass.yaml`. Automation shared by several recipes
-belongs in a helper under `ModulesCustom` so the recipes stay declarative.
+then `$Driver.Close()`. Reference: `Recipes\keepass.yaml`. Automation shared by several recipes
+belongs in a helper under `Modules\Custom` so the recipes stay declarative.
 
 ## Manual / licensed media (software dropbox)
 
