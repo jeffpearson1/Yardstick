@@ -2,7 +2,7 @@
    <picture>
    <source media="(prefers-color-scheme: dark)" srcset="Branding/yardstick_logo_white_text_transparent_bg.png">
    <source media="(prefers-color-scheme: light)" srcset="Branding/yardstick_logo_transparent.png">
-   <img alt="Yardstick Logo" src="Branding/yardstick_logo_transparent.png" style="width: 50%;">
+   <img alt="Yardstick Logo" src="Branding/yardstick_logo_transparent.png" style="width: 350px;">
    </picture>
 </div>
 
