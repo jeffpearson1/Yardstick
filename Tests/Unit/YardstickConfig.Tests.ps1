@@ -330,6 +330,19 @@ Describe "Test-YardstickPreferences" {
         (Test-YardstickPreferences -Preferences $script:prefs).Errors | Should -Match 'defaultDeadlineDateOffset'
     }
 
+    It "Warns with Windows' reason when an optional folder cannot be opened" {
+        $script:prefs.Backup = Join-Path $TestDrive 'no-such-backup'
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeTrue
+        $result.Warnings | Should -HaveCount 1
+        $result.Warnings[0] | Should -Match "^The Backup folder '.*no-such-backup' is not reachable: .+"
+    }
+
+    It "Accepts an optional folder that exists" {
+        $script:prefs.Backup = (New-Item -ItemType Directory -Path (Join-Path $TestDrive 'backup-ok') -Force).FullName
+        (Test-YardstickPreferences -Preferences $script:prefs).Warnings | Should -BeNullOrEmpty
+    }
+
     It "Says nothing about email settings while email is disabled" {
         $script:prefs.emailDeliveryMethod = 'smtp'
         $script:prefs.smtpServer = $null

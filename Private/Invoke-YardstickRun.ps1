@@ -103,6 +103,13 @@ $showDetail = $VerbosePreference -eq 'Continue'
 $VerbosePreference = 'SilentlyContinue'
 Write-Log -Init -ShowDetail:$showDetail
 
+# Session 0 is a task running while nobody is signed in, where Outlook and some
+# network shares are out of reach - worth knowing when a scheduled run misbehaves.
+Write-Log ("Running as {0} in Windows session {1}." -f [Security.Principal.WindowsIdentity]::GetCurrent().Name, (Get-Process -Id $PID).SessionId) -Level Detail
+if (Test-YardstickUacElevated) {
+    Write-Log "This run has administrator rights, so the files it creates (this log, detection scripts) belong to the Administrators group and cannot be changed later without them. Run Yardstick from a normal PowerShell window, and its scheduled task only when you are signed in." -Level Warning
+}
+
 # Validate parameters
 if ((-not $ApplicationId) -and (($All -eq $false) -and (!$Group))) {
     Write-Log "Specify -ApplicationId, -Group or -All." -Level Error

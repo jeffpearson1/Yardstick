@@ -22,10 +22,15 @@ matching the secret to its passwordCredential by hint.
 An optional SMTP account for emailDeliveryMethod 'smtp' is stored the same way,
 under `smtpCredentialTarget` (default "Yardstick:Smtp"), with the SMTP user name
 as the credential user name and the password as the blob.
+
+Recipe secret vaults (read by Get-Secrets) are stored one per credential, under
+"Yardstick:Secret:<VaultName>", with the vault name as the credential user name
+and the vault's key/value pairs as a JSON object in the blob.
 #>
 
 $Script:DefaultCredentialTarget = 'Yardstick:IntuneGraph'
 $Script:DefaultSmtpCredentialTarget = 'Yardstick:Smtp'
+$Script:SecretVaultTargetPrefix = 'Yardstick:Secret:'
 $Script:DefaultExpirationWarningDays = 30
 $Script:DefaultNotificationIntervalHours = 24
 
@@ -1028,6 +1033,256 @@ function Register-YardstickSmtpCredential {
 }
 
 
+function Get-YardstickSecretVaultTarget {
+    <#
+    .SYNOPSIS
+    Returns the Credential Manager target name that holds a recipe secret vault.
+
+    .PARAMETER VaultName
+    Name of the vault, as passed to Get-Secrets.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$VaultName
+    )
+
+    return "$($Script:SecretVaultTargetPrefix)$($VaultName.Trim())"
+}
+
+
+function Get-YardstickSecretVault {
+    <#
+    .SYNOPSIS
+    Reads a recipe secret vault from Windows Credential Manager.
+
+    .PARAMETER VaultName
+    Name of the vault.
+
+    .OUTPUTS
+    Hashtable of the vault's secrets, or $null when the vault is not stored.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$VaultName
+    )
+
+    Initialize-YardstickCredentialType
+
+    $target = Get-YardstickSecretVaultTarget -VaultName $VaultName
+    $userName = $null
+    $blob = $null
+    if (-not [YardstickCredentialNative]::Read($target, [ref]$userName, [ref]$blob)) {
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($blob)) {
+        return @{}
+    }
+
+    try {
+        $secrets = $blob | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    } catch {
+        throw "The secret vault stored under target '$target' is not valid JSON. Re-enter it with .\Set-YardstickCredential.ps1 -Secret $VaultName."
+    }
+    if ($secrets -isnot [hashtable]) {
+        throw "The secret vault stored under target '$target' is not a set of named secrets. Re-enter it with .\Set-YardstickCredential.ps1 -Secret $VaultName."
+    }
+    return $secrets
+}
+
+
+function Set-YardstickSecretVault {
+    <#
+    .SYNOPSIS
+    Writes a recipe secret vault to Windows Credential Manager, replacing any stored copy.
+
+    .PARAMETER VaultName
+    Name of the vault.
+
+    .PARAMETER Secrets
+    Hashtable of secret names to values. Values may be Strings or SecureStrings.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$VaultName,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$Secrets
+    )
+
+    Initialize-YardstickCredentialType
+
+    if ($Secrets.Count -eq 0) {
+        throw "A secret vault needs at least one secret."
+    }
+
+    $payload = [ordered]@{}
+    foreach ($key in $Secrets.Keys) {
+        $payload[[string]$key] = ConvertTo-PlainSecret $Secrets[$key]
+    }
+    $blob = $payload | ConvertTo-Json -Compress
+
+    $target = Get-YardstickSecretVaultTarget -VaultName $VaultName
+    if ($PSCmdlet.ShouldProcess($target, "Write Yardstick secret vault to Windows Credential Manager")) {
+        [YardstickCredentialNative]::Write($target, $VaultName.Trim(), $blob, "Yardstick recipe secrets")
+        Write-CredentialLog "Stored secret vault '$VaultName' in Windows Credential Manager under target '$target'."
+    }
+}
+
+
+function Remove-YardstickSecretVault {
+    <#
+    .SYNOPSIS
+    Deletes a recipe secret vault from Windows Credential Manager.
+
+    .PARAMETER VaultName
+    Name of the vault.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$VaultName
+    )
+
+    Initialize-YardstickCredentialType
+
+    $target = Get-YardstickSecretVaultTarget -VaultName $VaultName
+    if ($PSCmdlet.ShouldProcess($target, "Delete Yardstick secret vault from Windows Credential Manager")) {
+        if ([YardstickCredentialNative]::Delete($target)) {
+            Write-CredentialLog "Removed secret vault '$VaultName' stored under target '$target'."
+            return $true
+        }
+        Write-CredentialLog "No secret vault '$VaultName' was stored under target '$target'."
+        return $false
+    }
+}
+
+
+function Register-YardstickSecretVault {
+    <#
+    .SYNOPSIS
+    Prompts for the secrets in a recipe vault and stores them securely.
+
+    .DESCRIPTION
+    Starts from the vault's stored secrets, if any, so a single secret can be
+    rotated without re-entering the rest. Each value is collected as a
+    SecureString so it never appears in the console or in PSReadLine history.
+
+    .PARAMETER VaultName
+    Name of the vault.
+
+    .OUTPUTS
+    Hashtable of the stored secrets.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$VaultName
+    )
+
+    $target = Get-YardstickSecretVaultTarget -VaultName $VaultName
+    $secrets = Get-YardstickSecretVault -VaultName $VaultName
+    if (-not $secrets) { $secrets = @{} }
+
+    Write-Host ""
+    Write-Host "Secrets for vault '$VaultName' will be stored in Windows Credential Manager under" -ForegroundColor Cyan
+    Write-Host "target '$target', encrypted for the current Windows user." -ForegroundColor Cyan
+    if ($secrets.Count -gt 0) {
+        Write-Host "Already stored: $(@($secrets.Keys | Sort-Object) -join ', '). Enter a stored name to replace its value." -ForegroundColor Cyan
+    }
+    Write-Host "Leave the name blank when you are done." -ForegroundColor Cyan
+    Write-Host ""
+
+    while ($true) {
+        $name = Read-Host "Secret name"
+        if ([string]::IsNullOrWhiteSpace($name)) { break }
+        $value = Read-Host "Value for $($name.Trim())" -AsSecureString
+        if (-not $value -or $value.Length -eq 0) {
+            Write-Host "No value entered; '$($name.Trim())' left unchanged." -ForegroundColor Yellow
+            continue
+        }
+        $secrets[$name.Trim()] = $value
+    }
+
+    if ($secrets.Count -eq 0) { throw "No secrets were entered for vault '$VaultName'." }
+
+    Set-YardstickSecretVault -VaultName $VaultName -Secrets $secrets
+    Write-Host ""
+
+    return Get-YardstickSecretVault -VaultName $VaultName
+}
+
+
+function Get-Secrets {
+    <#
+    .SYNOPSIS
+    Retrieves a recipe secret vault from Windows Credential Manager.
+
+    .DESCRIPTION
+    Reads the vault stored under "Yardstick:Secret:<VaultName>". A vault that is
+    not in Credential Manager yet but still exists as a plaintext
+    <SecretsDir>\<VaultName>.yaml file is moved into Credential Manager, and the
+    log asks for the file to be deleted.
+
+    .PARAMETER VaultName
+    The name of the vault to read.
+
+    .PARAMETER SecretsDir
+    Folder holding legacy plaintext YAML vaults. Only read when the vault is not
+    in Credential Manager. Defaults to Local\Secrets, or the root Secrets folder
+    on installations that predate the Local\ layout.
+
+    .OUTPUTS
+    Hashtable of retrieved secrets.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$VaultName,
+        [string]$SecretsDir
+    )
+
+    $target = Get-YardstickSecretVaultTarget -VaultName $VaultName
+    Write-Log "Reading secret vault $VaultName from Windows Credential Manager..." -Level Detail
+    $secrets = Get-YardstickSecretVault -VaultName $VaultName
+    if ($null -ne $secrets) {
+        Write-Log "Read secret vault $VaultName." -Level Detail
+        return $secrets
+    }
+
+    if (-not $SecretsDir) {
+        $yardstickRoot = Split-Path -Parent $PSScriptRoot
+        $localSecrets = Join-Path $yardstickRoot 'Local\Secrets'
+        $legacySecrets = Join-Path $yardstickRoot 'Secrets'
+        $SecretsDir = if (Test-Path -LiteralPath $localSecrets -PathType Container) {
+            $localSecrets
+        } else {
+            $legacySecrets
+        }
+    }
+
+    $legacyFile = Join-Path $SecretsDir "$VaultName.yaml"
+    if (-not (Test-Path -LiteralPath $legacyFile -PathType Leaf)) {
+        throw "No secret vault '$VaultName' found in Windows Credential Manager under target '$target'. Run .\Set-YardstickCredential.ps1 -Secret $VaultName to store it."
+    }
+
+    Write-Log "Moving secret vault $VaultName from $legacyFile into Windows Credential Manager..."
+    $legacySecrets = Get-Content -LiteralPath $legacyFile -Raw | ConvertFrom-Yaml
+    if ($legacySecrets -isnot [System.Collections.IDictionary] -or $legacySecrets.Count -eq 0) {
+        throw "$legacyFile does not contain any named secrets."
+    }
+    Set-YardstickSecretVault -VaultName $VaultName -Secrets $legacySecrets
+    Write-Log "Moved secret vault $VaultName into Windows Credential Manager. Delete $legacyFile - it is no longer read and still holds the secrets in plaintext." -Level Warning
+
+    return Get-YardstickSecretVault -VaultName $VaultName
+}
+
+
 Export-ModuleMember -Function @(
     'Get-YardstickCredentialTarget',
     'Get-YardstickIntuneCredential',
@@ -1043,5 +1298,11 @@ Export-ModuleMember -Function @(
     'Get-YardstickSmtpCredential',
     'Set-YardstickSmtpCredential',
     'Remove-YardstickSmtpCredential',
-    'Register-YardstickSmtpCredential'
+    'Register-YardstickSmtpCredential',
+    'Get-YardstickSecretVaultTarget',
+    'Get-YardstickSecretVault',
+    'Set-YardstickSecretVault',
+    'Remove-YardstickSecretVault',
+    'Register-YardstickSecretVault',
+    'Get-Secrets'
 )

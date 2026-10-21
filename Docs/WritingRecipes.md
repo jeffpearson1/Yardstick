@@ -124,7 +124,7 @@ These variables are set once at startup from `preferences.yaml` and are availabl
 | `$Recipes` | Recipes directory |
 | `$Icons` | Icons directory |
 | `$Tools` | Tools directory |
-| `$Secrets` | Secrets directory |
+| `$Secrets` | Legacy plaintext secrets directory. Read secrets with `Get-Secrets -VaultName <name>`, which uses Windows Credential Manager |
 
 ### `preDownloadScript`
 

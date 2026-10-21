@@ -285,6 +285,26 @@ function Get-YardstickPreferenceAllowedValues {
 }
 
 
+function Get-YardstickFolderProblem {
+    <#
+    .SYNOPSIS
+    Returns why a folder cannot be opened, or nothing when it can.
+
+    .DESCRIPTION
+    Test-Path says only $false, which reads the same for a mistyped path and a
+    share that refused the account's credentials. Listing the folder surfaces
+    Windows' own reason.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        $entries = [System.IO.Directory]::EnumerateFileSystemEntries($Path).GetEnumerator()
+        try { [void]$entries.MoveNext() } finally { $entries.Dispose() }
+    } catch {
+        $_.Exception.GetBaseException().Message.Trim()
+    }
+}
+
+
 function Test-YardstickPreferences {
     <#
     .SYNOPSIS
@@ -372,8 +392,8 @@ function Test-YardstickPreferences {
     foreach ($key in $Script:OptionalFolderKeys) {
         $folder = [string]$Preferences[$key]
         if (-not [string]::IsNullOrWhiteSpace($folder) -and $folder -notmatch '<REPLACE_' -and
-            -not (Test-Path -LiteralPath $folder -PathType Container)) {
-            $warnings.Add("The $key folder '$folder' is not reachable.")
+            ($problem = Get-YardstickFolderProblem -Path $folder)) {
+            $warnings.Add("The $key folder '$folder' is not reachable: $problem")
         }
     }
 

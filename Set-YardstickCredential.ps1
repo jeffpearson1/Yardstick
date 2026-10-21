@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
     Stores, inspects, or removes the Intune app-registration credentials Yardstick
-    uses to authenticate to Microsoft Graph.
+    uses to authenticate to Microsoft Graph, the optional SMTP credential, and the
+    secret vaults recipes read with Get-Secrets.
 
 .DESCRIPTION
     Yardstick reads its TenantID, ClientID and ClientSecret from Windows Credential
@@ -27,10 +28,16 @@
     instead of the Intune credential. Combine with -Show or -Remove. Only needed when
     the SMTP server requires authentication; without it Yardstick relays anonymously.
 
+.PARAMETER Secret
+    Work with the named recipe secret vault (the one a recipe reads with
+    Get-Secrets -VaultName) instead of the Intune credential. Prompts for secret
+    names and values; combine with -Show to list the stored names or -Remove to
+    delete the vault. Vaults are stored under "Yardstick:Secret:<name>".
+
 .PARAMETER Target
     Override the Credential Manager target name. Defaults to the `credentialTarget`
     preference, or "Yardstick:IntuneGraph" (with -Smtp: the `smtpCredentialTarget`
-    preference, or "Yardstick:Smtp").
+    preference, or "Yardstick:Smtp"). Not used with -Secret.
 
 .EXAMPLE
     .\Set-YardstickCredential.ps1
@@ -45,6 +52,10 @@
 .EXAMPLE
     .\Set-YardstickCredential.ps1 -Smtp
     Prompts for the SMTP user name and password, and stores them securely.
+
+.EXAMPLE
+    .\Set-YardstickCredential.ps1 -Secret crowdstrikefalcon
+    Prompts for the secrets the crowdstrikefalcon recipe reads, and stores them securely.
 #>
 #Requires -Version 7.0
 
@@ -64,6 +75,12 @@ param(
     [Parameter(ParameterSetName = 'Remove')]
     [switch]$Smtp,
 
+    [Parameter(ParameterSetName = 'Set')]
+    [Parameter(ParameterSetName = 'Show')]
+    [Parameter(ParameterSetName = 'Remove')]
+    [ValidateNotNullOrEmpty()]
+    [string]$Secret,
+
     [string]$Target
 )
 
@@ -74,6 +91,34 @@ $Global:LogFile = 'YLog.log'
 
 Import-Module powershell-yaml -ErrorAction Stop
 Import-Module "$PSScriptRoot\Yardstick.psd1" -Force
+
+if ($Secret) {
+    if ($Smtp) { throw "-Secret and -Smtp cannot be used together." }
+
+    switch ($PSCmdlet.ParameterSetName) {
+        'Show' {
+            $vault = Get-YardstickSecretVault -VaultName $Secret
+            if ($null -eq $vault) {
+                Write-Host "No secret vault '$Secret' is stored under target '$(Get-YardstickSecretVaultTarget -VaultName $Secret)'." -ForegroundColor Yellow
+                exit 1
+            }
+            [PSCustomObject]@{
+                Target  = Get-YardstickSecretVaultTarget -VaultName $Secret
+                Secrets = (@($vault.Keys | Sort-Object) | ForEach-Object { "$_ = ********" }) -join "`n"
+            } | Format-List
+        }
+
+        'Remove' {
+            Remove-YardstickSecretVault -VaultName $Secret | Out-Null
+        }
+
+        default {
+            Register-YardstickSecretVault -VaultName $Secret | Out-Null
+            Write-Host "Secret vault '$Secret' stored." -ForegroundColor Green
+        }
+    }
+    return
+}
 
 # Credentials can be stored before preferences.yaml exists, so a missing file
 # just means the built-in defaults (credential target names) apply.

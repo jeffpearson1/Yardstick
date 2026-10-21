@@ -263,3 +263,75 @@ Describe "Send-YardstickCredentialExpiryEmail over SMTP" {
             Should -BeFalse
     }
 }
+
+Describe "Secret vault storage round-trip" {
+    BeforeAll {
+        $script:Vault = "PesterVault-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    }
+
+    AfterEach {
+        Remove-YardstickSecretVault -VaultName $script:Vault -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    It "Names the target after the vault" {
+        Get-YardstickSecretVaultTarget -VaultName 'crowdstrikefalcon' | Should -Be 'Yardstick:Secret:crowdstrikefalcon'
+    }
+
+    It "Returns null when the vault is not stored" {
+        Get-YardstickSecretVault -VaultName $script:Vault | Should -BeNullOrEmpty
+    }
+
+    It "Round-trips every secret as a hashtable" {
+        $secure = ConvertTo-SecureString 'secure-value' -AsPlainText -Force
+        Set-YardstickSecretVault -VaultName $script:Vault -Secrets @{ client_id = 'id-1'; client_secret = $secure }
+        $vault = Get-YardstickSecretVault -VaultName $script:Vault
+        $vault | Should -BeOfType [hashtable]
+        $vault.client_id | Should -Be 'id-1'
+        $vault.client_secret | Should -Be 'secure-value'
+    }
+
+    It "Rejects an empty vault" {
+        { Set-YardstickSecretVault -VaultName $script:Vault -Secrets @{} } | Should -Throw
+    }
+
+    It "Reports whether a vault was removed" {
+        Set-YardstickSecretVault -VaultName $script:Vault -Secrets @{ a = 'b' }
+        Remove-YardstickSecretVault -VaultName $script:Vault | Should -BeTrue
+        Remove-YardstickSecretVault -VaultName $script:Vault | Should -BeFalse
+    }
+}
+
+Describe "Get-Secrets" {
+    BeforeAll {
+        Import-Module powershell-yaml -ErrorAction Stop
+        $script:Vault = "PesterVault-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    }
+
+    AfterEach {
+        Remove-YardstickSecretVault -VaultName $script:Vault -ErrorAction SilentlyContinue | Out-Null
+        Remove-Item -Path (Join-Path $TestDrive '*.yaml') -ErrorAction SilentlyContinue
+    }
+
+    It "Reads the vault from Credential Manager" {
+        Set-YardstickSecretVault -VaultName $script:Vault -Secrets @{ customer_id = 'cid-1' }
+        (Get-Secrets -VaultName $script:Vault -SecretsDir $TestDrive).customer_id | Should -Be 'cid-1'
+    }
+
+    It "Prefers Credential Manager over a leftover YAML file" {
+        Set-YardstickSecretVault -VaultName $script:Vault -Secrets @{ customer_id = 'stored' }
+        Set-Content -Path (Join-Path $TestDrive "$script:Vault.yaml") -Value 'customer_id: legacy'
+        (Get-Secrets -VaultName $script:Vault -SecretsDir $TestDrive).customer_id | Should -Be 'stored'
+    }
+
+    It "Moves a legacy YAML vault into Credential Manager" {
+        Set-Content -Path (Join-Path $TestDrive "$script:Vault.yaml") -Value "client_id: legacy-id`nclient_secret: legacy-secret"
+        $secrets = Get-Secrets -VaultName $script:Vault -SecretsDir $TestDrive -WarningAction SilentlyContinue
+        $secrets.client_secret | Should -Be 'legacy-secret'
+        (Get-YardstickSecretVault -VaultName $script:Vault).client_id | Should -Be 'legacy-id'
+    }
+
+    It "Throws with the setup command when the vault is stored nowhere" {
+        { Get-Secrets -VaultName $script:Vault -SecretsDir $TestDrive } |
+            Should -Throw -ExpectedMessage "*Set-YardstickCredential.ps1 -Secret $script:Vault*"
+    }
+}

@@ -72,7 +72,7 @@
 
 ## Extensibility & Secrets
 - Custom helpers dropped in [Modules/Custom](Modules/Custom) are auto-imported; use this for vendor-specific download automation (see [Modules/Custom/JetbrainsDownloader.psm1](Modules/Custom/JetbrainsDownloader.psm1) and [Modules/Custom/GithubDownloader.psm1](Modules/Custom/GithubDownloader.psm1)). Selenium is imported with `-ErrorAction SilentlyContinue`, so only the recipes that actually need it (keepass, winscp, ltspice and similar) will fail if the module is missing.
-- `Get-Secrets` expects YAML vaults under [Secrets](Secrets); return hashtables keyed by whatever your module needs rather than re-reading preference files.
+- `Get-Secrets` (in [Modules/YardstickCredential.psm1](Modules/YardstickCredential.psm1)) reads a recipe's secret vault from Windows Credential Manager under `Yardstick:Secret:<VaultName>` and returns a hashtable; operators store vaults with `.\Set-YardstickCredential.ps1 -Secret <VaultName>`. A plaintext `<VaultName>.yaml` left in the Secrets folder is moved into Credential Manager on first read. Never commit or reintroduce plaintext secret files.
 - Version sorting uses the custom [Modules/VersionPro.psm1](Modules/VersionPro.psm1) type; cast versions to `[VersionPro]` whenever you need consistent ordering of semantic-ish strings.
 
 ## Logging

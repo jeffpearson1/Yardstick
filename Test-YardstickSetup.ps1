@@ -329,7 +329,9 @@ if (-not $task) {
 } else {
     $action = @($task.Actions)[0]
     $runAs = [string]$task.Principal.UserId
-    Add-Check 'Scheduled task' OK "Task \Yardstick\Yardstick runs as $runAs ($($task.State))."
+    $whenSignedIn = $task.Principal.LogonType -eq 'Interactive'
+    $when = if ($whenSignedIn) { 'only while signed in' } else { 'whether or not signed in' }
+    Add-Check 'Scheduled task' OK "Task \Yardstick\Yardstick runs as $runAs, $when ($($task.State))."
     if ($action -and "$($action.Arguments)" -notlike "*$(Join-Path $ProjectRoot 'Yardstick.ps1')*") {
         Add-Check 'Task target' Warn "The task runs '$($action.Arguments)', which is not this folder's Yardstick.ps1."
     }
@@ -337,8 +339,13 @@ if (-not $task) {
     if ($shortRunAs -and $shortRunAs -ne $env:USERNAME) {
         Add-Check 'Task account' Warn "The task runs as $runAs, not $env:USERNAME. Credentials are stored per user, so run this check (and the AppRegistration step) as $runAs."
     }
-    if ($prefs.emailNotificationEnabled -eq $true -and (Get-YardstickEmailDeliveryMethod -Preferences $prefs) -eq 'outlook') {
-        Add-Check 'Task email' Warn 'Outlook cannot send mail from a task that runs while nobody is signed in. Use SMTP for scheduled runs.'
+    if (-not $whenSignedIn) {
+        if ($prefs.emailNotificationEnabled -eq $true -and (Get-YardstickEmailDeliveryMethod -Preferences $prefs) -eq 'outlook') {
+            Add-Check 'Task email' Warn 'Outlook cannot send mail from a task that runs whether or not you are signed in. Use SMTP, or run .\Install-Yardstick.ps1 -Step ScheduledTask and choose to run only while signed in.'
+        }
+        if (Test-YardstickCredentialGuard) {
+            Add-Check 'Task network' Warn 'Credential Guard is on, which can stop a task with a stored password from opening network shares ("The user name or password is incorrect"). If backups or the software dropbox fail in scheduled runs, run .\Install-Yardstick.ps1 -Step ScheduledTask and choose to run only while signed in.'
+        }
     }
 
     $info = Get-ScheduledTaskInfo -TaskPath '\Yardstick\' -TaskName 'Yardstick'

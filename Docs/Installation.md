@@ -191,6 +191,27 @@ If an older `preferences.yaml` still contains `TenantID`, `ClientId` and
 `ClientSecret`, the next Yardstick run moves them into Credential Manager and reminds
 you to delete them from the file.
 
+### Recipe secrets
+
+Recipes that call a vendor API with their own keys (CrowdStrike Falcon, for example)
+read them with `Get-Secrets -VaultName <name>`. Each vault is stored in Credential
+Manager under `Yardstick:Secret:<name>`, with the same rules as above: store it as
+the account that runs Yardstick, on each machine.
+
+```powershell
+.\Set-YardstickCredential.ps1 -Secret crowdstrikefalcon          # add or replace secrets
+.\Set-YardstickCredential.ps1 -Secret crowdstrikefalcon -Show    # list the stored names (values masked)
+.\Set-YardstickCredential.ps1 -Secret crowdstrikefalcon -Remove  # delete the vault
+```
+
+Enter each secret's name and value; leave the name blank to finish. Entering a name
+that is already stored replaces just that value. The names must match what the
+recipe reads - `crowdstrikefalcon` uses `client_id`, `client_secret` and `customer_id`.
+
+Older installations kept vaults as plaintext `<name>.yaml` files in `Local\Secrets`.
+The first run that reads one moves it into Credential Manager and asks you to delete
+the file.
+
 ### Client secret expiry
 
 Every run checks how long the client secret has left. Inside
@@ -246,7 +267,7 @@ Yardstick can send two reports after each run: a short list of updated software 
 | Method | Use it when |
 |---|---|
 | `smtp` | Yardstick runs on a schedule or on a server. Needs an SMTP server; a sign-in, if the server needs one, is stored in Credential Manager. |
-| `outlook` | Yardstick runs interactively on a machine with Outlook. Outlook needs a signed-in user, so it usually fails from a scheduled task. |
+| `outlook` | Yardstick runs on a machine with Outlook, by hand or from a scheduled task that runs only while you are signed in. It cannot send from a task that runs whether or not you are signed in. |
 
 See [EmailNotifications.md](EmailNotifications.md) for every setting.
 
@@ -263,22 +284,37 @@ pwsh.exe -NoProfile -ExecutionPolicy Bypass -File <Yardstick folder>\Yardstick.p
 It runs `-Group <name>` instead of `-All` if you pick a recipe group from
 `RecipeGroups.yaml`. `-NoInteractive` makes sure the run never waits for input.
 
+The task can run in one of two ways:
+
+- **Only while you are signed in** (the default). It runs as you, in your desktop
+  session and with your normal rights, exactly as if you had started Yardstick
+  yourself. Outlook can send the report, network shares accept your sign-in, and
+  the files it creates stay yours. No password is needed, but it does not run
+  while you are signed out.
+- **Whether or not you are signed in.** Task Scheduler asks for the account's
+  password and runs the task in a separate background session. Outlook cannot be
+  reached from there, so use SMTP for email. On computers with Credential Guard
+  (on by default in Windows 11 22H2 and Windows Server 2025) network shares can
+  refuse the stored password with "The user name or password is incorrect", so
+  backups and the software dropbox fail. `.\Test-YardstickSetup.ps1` warns about
+  both.
+
 Things to know:
 
-- The task runs whether or not anyone is signed in, so Task Scheduler asks for the
-  account's password.
 - It must run as the account that stored the Intune credentials (see
   [Where the credentials are kept](#where-the-credentials-are-kept)).
 - Some computers only let administrators create a task that runs while nobody is
   signed in. The installer then creates it with administrator rights at the end of
-  setup (see [Administrator rights](#administrator-rights)). The task still runs as
-  your account, without administrator rights.
+  setup (see [Administrator rights](#administrator-rights)).
 - If Yardstick is on a network share, the task account needs access to it, and must use
   the UNC path; mapped drive letters are not available to scheduled tasks.
-- Use SMTP rather than Outlook for email.
+- A run with administrator rights logs a warning. The files it creates belong to the
+  Administrators group, and you can't change them afterwards from a normal session
+  (see [Troubleshooting](#troubleshooting)).
 
 To create the task by hand, use the same command line, set **Start in** to the
-Yardstick folder, and choose **Run whether user is logged on or not**.
+Yardstick folder, and choose **Run only when user is logged on** with **Run with
+highest privileges** cleared.
 
 
 ## Checking an installation

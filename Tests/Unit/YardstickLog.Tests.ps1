@@ -86,6 +86,28 @@ Describe "Write-Log" {
         Get-ConsoleLine { Write-Log "routine step" -Level Detail } | Should -BeNullOrEmpty
     }
 
+    It "-Init overwrites the last run's log in place, keeping its permissions" {
+        Write-Log "last run" 6>$null
+        $path = Join-Path $Global:LogLocation $Global:LogFile
+        $acl = Get-Acl -LiteralPath $path
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new('Everyone', 'Read', 'Allow'))
+        Set-Acl -LiteralPath $path -AclObject $acl
+
+        Write-Log -Init
+        Get-LogLine | Should -Not -Contain 'last run'
+        @((Get-Acl -LiteralPath $path).Access | Where-Object { "$($_.IdentityReference)" -eq 'Everyone' -and -not $_.IsInherited }) |
+            Should -HaveCount 1
+    }
+
+    It "-Init replaces a log it cannot overwrite" {
+        $path = Join-Path $Global:LogLocation $Global:LogFile
+        (Get-Item -LiteralPath $path).IsReadOnly = $true
+
+        Write-Log -Init
+        (Get-Item -LiteralPath $path).IsReadOnly | Should -BeFalse
+        (Get-LogLine)[1] | Should -Match '^LOGGING STARTED AT '
+    }
+
     It "writes nothing for empty content" {
         Write-Log "" 6>$null
         (Get-LogLine).Count | Should -Be 3

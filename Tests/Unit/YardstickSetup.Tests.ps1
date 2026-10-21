@@ -791,6 +791,47 @@ Describe "Get-YardstickScheduledTaskDefinition" {
 }
 
 
+Describe "Register-YardstickScheduledTask" {
+    BeforeEach {
+        Mock Register-ScheduledTask { } -ModuleName YardstickSetup
+    }
+
+    It "Runs as the current user only while they are signed in, without a credential" {
+        Register-YardstickScheduledTask -ProjectRoot 'C:\Yardstick' -At ([datetime]'03:00')
+        Should -Invoke Register-ScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter {
+            $Principal.LogonType -eq 'Interactive' -and $Principal.RunLevel -eq 'Limited' -and
+            $Principal.UserId -eq "$env:USERDOMAIN\$env:USERNAME" -and -not $Password
+        }
+    }
+
+    It "Runs whether or not the account is signed in, with a credential" {
+        $credential = [pscredential]::new('CONTOSO\runner', (ConvertTo-SecureString 'secret' -AsPlainText -Force))
+        Register-YardstickScheduledTask -ProjectRoot 'C:\Yardstick' -At ([datetime]'03:00') -Credential $credential
+        Should -Invoke Register-ScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter {
+            $User -eq 'CONTOSO\runner' -and $Password -eq 'secret' -and -not $Principal
+        }
+    }
+}
+
+
+Describe "Test-YardstickCredentialGuard" {
+    It "Is <Expected> when the running security services are <Services>" -TestCases @(
+        @{ Services = @(1, 2); Expected = $true }
+        @{ Services = @(2); Expected = $false }
+        @{ Services = @(); Expected = $false }
+    ) {
+        param($Services, $Expected)
+        Mock Get-CimInstance { [pscustomobject]@{ SecurityServicesRunning = $Services } } -ModuleName YardstickSetup
+        Test-YardstickCredentialGuard | Should -Be $Expected
+    }
+
+    It "Is false when Device Guard cannot be queried" {
+        Mock Get-CimInstance { throw 'Invalid namespace' } -ModuleName YardstickSetup
+        Test-YardstickCredentialGuard | Should -BeFalse
+    }
+}
+
+
 Describe "Test-YardstickAclWritable" {
     BeforeAll {
         $script:user = 'S-1-5-21-1000-2000-3000-1001'

@@ -108,8 +108,10 @@ program and needs administrator rights, which Windows asks for at the end of
 setup. Without it, -NonInteractive leaves the setting alone.
 
 .PARAMETER TaskCredential
-Account the scheduled task runs as. Must be the account running this script,
-because the stored credentials belong to it.
+Account the scheduled task runs as, whether or not it is signed in. Must be the
+account running this script, because the stored credentials belong to it.
+Without it the task runs as you, only while you are signed in, and -NonInteractive
+skips creating the task.
 
 .PARAMETER TaskTime
 Daily start time for the scheduled task, as HH:mm. Default: 03:00.
@@ -833,7 +835,8 @@ function Invoke-ScheduledTaskStep {
     $existingTask = Get-ScheduledTask -TaskPath '\Yardstick\' -TaskName 'Yardstick' -ErrorAction SilentlyContinue
     if ($existingTask) {
         $info = Get-ScheduledTaskInfo -InputObject $existingTask -ErrorAction SilentlyContinue
-        Write-YardstickSetupStatus "A Yardstick task already exists (runs as $($existingTask.Principal.UserId); last result $($info.LastTaskResult))." -Level OK
+        $when = if ($existingTask.Principal.LogonType -eq 'Interactive') { 'while signed in' } else { 'whether or not signed in' }
+        Write-YardstickSetupStatus "A Yardstick task already exists (runs as $($existingTask.Principal.UserId) $when; last result $($info.LastTaskResult))." -Level OK
         if (-not (Read-YardstickSetupYesNo -Prompt 'Replace it?' -Default $false)) { return 'Already configured' }
     } elseif ($NonInteractive -and -not $TaskCredential) {
         Write-YardstickSetupStatus 'Skipped: pass -TaskCredential to create the scheduled task.' -Level Skip
@@ -863,35 +866,50 @@ function Invoke-ScheduledTaskStep {
         }
     }
 
-    $prefs = Get-SetupPreferences
-    if ($prefs.emailNotificationEnabled -and $prefs.emailDeliveryMethod -eq 'outlook') {
-        Write-YardstickSetupStatus 'Email is set to Outlook, which usually fails when nobody is signed in. Consider SMTP (-Step Email).' -Level Warn
+    $credential = $TaskCredential
+    if (-not $credential -and -not $NonInteractive) {
+        $signedIn = 'Only while I am signed in (recommended)'
+        $always = 'Whether or not I am signed in (needs your password)'
+        Write-Host ''
+        Write-Host 'A task that runs while you are signed in works like running Yardstick yourself.' -ForegroundColor DarkGray
+        Write-Host 'One that runs whether or not you are signed in gets a separate background session,' -ForegroundColor DarkGray
+        Write-Host 'where Outlook cannot send the report and some network shares refuse the account.' -ForegroundColor DarkGray
+        $mode = @(Read-YardstickSetupChoice -Prompt 'When should the task run?' -Choices $signedIn, $always -Default @($signedIn))[0]
+        if ($mode -eq $always) {
+            Write-Host 'Task Scheduler stores the password, not Yardstick.' -ForegroundColor DarkGray
+            $credential = Get-Credential -UserName "$env:USERDOMAIN\$env:USERNAME" -Message 'Account the Yardstick task runs as'
+            if (-not $credential) { return 'Skipped' }
+        }
+    }
+
+    if ($credential) {
+        $prefs = Get-SetupPreferences
+        if ($prefs.emailNotificationEnabled -and $prefs.emailDeliveryMethod -eq 'outlook') {
+            Write-YardstickSetupStatus 'Email is set to Outlook, which cannot send from a task that runs whether or not you are signed in. Consider SMTP (-Step Email).' -Level Warn
+        }
+        if (Test-YardstickCredentialGuard) {
+            Write-YardstickSetupStatus 'Credential Guard is on, which can stop a task with a stored password from opening network shares (backups, the software dropbox). If it does, run the task only while you are signed in.' -Level Warn
+        }
+        $taskUser = $credential.UserName
+        if ($taskUser -notmatch [regex]::Escape($env:USERNAME) + '$') {
+            Write-YardstickSetupStatus "The task will run as $taskUser, but the Intune credentials are stored for $env:USERNAME. Sign in as $taskUser and run .\Install-Yardstick.ps1 -Step AppRegistration as well." -Level Warn
+        }
+    } else {
+        $taskUser = "$env:USERDOMAIN\$env:USERNAME"
     }
     if ($Root.StartsWith('\\')) {
         Write-YardstickSetupStatus "Yardstick is on a network share ($Root). The task account needs access to it; mapped drive letters are not available to scheduled tasks." -Level Warn
     }
 
-    $credential = $TaskCredential
-    if (-not $credential) {
-        Write-Host ''
-        Write-Host 'The task runs whether or not you are signed in, which needs your Windows password.' -ForegroundColor DarkGray
-        Write-Host 'It is stored by Task Scheduler, not by Yardstick.' -ForegroundColor DarkGray
-        $credential = Get-Credential -UserName "$env:USERDOMAIN\$env:USERNAME" -Message 'Account the Yardstick task runs as'
-        if (-not $credential) { return 'Skipped' }
-    }
-    $taskUser = $credential.UserName
-    if ($taskUser -notmatch [regex]::Escape($env:USERNAME) + '$') {
-        Write-YardstickSetupStatus "The task will run as $taskUser, but the Intune credentials are stored for $env:USERNAME. Sign in as $taskUser and run .\Install-Yardstick.ps1 -Step AppRegistration as well." -Level Warn
-    }
-
     $what = if ($group) { "recipe group '$group'" } else { 'all recipes' }
-    $done = "Scheduled task \Yardstick\Yardstick runs $what daily at $($at.ToString('HH:mm')) as $taskUser."
+    $when = if ($credential) { 'whether or not you are signed in' } else { 'while you are signed in' }
+    $done = "Scheduled task \Yardstick\Yardstick runs $what daily at $($at.ToString('HH:mm')) as $taskUser, $when."
     try {
         Register-YardstickScheduledTask -ProjectRoot $Root -At $at -Credential $credential -Group $group | Out-Null
     } catch {
         # Some computers only let administrators create a task that runs while nobody
         # is signed in. Try again with administrator rights at the end of setup.
-        if ($_.Exception.Message -notmatch 'Access is denied|0x80070005|0x80070569|logon type' -or (Test-YardstickAdministrator)) { throw }
+        if (-not $credential -or $_.Exception.Message -notmatch 'Access is denied|0x80070005|0x80070569|logon type' -or (Test-YardstickAdministrator)) { throw }
         Write-YardstickSetupStatus 'Windows only lets administrators create this task. It will be created at the end of setup.' -Level Info
         Add-ElevatedAction -Name 'ScheduledTask' -Description 'Create the scheduled task \Yardstick\Yardstick' -DoneMessage $done -Action @{
             Type        = 'RegisterScheduledTask'

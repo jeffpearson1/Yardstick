@@ -1431,15 +1431,22 @@ function Register-YardstickScheduledTask {
     Registers a daily scheduled task that runs Yardstick unattended.
 
     .DESCRIPTION
-    The task runs as the given account whether or not it is signed in, so that
-    account must be the one that stored the Intune credential: Credential Manager
-    entries belong to a single Windows user.
+    Without -Credential the task runs as the current user, only while they are
+    signed in. It then runs in their desktop session with their normal rights,
+    so it reaches Outlook and network shares as they do and the files it
+    creates stay theirs.
+
+    With -Credential it runs as that account whether or not anyone is signed in,
+    in a separate background session. That account must be the one that stored
+    the Intune credential: Credential Manager entries belong to a single Windows
+    user. Outlook cannot be reached from that session, and with Credential Guard
+    on, network shares may refuse it (see Test-YardstickCredentialGuard).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
         [Parameter(Mandatory)][datetime]$At,
-        [Parameter(Mandatory)][pscredential]$Credential,
+        [pscredential]$Credential,
         [string]$Group,
         [string]$TaskName = 'Yardstick',
         [string]$TaskPath = '\Yardstick\'
@@ -1450,11 +1457,44 @@ function Register-YardstickScheduledTask {
     $trigger = New-ScheduledTaskTrigger -Daily -At $At
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit (New-TimeSpan -Hours 12) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $common = @{
+        TaskName    = $TaskName
+        TaskPath    = $TaskPath
+        Action      = $action
+        Trigger     = $trigger
+        Settings    = $settings
+        Description = 'Runs Yardstick to publish application updates to Intune.'
+        Force       = $true
+        ErrorAction = 'Stop'
+    }
 
     if ($PSCmdlet.ShouldProcess("$TaskPath$TaskName", 'Register scheduled task')) {
-        Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -Action $action -Trigger $trigger -Settings $settings `
-            -User $Credential.UserName -Password $Credential.GetNetworkCredential().Password `
-            -Description 'Runs Yardstick to publish application updates to Intune.' -Force -ErrorAction Stop
+        if ($Credential) {
+            Register-ScheduledTask @common -User $Credential.UserName -Password $Credential.GetNetworkCredential().Password
+        } else {
+            $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+            Register-ScheduledTask @common -Principal $principal
+        }
+    }
+}
+
+
+function Test-YardstickCredentialGuard {
+    <#
+    .SYNOPSIS
+    Returns $true when Credential Guard is running on this computer.
+
+    .DESCRIPTION
+    Credential Guard (on by default in Windows 11 22H2 and Windows Server 2025)
+    can stop a task that runs with a stored password from signing in to network
+    shares: they answer "The user name or password is incorrect".
+    #>
+    try {
+        $deviceGuard = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName 'Win32_DeviceGuard' -ErrorAction Stop
+        # 1 is Credential Guard.
+        @($deviceGuard.SecurityServicesRunning) -contains 1
+    } catch {
+        $false
     }
 }
 
@@ -1505,4 +1545,5 @@ Export-ModuleMember -Function @(
     'Invoke-YardstickElevatedAction'
     'Get-YardstickScheduledTaskDefinition'
     'Register-YardstickScheduledTask'
+    'Test-YardstickCredentialGuard'
 )

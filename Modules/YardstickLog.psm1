@@ -122,9 +122,17 @@ function Write-Log {
     $newLine = [Environment]::NewLine
     try {
         if ($Init) {
-            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
-            Add-YardstickLogText -Path $path -Text (
-                "$script:HeaderRule${newLine}LOGGING STARTED AT $now$newLine$script:HeaderRule$newLine")
+            $header = "$script:HeaderRule${newLine}LOGGING STARTED AT $now$newLine$script:HeaderRule$newLine"
+            try {
+                # Overwriting keeps the file's owner and permissions. Deleting it would
+                # let an elevated run replace it with one the user cannot write to.
+                [System.IO.File]::WriteAllText($path, $header)
+            } catch [System.UnauthorizedAccessException] {
+                # Left read-only by an elevated run. The user can usually still delete
+                # it from the Yardstick folder and start a file of their own.
+                Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                Add-YardstickLogText -Path $path -Text $header
+            }
         }
         if ($line) {
             Add-YardstickLogText -Path $path -Text "$line$newLine"
