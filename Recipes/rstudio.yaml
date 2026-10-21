@@ -20,6 +20,3 @@ fileDetectionPath: '%ProgramFiles%\RStudio'
 fileDetectionName: rstudio.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
-scopeTags:
-  - scopeTag1
-  - scopeTag2

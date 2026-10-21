@@ -196,6 +196,29 @@ if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container
     Add-Check 'Recipes' $level "$recipeCount recipe(s) in $recipeFolder"
 }
 
+# An override whose id matches no recipe is never applied, so a typo there would
+# quietly upload the recipe with its own (or the default) scope tags.
+$overridesPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
+try {
+    $overrides = Import-RecipeOverrides -Path $overridesPath
+    if ($overrides.Count -eq 0) {
+        Add-Check 'Recipe overrides' OK "No recipe overrides (optional: $overridesPath)."
+    } else {
+        $recipeIds = @()
+        if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
+            $recipeIds = @(Get-ChildItem -LiteralPath $recipeFolder -Recurse -File -Include '*.yaml', '*.yml' | ForEach-Object BaseName)
+        }
+        $unmatched = @($overrides.Keys | Where-Object { $_ -notin $recipeIds } | Sort-Object)
+        if ($unmatched.Count -gt 0) {
+            Add-Check 'Recipe overrides' Warn "$($unmatched.Count) override(s) in $overridesPath name no recipe, so they are never applied: $($unmatched -join ', ')"
+        } else {
+            Add-Check 'Recipe overrides' OK "$($overrides.Count) recipe override(s) in $overridesPath"
+        }
+    }
+} catch {
+    Add-Check 'Recipe overrides' Fail "Could not read '$overridesPath': $($_.Exception.Message). Yardstick will not run until it is fixed."
+}
+
 #endregion
 
 

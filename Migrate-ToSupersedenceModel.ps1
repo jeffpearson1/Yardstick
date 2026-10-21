@@ -70,6 +70,7 @@ $Prefs = Import-YardstickPreferences -ProjectRoot $PSScriptRoot
 $Global:LogLocation = $PSScriptRoot
 $Global:LogFile = "SupersedenceMigration.log"
 $Recipes = $Prefs.Recipes
+$RecipeOverrides = Import-RecipeOverrides -Path (Get-YardstickRecipeOverridesPath -ProjectRoot $PSScriptRoot)
 
 # Intune credentials come from Windows Credential Manager, not preferences.yaml
 Initialize-YardstickIntuneCredential -Preferences $Prefs | Out-Null
@@ -92,6 +93,9 @@ if ($ApplicationId) {
 foreach ($file in $recipeFiles) {
     $recipe = Get-Content $file.FullName | ConvertFrom-Yaml
     $recipe = Merge-RecipeWithBase -Recipe $recipe -RecipesPath $Recipes
+    if ($RecipeOverrides.ContainsKey($file.BaseName)) {
+        $recipe = Merge-RecipeWithOverride -Recipe $recipe -Override $RecipeOverrides[$file.BaseName]
+    }
 
     $displayName = $recipe.displayName
     if (-not $displayName) {

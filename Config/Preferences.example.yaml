@@ -124,6 +124,8 @@ defaultDeadlineDateOffset: 0
 defaultAvailableDateOffset: 0
 # Intune scope tag names applied to every new app. Leave empty to use the built-in
 # "Default" scope tag. Example: defaultScopeTags: ["Default", "Workstations"]
+# To give a recipe its own scope tags, add it to Local\recipeOverrides.yaml rather
+# than editing the recipe. See "Site-Specific Overrides" in Docs\WritingRecipes.md.
 defaultScopeTags: []
 # Entra group object IDs (GUIDs) that receive an Available assignment for every new
 # version - typically an IT test group, so updates can be tried before they reach

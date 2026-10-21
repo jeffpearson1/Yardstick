@@ -139,6 +139,17 @@ if (-not $prefsResult.IsValid) {
     exit 1
 }
 
+# Site-specific recipe fields, such as scope tags, live in Local\recipeOverrides.yaml
+# so the shared recipes work in any tenant. A bad file stops the run: dropping an
+# override would upload apps with the wrong scope tags.
+$RecipeOverridesPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
+try {
+    $RecipeOverrides = Import-RecipeOverrides -Path $RecipeOverridesPath
+} catch {
+    Write-Log "Unable to load recipe overrides from ${RecipeOverridesPath}: $($_.Exception.Message)" -Level Error
+    exit 1
+}
+
 # Run-safety timeouts. These are read before anything else touches the network on
 # purpose: every value here exists to stop the runner waiting forever, so they have
 # to be in force for the whole run, not just the recipe loop.
@@ -265,7 +276,7 @@ function Clear-RecipeVariableConstraint {
     #>
     $protected = @(
         # Runner-owned
-        'Applications', 'Prefs', 'Temp', 'BuildSpace', 'Published',
+        'Applications', 'Prefs', 'RecipeOverrides', 'Temp', 'BuildSpace', 'Published',
         'RecipeVariableBaseline',
         # PowerShell automatic variables that carry a type constraint
         'OutputEncoding', 'PSDefaultParameterValues', 'ErrorView',
@@ -1313,6 +1324,12 @@ foreach ($AppId_Processing in $Applications) {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not resolve the base recipe: $_" -FailureStage "Configuration"
                 continue
             }
+        }
+
+        # Apply this site's overrides from Local\recipeOverrides.yaml
+        if ($RecipeOverrides.ContainsKey($AppId_Processing)) {
+            $Parameters = Merge-RecipeWithOverride -Recipe $Parameters -Override $RecipeOverrides[$AppId_Processing]
+            Write-Log "Applied recipe overrides: $(@($RecipeOverrides[$AppId_Processing].Keys) -join ', ')" -Level Detail
         }
 
         # Validate recipe schema before processing

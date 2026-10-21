@@ -17,6 +17,3 @@ registryDetectionMethod: version
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox'
 registryDetectionValueName: DisplayVersion
 registryDetectionOperator: greaterThanOrEqual
-scopeTags:
-  - scopeTag1
-  - scopeTag2

@@ -161,6 +161,3 @@ fileDetectionMethod: exists
 # Each published version detects only its own "R-<version>\bin\R.exe", so
 # "Replace" supersedence removes exactly the version it is replacing.
 uninstallPreviousVersion: true
-scopeTags:
-  - scopeTag1
-  - scopeTag2

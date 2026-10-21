@@ -48,6 +48,3 @@ fileDetectionName: clion64.exe
 fileDetectionMethod: exists
 installExperience: system
 restartBehavior: suppress
-scopeTags:
-  - scopeTag1
-  - scopeTag2

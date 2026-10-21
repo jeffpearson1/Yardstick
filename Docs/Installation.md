@@ -243,6 +243,10 @@ change. The example file lists them all with explanations. In particular:
   are created when Yardstick starts.
 - **`defaultDeploymentGroups`** and **`defaultGroupsSkipAutoUpdates`** take Entra group
   object IDs, not names.
+- **`defaultScopeTags`** applies to every app. To give a recipe its own scope tags (or
+  change any other recipe field for your site only), add an entry to
+  `Local\recipeOverrides.yaml` rather than editing the recipe. See
+  [Site-Specific Overrides](WritingRecipes.md#site-specific-overrides).
 - **`SoftwareDropbox`** and **`SoftwareArchive`** are for recipes whose installers must
   be downloaded by hand. See [SoftwareDropbox.md](SoftwareDropbox.md).
 - **`Backup`** keeps a copy of every `.intunewin` file Yardstick uploads (the newest
@@ -327,6 +331,7 @@ The health check reports OK, Warn or Fail for:
 
 - PowerShell version and modules
 - `Local\preferences.yaml`
+- `Local\recipeOverrides.yaml`, if there is one, including entries that name no recipe
 - that the working folders exist and are writable, and that the account can change
   every file in the Yardstick folder
 - the stored Intune credential, the secret's expiry, sign-in, the granted Graph

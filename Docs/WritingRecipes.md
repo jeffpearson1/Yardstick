@@ -515,6 +515,7 @@ These settings control how Intune handles installation. All default to values in
 
 **`scopeTags`** (array) - Intune scope tags for RBAC.
 - Default: From `preferences.yaml`
+- Scope tags are specific to your tenant, so set them in `Local\recipeOverrides.yaml` (see [Site-Specific Overrides](#site-specific-overrides)) rather than in a recipe you share
 - Example:
   ```yaml
   scopeTags:
@@ -684,11 +685,35 @@ Recipes support single-level inheritance via the `base` field. When a recipe con
 base: photoshop
 id: photoshop_sdl
 displayName: Adobe Photoshop (SDL)
-scopeTags:
-  - Different Scope Tag
+description: Adobe Photoshop for the SDL labs
 ```
 
-This inherits all fields from `photoshop.yaml` and overrides only `id`, `displayName`, and `scopeTags`.
+This inherits all fields from `photoshop.yaml` and overrides only `id`, `displayName`, and `description`.
+
+## Site-Specific Overrides
+
+Values that only make sense in your tenant, such as scope tags, belong in
+`Local\recipeOverrides.yaml` rather than in the recipe. The `Local` folder is excluded
+from Git, so the recipes stay shareable and a `git pull` never touches your values.
+
+Each entry is a recipe id (the recipe's file name without `.yaml`) and the fields that
+replace the recipe's own when Yardstick runs it:
+
+```yaml
+7zip:
+  scopeTags:
+    - Workstations
+    - Labs
+7zip.arm64:
+  scopeTags:
+    - Workstations
+    - Labs
+```
+
+- Any recipe field can be overridden except `id` and `base`.
+- Each field is replaced whole: an overridden `scopeTags` list replaces the recipe's list rather than adding to it.
+- Overrides are applied after [Recipe Inheritance](#recipe-inheritance) and apply only to the recipe they name. A recipe that uses `base` needs its own entry; it does not pick up its base recipe's.
+- The file is optional. If it cannot be read, or an entry is malformed, Yardstick stops before processing any recipe, rather than uploading apps without the overridden values. `.\Test-YardstickSetup.ps1` checks the file and warns about entries that name no recipe.
 
 ## Dependency Management
 
@@ -765,9 +790,6 @@ displayName: Google Chrome
 publisher: Google
 description: A web browser by Google
 detectionType: msi
-scopeTags:
-  - My Scope Tag
-  - My Scope Tag 2
 ```
 
 ### EXE Installer with File Detection Example (Notepad++)
@@ -794,9 +816,6 @@ fileDetectionPath: 'C:\Program Files\Notepad++'
 fileDetectionName: notepad++.exe
 fileDetectionMethod: version
 fileDetectionOperator: equal
-scopeTags:
-  - My Scope Tag
-  - My Scope Tag 2
 ```
 
 ### Registry Detection Example (Firefox)
@@ -818,9 +837,6 @@ description: Mozilla Firefox is a free and open-source web browser
 detectionType: registry
 registryDetectionMethod: exists
 registryDetectionKey: 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Mozilla Firefox <version> (x64 en-US)'
-scopeTags:
-  - My Scope Tag
-  - My Scope Tag 2
 ```
 
 ### Multiple Detection Rules Example (Firefox ESR)
@@ -854,8 +870,6 @@ additionalDetectionRules:
     registryDetectionValueName: DisplayName
     registryDetectionOperator: equal
     registryDetectionValue: Mozilla Firefox ESR (x64 en-US)
-scopeTags:
-  - My Scope Tag
 ```
 
 ### Registry Detection with Dynamic Keys Example (DJV)

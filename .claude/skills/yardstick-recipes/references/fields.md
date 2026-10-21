@@ -119,7 +119,11 @@ existence-only detection do not.
 `minOSVersion` (`W10_20H2` is the common floor), `architecture`,
 `maximumInstallationTimeInMinutes` (raise it for long installers),
 `numVersionsToKeep`, `versionLock` (dotted pattern with `x` wildcards,
-e.g. `3.11.x`), `scopeTags`, `dependentApplicationBlocklist`.
+e.g. `3.11.x`), `dependentApplicationBlocklist`.
+
+Do not put `scopeTags` in a shared recipe. They are tenant-specific, so they go in
+the gitignored `Local\recipeOverrides.yaml`, keyed by recipe id; see "Site-Specific
+Overrides" in `Docs/WritingRecipes.md`.
 
 `fileType` (`msi`/`exe`/`zip`) and `softwareName` pass schema validation and appear
 throughout the existing recipes, but nothing in `Yardstick.ps1` or the modules

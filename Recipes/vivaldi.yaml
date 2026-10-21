@@ -57,6 +57,3 @@ fileDetectionMethod: version
 fileDetectionOperator: greaterThanOrEqual
 installExperience: system
 restartBehavior: suppress
-scopeTags:
-  - scopeTag1
-  - scopeTag2

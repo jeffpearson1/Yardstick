@@ -81,6 +81,48 @@ Describe "Test-YardstickSetup.ps1" {
         Test-Path (Join-Path $script:root 'Artifacts\Temp') | Should -BeFalse
     }
 
+    Context "Recipe overrides" {
+        BeforeAll {
+            $script:overridesPath = Join-Path $script:root 'Local\recipeOverrides.yaml'
+        }
+
+        AfterEach {
+            Remove-Item -LiteralPath $script:overridesPath -ErrorAction SilentlyContinue
+        }
+
+        It "Treats a missing overrides file as no overrides" {
+            Set-TestPreferences
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Recipe overrides'
+            $check.Level | Should -Be 'OK'
+            $check.Message | Should -Match 'No recipe overrides'
+        }
+
+        It "Counts overrides that name a recipe" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value "demo:`n  scopeTags: [Workstations]"
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Recipe overrides'
+            $check.Level | Should -Be 'OK'
+            $check.Message | Should -Match '^1 recipe override'
+        }
+
+        It "Warns about an override that names no recipe" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value "demo:`n  scopeTags: [Workstations]`ndmeo:`n  scopeTags: [Workstations]"
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Recipe overrides'
+            $check.Level | Should -Be 'Warn'
+            $check.Message | Should -Match 'dmeo'
+            $check.Message | Should -Not -Match 'demo'
+        }
+
+        It "Fails on an overrides file Yardstick cannot use" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value "demo:`n  id: other"
+            $run = Invoke-HealthCheck -Offline
+            $run.ExitCode | Should -Be 1
+            ($run.Results | Where-Object Check -eq 'Recipe overrides').Level | Should -Be 'Fail'
+        }
+    }
+
     It "Names a required permission that has no admin consent" {
         Set-TestPreferences
         Mock Get-YardstickAppTokenRoles { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementConfiguration.Read.All') }

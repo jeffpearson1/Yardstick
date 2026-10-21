@@ -53,6 +53,3 @@ restartBehavior: suppress
 # PyCharm installs into a version-stamped directory, so an in-place "Update"
 # would leave the old install behind. Use "Replace" to uninstall it first.
 uninstallPreviousVersion: true
-scopeTags:
-  - scopeTag1
-  - scopeTag2

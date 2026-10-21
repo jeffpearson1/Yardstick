@@ -3631,6 +3631,91 @@ function Merge-RecipeWithBase {
 }
 
 
+function Import-RecipeOverrides {
+    <#
+    .SYNOPSIS
+    Reads the site's recipe overrides file (Local\recipeOverrides.yaml).
+
+    .DESCRIPTION
+    The overrides file maps a recipe id (the recipe's file name without the
+    extension) to fields that replace the recipe's own when Yardstick runs it. It
+    keeps site-specific values such as scope tags out of the shared recipe files.
+
+    A missing or empty file means no overrides. Anything malformed throws rather
+    than being skipped: an override that silently went missing would upload apps
+    with, for example, the wrong scope tags.
+
+    .PARAMETER Path
+    The overrides file.
+
+    .OUTPUTS
+    A case-insensitive hashtable of recipe id to a hashtable of fields.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $overrides = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $overrides
+    }
+
+    $parsed = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Yaml
+    if ($null -eq $parsed) {
+        return $overrides
+    }
+    if ($parsed -isnot [System.Collections.IDictionary]) {
+        throw "The file must map recipe ids to the fields they override."
+    }
+
+    foreach ($id in $parsed.Keys) {
+        $fields = $parsed[$id]
+        if ($fields -isnot [System.Collections.IDictionary]) {
+            throw "The entry for '$id' must list the fields it overrides, such as scopeTags."
+        }
+        foreach ($reserved in 'id', 'base') {
+            if ($fields.Keys -contains $reserved) {
+                throw "The entry for '$id' cannot override '$reserved'."
+            }
+        }
+        $overrides[[string]$id] = $fields
+    }
+    return $overrides
+}
+
+
+function Merge-RecipeWithOverride {
+    <#
+    .SYNOPSIS
+    Applies a recipe's entry from the overrides file.
+
+    .DESCRIPTION
+    Each field in the override replaces the recipe's field whole: an overridden
+    scopeTags list replaces the recipe's list rather than adding to it. Applied
+    after Merge-RecipeWithBase, so an override also beats the base recipe.
+
+    .PARAMETER Recipe
+    The recipe hashtable, already merged with its base.
+
+    .PARAMETER Override
+    The recipe's entry from Import-RecipeOverrides.
+
+    .OUTPUTS
+    A merged hashtable.
+    #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Recipe,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Override
+    )
+
+    $merged = $Recipe.Clone()
+    foreach ($key in $Override.Keys) {
+        $merged[$key] = $Override[$key]
+    }
+    return $merged
+}
+
+
 
 function Test-RecipeSchema {
     <#
