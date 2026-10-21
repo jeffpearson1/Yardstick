@@ -85,7 +85,7 @@ try {
         -Action "Updated" `
         -Dependents @{
             "Visual C++ Runtime" = "Updated"
-            "Fonts Package"      = "Skipped (blacklisted)"
+            "Fonts Package"      = "Skipped (blocklisted)"
         }
 
     # Long-ish dependent error to verify the scrollable code box on a successful row.

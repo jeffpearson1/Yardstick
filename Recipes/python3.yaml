@@ -20,7 +20,7 @@ description: Python is a programming language that lets you work quickly and int
 fileType: EXE
 softwareName: "Python 3*"
 uninstallPreviousVersion: true
-dependentApplicationBlacklist:
+dependentApplicationBlocklist:
  - "Python Config"
 detectionType: script
 detectionScript: |

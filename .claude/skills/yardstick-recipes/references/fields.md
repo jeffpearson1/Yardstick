@@ -119,7 +119,7 @@ existence-only detection do not.
 `minOSVersion` (`W10_20H2` is the common floor), `architecture`,
 `maximumInstallationTimeInMinutes` (raise it for long installers),
 `numVersionsToKeep`, `versionLock` (dotted pattern with `x` wildcards,
-e.g. `3.11.x`), `scopeTags`, `dependentApplicationBlacklist`.
+e.g. `3.11.x`), `scopeTags`, `dependentApplicationBlocklist`.
 
 `fileType` (`msi`/`exe`/`zip`) and `softwareName` pass schema validation and appear
 throughout the existing recipes, but nothing in `Yardstick.ps1` or the modules

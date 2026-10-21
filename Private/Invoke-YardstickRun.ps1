@@ -846,15 +846,15 @@ function Set-ScriptVariables {
     $Script:DependentLinkUpdateRetryCount = if ($null -ne $Parameters.dependentLinkUpdateRetryCount) { $Parameters.dependentLinkUpdateRetryCount } elseif ($null -ne $Preferences.dependentLinkUpdateRetryCount) { $Preferences.dependentLinkUpdateRetryCount } else { 3 }
     $Script:DependentLinkUpdateRetryDelaySeconds = if ($null -ne $Parameters.dependentLinkUpdateRetryDelaySeconds) { $Parameters.dependentLinkUpdateRetryDelaySeconds } elseif ($null -ne $Preferences.dependentLinkUpdateRetryDelaySeconds) { $Preferences.dependentLinkUpdateRetryDelaySeconds } else { 5 }
     $Script:DependentLinkUpdateTimeoutSeconds = if ($null -ne $Parameters.dependentLinkUpdateTimeoutSeconds) { $Parameters.dependentLinkUpdateTimeoutSeconds } elseif ($null -ne $Preferences.dependentLinkUpdateTimeoutSeconds) { $Preferences.dependentLinkUpdateTimeoutSeconds } else { 60 }
-    $Script:DependentApplicationBlacklist = if ($Parameters.dependentApplicationBlacklist) {
-        $Parameters.dependentApplicationBlacklist
-    } elseif ($Preferences.dependentApplicationBlacklist) {
-        $Preferences.dependentApplicationBlacklist
+    $Script:DependentApplicationBlocklist = if ($Parameters.dependentApplicationBlocklist) {
+        $Parameters.dependentApplicationBlocklist
+    } elseif ($Preferences.dependentApplicationBlocklist) {
+        $Preferences.dependentApplicationBlocklist
     } else {
         @()
     }
-    if (-not ($Script:DependentApplicationBlacklist -is [System.Collections.IEnumerable])) {
-        $Script:DependentApplicationBlacklist = @($Script:DependentApplicationBlacklist)
+    if (-not ($Script:DependentApplicationBlocklist -is [System.Collections.IEnumerable])) {
+        $Script:DependentApplicationBlocklist = @($Script:DependentApplicationBlocklist)
     }
     
     # Additional variables
@@ -1335,7 +1335,7 @@ foreach ($AppId_Processing in $Applications) {
             RetryCount = [int]$Script:DependentLinkUpdateRetryCount
             RetryDelaySeconds = [int]$Script:DependentLinkUpdateRetryDelaySeconds
             TimeoutSeconds = [int]$Script:DependentLinkUpdateTimeoutSeconds
-            Blacklist = $Script:DependentApplicationBlacklist
+            Blocklist = $Script:DependentApplicationBlocklist
         }
 
 

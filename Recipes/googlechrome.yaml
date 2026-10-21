@@ -14,7 +14,7 @@ id: GoogleChrome
 displayName: Google Chrome
 publisher: Google
 description: A web browser by Google
-dependentApplicationBlacklist:
+dependentApplicationBlocklist:
  - "CheerpJ Google Chrome Extension Config"
 fileType: msi
 detectionType: msi

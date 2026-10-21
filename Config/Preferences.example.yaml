@@ -188,5 +188,5 @@ dependentLinkUpdateRetryCount: 3
 dependentLinkUpdateRetryDelaySeconds: 5
 dependentLinkUpdateTimeoutSeconds: 60
 # Display names of dependent apps that must never be relinked to a new version.
-# Example: dependentApplicationBlacklist: ["Legacy App That Pins An Old Runtime"]
-dependentApplicationBlacklist: []
+# Example: dependentApplicationBlocklist: ["Legacy App That Pins An Old Runtime"]
+dependentApplicationBlocklist: []

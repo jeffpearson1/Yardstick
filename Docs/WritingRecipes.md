@@ -708,11 +708,11 @@ This inherits all fields from `photoshop.yaml` and overrides only `id`, `display
 **`dependentLinkUpdateTimeoutSeconds`** (integer) - Timeout for dependency updates.
 - Default: From `preferences.yaml` (typically 60)
 
-**`dependentApplicationBlacklist`** (array) - Application IDs to exclude from dependency updates.
+**`dependentApplicationBlocklist`** (array) - Application IDs to exclude from dependency updates.
 - Default: From `preferences.yaml`
 - Example:
   ```yaml
-  dependentApplicationBlacklist:
+  dependentApplicationBlocklist:
     - LegacyApp
     - TestApp
   ```

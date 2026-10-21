@@ -409,8 +409,8 @@ function ConvertFrom-YardstickLog {
                 # A later attempt may still succeed and overwrite this.
                 $current.Dependents[$Matches[1]] = "Failed ($($Matches[2]))"
             }
-            '^Skipping dependent app ([\s\S]+?) because it is included in the blacklist\.$' {
-                $current.Dependents[$Matches[1]] = 'Skipped (blacklisted)'
+            '^Skipping dependent app ([\s\S]+?) because it is included in the blocklist\.$' {
+                $current.Dependents[$Matches[1]] = 'Skipped (blocklisted)'
             }
             '^Backed up \S+ to ' {
                 $current.BackupOk = $true

@@ -12,7 +12,7 @@ id: zotero
 displayName: Zotero
 publisher: Roy Rosenzweig Center for History and New Media
 description: Zotero is a free, easy-to-use tool to help you collect, organize, cite, and share research.
-dependentApplicationBlacklist:
+dependentApplicationBlocklist:
  - "Zotero Config"
 detectionType: file
 fileDetectionPath: '%ProgramFiles%\Zotero'

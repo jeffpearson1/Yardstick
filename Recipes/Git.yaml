@@ -43,7 +43,7 @@ id: git
 displayName: "Git for Windows"
 publisher: Git
 description: Git for Windows is a set of tools that allow you to use Git on Windows.
-dependentApplicationBlacklist:
+dependentApplicationBlocklist:
  - "The Mechanics of Proof"
 detectionType: file
 fileDetectionPath: 'C:\Program Files\Git\bin'

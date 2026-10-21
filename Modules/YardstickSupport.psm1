@@ -1768,7 +1768,7 @@ function Move-AssignmentsAndDependencies {
     Boolean to allow updating dependent application links (default: $true).
 
     .PARAMETER DependentLinkOptions
-    Hashtable of options for dependent link updates (Enabled, RetryCount, RetryDelaySeconds, TimeoutSeconds, Blacklist).
+    Hashtable of options for dependent link updates (Enabled, RetryCount, RetryDelaySeconds, TimeoutSeconds, Blocklist).
 
     .PARAMETER DependentUpdateStatus
     IDictionary to record the status of dependent application updates.
@@ -1901,7 +1901,7 @@ function Move-AssignmentsAndDependencies {
         RetryCount = 3
         RetryDelaySeconds = 5
         TimeoutSeconds = 60
-        Blacklist = @()
+        Blocklist = @()
     }
     if ($DependentLinkOptions) {
         foreach ($key in $DependentLinkOptions.Keys) {
@@ -1910,12 +1910,12 @@ function Move-AssignmentsAndDependencies {
             }
         }
     }
-    if (-not ($resolvedDependentOptions.Blacklist -is [System.Collections.IEnumerable])) {
-        $resolvedDependentOptions.Blacklist = @($resolvedDependentOptions.Blacklist)
+    if (-not ($resolvedDependentOptions.Blocklist -is [System.Collections.IEnumerable])) {
+        $resolvedDependentOptions.Blocklist = @($resolvedDependentOptions.Blocklist)
     }
-    $normalizedBlacklist = @()
-    if ($resolvedDependentOptions.Blacklist) {
-        $normalizedBlacklist = @($resolvedDependentOptions.Blacklist | ForEach-Object { $_.ToString().ToLowerInvariant() })
+    $normalizedBlocklist = @()
+    if ($resolvedDependentOptions.Blocklist) {
+        $normalizedBlocklist = @($resolvedDependentOptions.Blocklist | ForEach-Object { $_.ToString().ToLowerInvariant() })
     }
 
     $recordDependentStatus = {
@@ -2360,9 +2360,9 @@ function Move-AssignmentsAndDependencies {
             }
 
             $normalizedParentName = $parentDisplayName.ToLowerInvariant()
-            if ($normalizedBlacklist -and $normalizedBlacklist -contains $normalizedParentName) {
-                Write-Log "Skipping dependent app $parentDisplayName because it is included in the blacklist."
-                & $recordDependentStatus $parentDisplayName "Skipped (blacklisted)"
+            if ($normalizedBlocklist -and $normalizedBlocklist -contains $normalizedParentName) {
+                Write-Log "Skipping dependent app $parentDisplayName because it is included in the blocklist."
+                & $recordDependentStatus $parentDisplayName "Skipped (blocklisted)"
                 & $addProtectedSourceId $From.id
                 continue
             }
@@ -3847,7 +3847,7 @@ function Test-RecipeSchema {
         'detectionScriptEnforceSignatureCheck', 'iconFile', 'description', 'publisher',
         'versionLock', 'numVersionsToKeep', 'fileType', 'softwareName',
         'manualDownload', 'manualDownloadFolder',
-        'dependentApplicationBlacklist', 'dependentLinkUpdateEnabled',
+        'dependentApplicationBlocklist', 'dependentLinkUpdateEnabled',
         'dependentLinkUpdateRetryCount', 'dependentLinkUpdateRetryDelaySeconds',
         'dependentLinkUpdateTimeoutSeconds',
         'supersedence', 'uninstallPreviousVersion', 'autoUpdateOnAssignment', 'autoUpdate',
