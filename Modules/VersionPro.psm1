@@ -100,11 +100,19 @@ class VersionPro : System.IComparable {
 
     # Override GetHashCode
     [int]GetHashCode() {
-        $hash = 17
-        foreach ($segment in $this.Segments) {
-            $hash = $hash * 31 + $segment.GetHashCode()
+        # CompareTo treats a missing segment as 0, so "1.0" equals "1.0.0" and the
+        # two must hash alike: trailing zero segments are left out.
+        $count = $this.Segments.Count
+        while ($count -gt 0 -and $this.Segments[$count - 1] -is [int] -and $this.Segments[$count - 1] -eq 0) {
+            $count--
         }
-        return $hash
+        # A long kept below 2^31, since PowerShell turns an overflowing int into a
+        # double that the [int] return type then refuses.
+        [long]$hash = 17
+        for ($i = 0; $i -lt $count; $i++) {
+            $hash = ($hash * 31 + $this.Segments[$i].GetHashCode()) % [int]::MaxValue
+        }
+        return [int]$hash
     }
 
     # Override ToString

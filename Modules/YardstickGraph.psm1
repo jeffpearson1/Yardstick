@@ -99,6 +99,24 @@ function Connect-YardstickGraph {
     if ($PassThru) { return $script:AccessToken }
 }
 
+function Disconnect-YardstickGraph {
+    <#
+    .SYNOPSIS
+    Forgets the cached Graph token and the app registration credentials.
+
+    .DESCRIPTION
+    Invoke-Yardstick calls this when a run ends, so the client secret and a live
+    token do not stay readable in the session that ran Yardstick.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $script:AccessToken = $null
+    foreach ($name in 'Token', 'AuthenticationHeader', 'TenantID', 'ClientID', 'ClientSecret', 'YardstickCredential') {
+        Remove-Variable -Name $name -Scope Global -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-YardstickGraphErrorStatusCode {
     param([Parameter(Mandatory)]$ErrorRecord)
 
@@ -221,4 +239,4 @@ function Invoke-YardstickGraphRequest {
     return $results.ToArray()
 }
 
-Export-ModuleMember -Function Connect-YardstickGraph, Invoke-YardstickGraphRequest
+Export-ModuleMember -Function Connect-YardstickGraph, Disconnect-YardstickGraph, Invoke-YardstickGraphRequest

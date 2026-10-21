@@ -45,6 +45,12 @@ $Script:AllowedValues = @{
 # Preference lists that Yardstick sends to Graph as Entra group object IDs.
 $Script:GroupIdListKeys = @('defaultDeploymentGroups', 'defaultGroupsSkipAutoUpdates')
 
+# Keys that were renamed. A file that still uses the old name keeps working, and
+# Test-YardstickPreferences asks for it to be renamed.
+$Script:RenamedKeys = [ordered]@{
+    dependentApplicationBlacklist = 'dependentApplicationBlocklist'
+}
+
 
 function Get-YardstickDefaultPreferences {
     <#
@@ -226,6 +232,13 @@ function Import-YardstickPreferences {
         $prefs = @{}
     }
 
+    foreach ($oldKey in $Script:RenamedKeys.Keys) {
+        $newKey = $Script:RenamedKeys[$oldKey]
+        if ($prefs.ContainsKey($oldKey) -and (Test-YardstickBlankValue $prefs[$newKey])) {
+            $prefs[$newKey] = $prefs[$oldKey]
+        }
+    }
+
     $defaults = Get-YardstickDefaultPreferences -ProjectRoot $root
     foreach ($key in $defaults.Keys) {
         if (-not $prefs.ContainsKey($key) -or (Test-YardstickBlankValue $prefs[$key])) {
@@ -335,6 +348,12 @@ function Test-YardstickPreferences {
                 $errors.Add("Preference '$key' still contains the template placeholder '$($Matches[0])'. Replace it with a real value, or delete the key to use the default.")
                 break
             }
+        }
+    }
+
+    foreach ($oldKey in $Script:RenamedKeys.Keys) {
+        if ($Preferences.ContainsKey($oldKey)) {
+            $warnings.Add("Preference '$oldKey' has been renamed to '$($Script:RenamedKeys[$oldKey])'. It still works for now; rename it in your preferences file.")
         }
     }
 

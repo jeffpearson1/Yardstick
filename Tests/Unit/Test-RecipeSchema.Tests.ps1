@@ -161,6 +161,20 @@ Describe "Test-RecipeSchema" {
     }
 
     Context "Unknown field warnings" {
+        It "Explains a retired field <Field> instead of calling it unknown" -TestCases @(
+            @{ Field = 'dependentApplicationBlacklist'; Expected = "renamed to 'dependentApplicationBlocklist'" }
+            @{ Field = 'availableGroups'; Expected = "'availableGroups' has no effect.*defaultDeploymentGroups" }
+            @{ Field = 'requiredGroups'; Expected = "'requiredGroups' has no effect" }
+        ) {
+            param($Field, $Expected)
+            $recipe = New-ValidRecipe
+            $recipe[$Field] = @('Something')
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+            $result.Warnings | Where-Object { $_ -match $Expected } | Should -Not -BeNullOrEmpty
+            $result.Warnings | Where-Object { $_ -match "Unknown field" } | Should -BeNullOrEmpty
+        }
+
         It "Warns on unknown field" {
             $recipe = New-ValidRecipe
             $recipe['unknownField'] = "something"

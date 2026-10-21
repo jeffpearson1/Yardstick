@@ -126,6 +126,7 @@ function Invoke-Yardstick {
     .EXAMPLE
     Invoke-Yardstick -All -NoInteractive
     #>
+    [CmdletBinding(DefaultParameterSetName = "SingleApp")]
     param (
         [Alias("AppId", "AppIds")]
         [parameter(ParameterSetName="SingleApp")]
@@ -176,7 +177,9 @@ function Invoke-Yardstick {
 
     $global:LASTEXITCODE = 0
     $exitCode = 1
-    Push-Location
+    # A stack of its own, so an entry the run leaves on the default stack cannot
+    # decide where the caller ends up.
+    Push-Location -StackName Yardstick.Caller
     try {
         & (Join-Path $PSScriptRoot 'Private\Invoke-YardstickRun.ps1') @arguments
         $exitCode = $global:LASTEXITCODE
@@ -189,7 +192,9 @@ function Invoke-Yardstick {
         # Likewise the app tag, so later Write-Log calls in this session are not
         # attributed to the recipe the run stopped in.
         Clear-YardstickLogContext
-        Pop-Location
+        # The client secret and a live Graph token are the run's, not the session's.
+        Disconnect-YardstickGraph
+        Pop-Location -StackName Yardstick.Caller
         if ($null -ne $Global:PSDefaultParameterValues) {
             foreach ($key in $timeoutKeys) {
                 if ($savedDefaults.ContainsKey($key)) {

@@ -33,13 +33,13 @@ preDownloadScript: |
     throw "Could not read a valid ArcGIS Pro ProductVersion from '$($installer.FullName)'."
   }
 fileType: msi
-installScript: 'msiexec /i "<filename>" /qn /norestart ALLUSERS=1 ACCEPTEULA=YES AUTHORIZATION_TYPE=NAMED_USER ARCGIS_CONNECTION=TRUE LICENSE_URL="https://<your_org>.maps.arcgis.com" PORTAL_LIST="https://<your_org>.maps.arcgis.com"'
+installScript: 'msiexec /i "<filename>" /qn /norestart ALLUSERS=1 ACCEPTEULA=YES AUTHORIZATION_TYPE=NAMED_USER ARCGIS_CONNECTION=TRUE LICENSE_URL="https://<YOUR_ARCGIS_ORG>.maps.arcgis.com" PORTAL_LIST="https://<YOUR_ARCGIS_ORG>.maps.arcgis.com"'
 uninstallScript: msiexec /x <productcode> /qn /norestart
 iconFile: arcgispro.png
 id: arcgispro
 displayName: ArcGIS Pro
 publisher: Environmental Systems Research Institute, Inc.
-description: ArcGIS Pro is Esri's professional desktop GIS for mapping, spatial analysis, data management, and geovisualization. This <YOUR_ORG> package configures Named User licensing and the <YOUR_ORG> ArcGIS portal.
+description: ArcGIS Pro is Esri's professional desktop GIS for mapping, spatial analysis, data management, and geovisualization. This package configures Named User licensing and your organization's ArcGIS portal.
 detectionType: msi
 architecture: x64
 installExperience: system

@@ -13,5 +13,4 @@
     RecipeOverrides     = 'Local\recipeOverrides.yaml'
     Secrets             = 'Local\Secrets'
     Documentation       = 'Docs'
-    ProductionRoot      = 'G:\Intune\Yardstick'
 }

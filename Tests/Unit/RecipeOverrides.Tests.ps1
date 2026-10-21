@@ -97,6 +97,37 @@ Describe "Merge-RecipeWithOverride" {
     }
 }
 
+Describe "Get-RecipePlaceholder" {
+    It "Names each field that still holds a placeholder" {
+        $recipe = @{
+            id              = 'sccmclient'
+            installScript   = 'ccmsetup.exe SMSSITECODE=<YOUR_SITE_CODE> /mp:<YOUR_MANAGEMENT_POINT>'
+            url             = '\\<YOUR_SITE_SERVER>\Client'
+            displayName     = 'Configuration Manager Client'
+        }
+        $found = @(Get-RecipePlaceholder -Recipe $recipe)
+        $found.Field | Should -Be @('installScript', 'url')
+        $found[0].Placeholder | Should -Be '<YOUR_SITE_CODE>'
+        $found[1].Placeholder | Should -Be '<YOUR_SITE_SERVER>'
+    }
+
+    It "Looks inside lists" {
+        $found = @(Get-RecipePlaceholder -Recipe @{ urlRedirects = @('https://example.com', 'https://<YOUR_ZOOM_VANITY_URL>/') })
+        $found.Field | Should -Be 'urlRedirects'
+    }
+
+    It "Returns nothing once the overrides fill the fields" {
+        $recipe = @{ id = 'zoom'; url = 'https://<YOUR_ZOOM_VANITY_URL>/download' }
+        $merged = Merge-RecipeWithOverride -Recipe $recipe -Override @{ url = 'https://example.zoom.us/download' }
+        Get-RecipePlaceholder -Recipe $merged | Should -BeNullOrEmpty
+    }
+
+    It "Ignores look-alikes that are not placeholders" {
+        $recipe = @{ installScript = 'setup.exe /log <your_log> & echo <YOUR-NAME>'; uninstallScript = '<VERSION>' }
+        Get-RecipePlaceholder -Recipe $recipe | Should -BeNullOrEmpty
+    }
+}
+
 Describe "Get-YardstickRecipeOverridesPath" {
     It "Uses the RecipeOverrides entry of the project manifest" {
         $root = Join-Path $TestDrive 'WithEntry'

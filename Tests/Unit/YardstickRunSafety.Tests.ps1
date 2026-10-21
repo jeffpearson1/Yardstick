@@ -547,4 +547,28 @@ Describe "Main processing loop control flow" {
 
         $reset | Should -Not -BeNullOrEmpty
     }
+
+    It "pops every location it pushes in a finally, so a failed recipe script cannot leave the stack behind" {
+        $pushes = @($script:MainLoop.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'Push-Location'
+        }, $true))
+        $pushes.Count | Should -BeGreaterThan 0
+
+        foreach ($push in $pushes) {
+            # The push is followed, in the same block, by a try whose finally pops.
+            $block = $push.Parent
+            while ($block -and $block -isnot [System.Management.Automation.Language.StatementBlockAst] -and
+                $block -isnot [System.Management.Automation.Language.NamedBlockAst]) {
+                $block = $block.Parent
+            }
+            $try = $block.Statements | Where-Object {
+                $_ -is [System.Management.Automation.Language.TryStatementAst] -and
+                $_.Extent.StartOffset -gt $push.Extent.EndOffset
+            } | Select-Object -First 1
+            $try | Should -Not -BeNullOrEmpty -Because "line $($push.Extent.StartLineNumber) pushes a location"
+            $try.Finally.Extent.Text | Should -Match 'Pop-Location' -Because "line $($push.Extent.StartLineNumber) pushes a location"
+        }
+    }
 }

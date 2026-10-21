@@ -1,11 +1,11 @@
-url: \\yoursiteserver.yourcompany.com\sms_<your_org>\Client
+url: \\<YOUR_SITE_SERVER>\SMS_<YOUR_SITE_CODE>\Client
 urlRedirects: false
 preDownloadScript: |
   $PathToCCMSetupEXE = "$url\ccmsetup.exe"
   $Version = (Get-Item $PathToCCMSetupEXE).VersionInfo.ProductVersion
 downloadScript: |
   Copy-Item "$url\*" . -Recurse -Force
-installScript: ccmsetup.exe /noservice /mp:https://YOURMP.URL CCMHOSTNAME="YOURMP.URL" /BITSPriority:HIGH SMSCACHESIZE=20000 SMSSITECODE="<YOUR_ORG>"
+installScript: ccmsetup.exe /noservice /mp:https://<YOUR_MANAGEMENT_POINT> CCMHOSTNAME="<YOUR_MANAGEMENT_POINT>" /BITSPriority:HIGH SMSCACHESIZE=20000 SMSSITECODE="<YOUR_SITE_CODE>"
 uninstallScript: ccmsetup.exe /uninstall
 fileName: ccmsetup.exe
 iconFile: sccm.png

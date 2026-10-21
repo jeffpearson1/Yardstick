@@ -8,11 +8,18 @@ copies only allowlisted, Git-tracked runtime files and/or explicitly named
 recipes. Existing destination files are backed up beneath Artifacts before they
 are replaced. The command never deletes production files.
 
-.EXAMPLE
-.\Publish-Yardstick.ps1 -Runtime -WhatIf
+RecipeGroups.yaml and Yardstick.Project.psd1 belong to the site they are in: they
+are copied only to a production folder that does not have them yet.
+
+.PARAMETER ProductionPath
+The Yardstick folder to publish to. Defaults to ProductionRoot in this folder's
+Yardstick.Project.psd1, if you have added one there.
 
 .EXAMPLE
-.\Publish-Yardstick.ps1 -RecipeId dragonframe, marcedit -WhatIf
+.\Publish-Yardstick.ps1 -Runtime -ProductionPath D:\Yardstick -WhatIf
+
+.EXAMPLE
+.\Publish-Yardstick.ps1 -RecipeId dragonframe, marcedit -ProductionPath D:\Yardstick -WhatIf
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
@@ -33,6 +40,9 @@ if (-not $Runtime -and -not $RecipeId) {
 }
 
 if (-not $ProductionPath) {
+    if (-not $layout.PSObject.Properties['ProductionRoot']) {
+        throw 'Specify -ProductionPath, the Yardstick folder to publish to.'
+    }
     $ProductionPath = $layout.ProductionRoot
 }
 $productionRoot = (Resolve-Path -LiteralPath $ProductionPath -ErrorAction Stop).ProviderPath
@@ -53,7 +63,9 @@ $operations = [Collections.Generic.List[object]]::new()
 function Publish-YardstickFile {
     param(
         [Parameter(Mandatory)][string]$Source,
-        [Parameter(Mandatory)][string]$RelativePath
+        [Parameter(Mandatory)][string]$RelativePath,
+        # Copy only when production has no such file yet.
+        [switch]$SkipExisting
     )
 
     $sourcePath = (Resolve-Path -LiteralPath $Source -ErrorAction Stop).ProviderPath
@@ -61,6 +73,10 @@ function Publish-YardstickFile {
     $destinationPath = [IO.Path]::GetFullPath((Join-Path $productionRoot $relativeWindowsPath))
     if (-not $destinationPath.StartsWith($productionRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw "Publish destination escaped the production root: $destinationPath"
+    }
+    if ($SkipExisting -and (Test-Path -LiteralPath $destinationPath -PathType Leaf)) {
+        Write-Verbose "Keeping production's own $relativeWindowsPath."
+        return
     }
 
     if ($PSCmdlet.ShouldProcess($destinationPath, "Publish '$relativeWindowsPath'")) {
@@ -122,8 +138,11 @@ if ($Runtime) {
         }
     }
 
+    # Each site edits these for itself, so publishing must not replace them.
+    $siteFiles = 'RecipeGroups.yaml', 'Yardstick.Project.psd1'
     foreach ($relativePath in ($runtimeFiles | Sort-Object -Unique)) {
-        Publish-YardstickFile -Source (Join-Path $projectRoot $relativePath) -RelativePath $relativePath
+        Publish-YardstickFile -Source (Join-Path $projectRoot $relativePath) -RelativePath $relativePath `
+            -SkipExisting:($relativePath -in $siteFiles)
     }
 }
 

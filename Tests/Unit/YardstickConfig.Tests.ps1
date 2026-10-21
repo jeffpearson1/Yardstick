@@ -112,6 +112,26 @@ defaultAutoUpdate: false
         $prefs.defaultAutoUpdate | Should -BeFalse
     }
 
+    It "Reads a renamed key under its old name" {
+        Set-TestPreferences -Root $script:root -Yaml @"
+dependentApplicationBlacklist:
+  - Old Bundle
+"@
+        $prefs = Import-YardstickPreferences -ProjectRoot $script:root
+        @($prefs.dependentApplicationBlocklist) | Should -Be @('Old Bundle')
+    }
+
+    It "Prefers the new name when a file has both" {
+        Set-TestPreferences -Root $script:root -Yaml @"
+dependentApplicationBlacklist:
+  - Old Bundle
+dependentApplicationBlocklist:
+  - New Bundle
+"@
+        $prefs = Import-YardstickPreferences -ProjectRoot $script:root
+        @($prefs.dependentApplicationBlocklist) | Should -Be @('New Bundle')
+    }
+
     It "Fills blank keys from the defaults" {
         Set-TestPreferences -Root $script:root -Yaml @"
 defaultInstallExperience:
@@ -278,6 +298,13 @@ Describe "Test-YardstickPreferences" {
         $result = Test-YardstickPreferences -Preferences $script:prefs
         $result.IsValid | Should -BeFalse
         $result.Errors | Should -Match "'Tools'.*<REPLACE_WITH_YARDSTICK_ROOT>"
+    }
+
+    It "Warns about a renamed key without failing" {
+        $script:prefs.dependentApplicationBlacklist = @('Old Bundle')
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeTrue
+        $result.Warnings | Should -Match "'dependentApplicationBlacklist' has been renamed to 'dependentApplicationBlocklist'"
     }
 
     It "Reports a placeholder inside a list" {

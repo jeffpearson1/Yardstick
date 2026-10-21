@@ -9,7 +9,7 @@ preDownloadScript: |
   } else {
     throw "Could not determine current TeamDynamix ITAM client version from $vurl"
   }
-installScript: <filename> -q -v PROP_HOSTNAME=https://<your_org>.sassafrascloud.com -v PROP_TRUST=10 -v PROP_SECURITY=2 -v PROP_NOURL=0 -v PROP_FORCEHOST=1
+installScript: <filename> -q -v PROP_HOSTNAME=https://<YOUR_SASSAFRAS_HOST>.sassafrascloud.com -v PROP_TRUST=10 -v PROP_SECURITY=2 -v PROP_NOURL=0 -v PROP_FORCEHOST=1
 powerShellUninstallScript: |
   $uninstallKeys = @(
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",

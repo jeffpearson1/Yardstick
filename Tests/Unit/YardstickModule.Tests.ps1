@@ -228,4 +228,24 @@ Describe "Invoke-Yardstick" {
         $Global:PSDefaultParameterValues['Invoke-WebRequest:TimeoutSec'] | Should -Be 77
         $Global:PSDefaultParameterValues.Contains('Invoke-RestMethod:TimeoutSec') | Should -BeFalse
     }
+
+    It "asks for an app, a group or -All when given none, rather than failing to bind" {
+        { Invoke-Yardstick -NoEmail -ProjectRoot $script:projectRoot } | Should -Throw '*exit code 1*'
+        Get-Content -LiteralPath (Join-Path $script:projectRoot 'YLog.log') -Raw |
+            Should -Match 'Specify -ApplicationId, -Group or -All\.'
+        (Get-Command Invoke-Yardstick).DefaultParameterSet | Should -Be 'SingleApp'
+        foreach ($script in 'Yardstick.ps1', 'Private\Invoke-YardstickRun.ps1') {
+            $binding = (Get-Command (Join-Path $script:repoRoot $script)).ScriptBlock.Attributes |
+                Where-Object { $_ -is [System.Management.Automation.CmdletBindingAttribute] }
+            $binding.DefaultParameterSetName | Should -Be 'SingleApp' -Because "$script binds no arguments the same way"
+        }
+    }
+
+    It "leaves no Graph secrets behind in the session" {
+        $Global:ClientSecret = 'left-over'
+        $Global:AuthenticationHeader = @{ Authorization = 'Bearer left-over' }
+        { Invoke-Yardstick -ApplicationId 'nothing-here' -NoEmail -ProjectRoot $script:projectRoot } | Should -Throw
+        Get-Variable -Name ClientSecret, AuthenticationHeader, Token -Scope Global -ErrorAction SilentlyContinue |
+            Should -BeNullOrEmpty
+    }
 }
