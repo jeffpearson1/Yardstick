@@ -9,7 +9,7 @@
 
 RootModule = 'Yardstick.psm1'
 
-ModuleVersion = '0.1.0'
+ModuleVersion = '1.0.0'
 
 GUID = '975bd557-3e81-4a23-b56d-3eb1c6563a95'
 
@@ -40,6 +40,7 @@ PrivateData = @{
         Tags = @('Intune', 'Win32', 'Packaging', 'Windows', 'MicrosoftGraph')
         LicenseUri = 'https://github.com/jeffpearson1/Yardstick/blob/main/LICENSE.md'
         ProjectUri = 'https://github.com/jeffpearson1/Yardstick'
+        ReleaseNotes = 'https://github.com/jeffpearson1/Yardstick/blob/main/CHANGELOG.md'
     }
 }
 
