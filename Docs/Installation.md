@@ -35,10 +35,10 @@ installer does, how to do each part by hand, and how to keep an installation hea
 
 Optional:
 
-- `Selenium` and `TUN.CredentialManager`, plus Firefox, for the few recipes that drive a
-  browser or sign in to a vendor portal. The recipes need Selenium 4.0.0-preview3 or later,
-  which is only published as a prerelease; the installer installs it with prerelease
-  versions allowed (`Install-PSResource Selenium -Prerelease`).
+- `Selenium`, plus Firefox, for the few recipes that drive a browser. The recipes need
+  Selenium 4.0.0-preview3 or later, which is only published as a prerelease; the
+  installer installs it with prerelease versions allowed
+  (`Install-PSResource Selenium -Prerelease`).
 - `Pester` 5 or later, to run the unit tests in `Tests\Unit`. Windows includes Pester
   3.4, which is too old. The installer offers to install a current version alongside
   it; by hand, run `Install-PSResource Pester` or
@@ -372,6 +372,33 @@ The scripts always load the current code. If you use the module commands
 (`Invoke-Yardstick`, `Test-YardstickSetup`, ...) in a PowerShell window that was open
 before an update, run `Import-Module .\Yardstick.psd1 -Force` first, or open a new
 window.
+
+### Upgrading to 1.0
+
+Run `.\Test-YardstickSetup.ps1` after upgrading. It lists the recipes still waiting
+for your values and any preference that uses an old name.
+
+- **Recipes that need your values.** zoom, zoom.arm64, sccmclient, sccmconsole,
+  teamdynamixitam, arcgispro and cloudflareoneclient now ship with placeholders such
+  as `<YOUR_SITE_CODE>` where your organization's values go. Each one fails, naming the
+  fields to set, until you give it its values in `Local\recipeOverrides.yaml`. See
+  [Recipes that need your values](WritingRecipes.md#recipes-that-need-your-values).
+- **Scope tags in recipes.** Shared recipes no longer carry scope tags. If you relied on
+  the ones they had, set them in `Local\recipeOverrides.yaml`.
+- **`dependentApplicationBlacklist` is now `dependentApplicationBlocklist`**, in
+  preferences and recipes. The old name still works. The health check warns about it
+  in preferences, and each run warns about a recipe that still uses it.
+- **`availableGroups` and `requiredGroups` have no effect**, and a run now warns about
+  recipes that set them. Use `defaultDeploymentGroups` for Available assignments; add
+  Required assignments in Intune and Yardstick moves them to each new version.
+- **Working folders moved under `Artifacts`.** The build, package and temp folders
+  are now `Artifacts\BuildSpace`, `Artifacts\Packages` and `Artifacts\Temp`. A
+  `Buildspace`, `Published` or `Temp` value in your preferences still wins. If you
+  have not set them, the old `BuildSpace`, `Published` and `Temp` folders in the
+  Yardstick root are no longer used and can be deleted.
+- **`Publish-Yardstick.ps1` needs `-ProductionPath`.** The project manifest no longer
+  names a production folder. Publishing also leaves production's own
+  `RecipeGroups.yaml` and `Yardstick.Project.psd1` alone once they exist.
 
 
 ## Troubleshooting

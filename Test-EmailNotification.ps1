@@ -115,7 +115,7 @@ try {
 System.Net.WebException: The remote name could not be resolved: 'downloads.example.com'
    at System.Net.HttpWebRequest.GetResponse()
    at Invoke-WebRequest, <No file>: line 42
-   at <ScriptBlock>, G:\Intune\Yardstick\Recipes\example.yaml: line 12
+   at <ScriptBlock>, C:\Yardstick\Recipes\example.yaml: line 12
 Inner exception:
    System.Net.Sockets.SocketException (11001): No such host is known.
 "@

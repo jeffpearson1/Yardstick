@@ -94,9 +94,9 @@ defaultAutoUpdate: true
 # `groupSkipAutoUpdates` - a recipe cannot remove a group listed here.
 # Example: defaultGroupsSkipAutoUpdates: ["00000000-0000-0000-0000-000000000000"]
 defaultGroupsSkipAutoUpdates: []
-# Master switch for the {DETECT} anchor behavior. When enabled, the first time
+# Master switch for the DETECT anchor behavior. When enabled, the first time
 # Yardstick updates a version-detection app under the new model, the oldest
-# surviving version is renamed "{DETECT} <DisplayName>" and preserved so it
+# surviving version is renamed "Ω DETECT - <DisplayName>" and preserved so it
 # continues to detect long-abandoned installs. The anchor is always a
 # supersedence target of the newest version, always with type "Update".
 useDetectAnchor: true
