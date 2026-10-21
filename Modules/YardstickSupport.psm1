@@ -1870,7 +1870,6 @@ function Move-AssignmentsAndDependencies {
             }
         }
     }
-    Write-Log "Moving assignments and dependencies from $($From.id) to $($To.id)..."
     # The native projection preserves zero, one, and many assignment results.
     $FromAssignments = Get-YardstickAppAssignment -Id $From.id
     $FromDependencies = Get-YardstickWin32AppDependency -Id $From.id

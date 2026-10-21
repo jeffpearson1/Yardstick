@@ -611,6 +611,7 @@ function Invoke-YardstickAppMaintenance {
     foreach ($old in $allOlder) {
         $isDoomed = $ToPruneIds -contains $old.id
         $isAnchor = ($null -ne $Anchor) -and ($old.id -eq $Anchor.id)
+        Write-Log "Moving assignments and dependencies from $($old.id) to $($CurrentApp.id)..."
         try {
             Move-AssignmentsAndDependencies -From $old -To $CurrentApp `
                 -AvailableDateOffset $Script:AvailableDateOffset `
