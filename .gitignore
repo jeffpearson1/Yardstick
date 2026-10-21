@@ -4,12 +4,10 @@
 /Apps/
 /Support/
 
-/BuildSpace/*
-!/BuildSpace/.gitkeep
-/Published/*
-!/Published/.gitkeep
-/Temp/*
-!/Temp/.gitkeep
+# Pre-1.0 working folders, now under Artifacts
+/BuildSpace/
+/Published/
+/Temp/
 /Development/
 /Secrets/
 /[Pp]references.yaml

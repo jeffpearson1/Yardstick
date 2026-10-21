@@ -44,7 +44,7 @@ A failed run then raises an error instead of exiting, and a stuck recipe is logg
 
 ### Dependencies
 
-The only required PowerShell Gallery module is [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml), which the installer installs. Selenium-Powershell and TUN.CredentialManager are optional, for recipes that use browser automation or stored vendor credentials. The browser recipes need Selenium 4.0.0-preview3 or later, a prerelease, which the installer offers to install. Running the unit tests needs Pester 5 or later (Windows only includes 3.4), which the installer also offers. Yardstick calls Microsoft Graph directly and has no IntuneWin32App or MSAL.PS dependency.
+The only required PowerShell Gallery module is [Powershell-Yaml](https://github.com/cloudbase/powershell-yaml), which the installer installs. Selenium-Powershell is optional, for recipes that drive a browser; it needs 4.0.0-preview3 or later, a prerelease, which the installer offers to install. TUN.CredentialManager is optional too, for recipes of your own that read a stored Windows credential with `Get-StoredCredential`; none of the shipped recipes need it. Running the unit tests needs Pester 5 or later (Windows only includes 3.4), which the installer also offers. Yardstick calls Microsoft Graph directly and has no IntuneWin32App or MSAL.PS dependency.
 
 The official Microsoft Win32 Content Prep Tool is downloaded on first use from a commit-pinned Microsoft release and verified with SHA-256 before execution.
 
@@ -61,15 +61,15 @@ Settings live in `Local\preferences.yaml`, which is excluded from Git. Every set
 
 Icons are not included for licensing reasons. Put the icons your recipes need in the `Icons` folder (.jpg or .png, up to Intune's 512x512 and 750KB), or run `.\Get-YardstickIcon.ps1` to search for, tidy up and save them. The health check lists recipes whose icon is missing.
 
-### Recipe credentials
+### Recipe secrets
 
-Some recipes sign in to vendor portals. Create the Windows credential each recipe names - for example ```yourdomainnamehere``` - in Credential Manager, as the account that runs Yardstick.
+Recipes that call a vendor API with their own keys read them with `Get-Secrets -VaultName <name>`. Store each vault in Credential Manager with `.\Set-YardstickCredential.ps1 -Secret <name>`, as the account that runs Yardstick. See [Recipe secrets](Docs/Installation.md#recipe-secrets).
 
 ### Recipe Tips and Tricks
 * Use the defaults (configurable in preferences.yaml) for as much stuff as you can. All the available default settings are in the example preferences.yaml file.
 * The installScript, uninstallScript, detectionScript and registryDetectionKey have an extra function - if you use ```<version>```, ```<filename>```, or ```<productcode>``` in them it will be replaced with the appropriate value after all the parameters and defaults are imported, processed, and the preDownloadScript has run.
 * You can use recipes for locally hosted files as well - even if they are in a file share. Just define a custom downloadScript to make sure that file retrieval is handled correctly.
-* Yardstick is compatible with Selenium - the filezilla.yaml recipe is a basic example of what can be done with this. Make sure that Selenium and any drivers/browsers you need are installed first.
+* Yardstick is compatible with Selenium - the fileZilla.yaml recipe is a basic example of what can be done with this. Make sure that Selenium and any drivers/browsers you need are installed first.
 
 
 ### Running Yardstick
@@ -85,7 +85,7 @@ Some recipes sign in to vendor portals. Create the Windows credential each recip
 
 ### Version Locking
 
-Versions can be locked to a specific value, or set of values by adding the ```versionLock:``` parameter to any preferences file. Valid characters are numbers (0-9), decimals (.) and x. When the value is processed, x will be replaced with numbers of any length. 
+Versions can be locked to a specific value, or set of values, by adding ```versionLock:``` to a recipe, or to the recipe's entry in `Local\recipeOverrides.yaml` to lock it for your site only. There is no preference for it. Valid characters are numbers (0-9), decimals (.) and x. When the value is processed, x will be replaced with numbers of any length. 
 Example: ```versionLock: 19.42.2.x``` will match versions ```19.42.2.24335``` and ```19.42.2.1``` but not ```19.42.3.442```.
 
 ### Date Offsets
@@ -96,11 +96,11 @@ Configurable in both the default and application-specific preferences files, ```
 
 Yardstick uses Intune's native update path instead of a custom remediation. After each upload:
 
-* The new version declares **supersedence** over every older version Yardstick keeps (and over the `{DETECT}` anchor, when one exists). ```uninstallPreviousVersion``` selects between Intune's `Update` (in-place upgrade, default) and `Replace` (uninstall first) behavior.
+* The new version declares **supersedence** over every older version Yardstick keeps (and over the DETECT anchor, when one exists). ```uninstallPreviousVersion``` selects between Intune's `Update` (in-place upgrade, default) and `Replace` (uninstall first) behavior.
 * **Auto-update** (```autoUpdateSupersededAppsState```) is turned on for the new version's *available* assignments, so Intune pulls devices running a superseded version forward without any user action. Intune only supports auto-update for available assignments, so required-only recipes are unaffected. Specific device or user groups can opt out via ```defaultGroupsSkipAutoUpdates``` in ```preferences.yaml``` or ```groupSkipAutoUpdates``` in a recipe; assignments targeting those groups are held at ```notConfigured```.
 * **Required** assignments are moved onto the new version; **available** assignments are copied and left in place, because removing an available assignment destroys the on-device component Intune uses to auto-update. If the older version will not be superseded (```supersedence: false```), available assignments are moved instead, as in earlier releases.
 
-Defaults live in ```Local\preferences.yaml``` (```defaultSupersedence```, ```defaultUninstallPreviousVersion```, ```defaultAutoUpdate```, ```useDetectAnchor```) and can be overridden per recipe. See [WritingRecipes.md](Docs/WritingRecipes.md) for details, including the `{DETECT}` anchor that keeps long-abandoned installs in scope.
+Defaults live in ```Local\preferences.yaml``` (```defaultSupersedence```, ```defaultUninstallPreviousVersion```, ```defaultAutoUpdate```, ```useDetectAnchor```) and can be overridden per recipe. See [WritingRecipes.md](Docs/WritingRecipes.md) for details, including the DETECT anchor that keeps long-abandoned installs in scope.
 
 Existing tenants can be migrated onto this model in one pass:
 
@@ -118,9 +118,9 @@ The beta `mobileApps/{id}/relationships` collection is reported from the perspec
 
 #### Known issue: un-targeting a group requires editing the anchor too
 
-The `{DETECT}` anchor participates in assignment migration like any other older version — its **required** assignments are moved onto the new version, its **available** assignments are copied and left in place. Unlike an (N-x) version, though, the anchor is never pruned, so its available assignments are re-copied onto every subsequent release indefinitely.
+The DETECT anchor participates in assignment migration like any other older version — its **required** assignments are moved onto the new version, its **available** assignments are copied and left in place. Unlike an (N-x) version, though, the anchor is never pruned, so its available assignments are re-copied onto every subsequent release indefinitely.
 
-The practical consequence: removing an available assignment from the current version alone does **not** un-target that group, because the next Yardstick run re-creates it from the anchor. To drop a group permanently, remove the assignment from the `{DETECT}` anchor as well.
+The practical consequence: removing an available assignment from the current version alone does **not** un-target that group, because the next Yardstick run re-creates it from the anchor. To drop a group permanently, remove the assignment from the DETECT anchor as well.
 
 #### Other Parameters
 
@@ -129,6 +129,20 @@ The practical consequence: removing an available assignment from the current ver
 * ```-NoDelete``` will stop the script from automatically deleting old versions when it is done. 
 * ```-NoInteractive``` will skip any recipes that are located in the "Interactive" folder in Recipes.
 * ```-Group``` will parse RecipeGroups.yaml and run any applications corresponding to the group provided
+
+#### Keeping a recipe group in sync
+
+`Sync-RecipeGroup.ps1` rewrites one group in `RecipeGroups.yaml` so it lists exactly the recipes in the matching folder. It defaults to the Development group and `Recipes\Development`, ignores recipes in a `Disabled` folder, and leaves every other group untouched.
+
+```powershell
+.\Sync-RecipeGroup.ps1 -WhatIf   # show what would be added and removed
+.\Sync-RecipeGroup.ps1
+.\Sync-RecipeGroup.ps1 -GroupName TestApps -RecipeFolder .\Recipes\Testing
+```
+
+#### Resending a run's email report
+
+If a run's email was skipped or failed, `Send-YardstickLogReport.ps1` rebuilds the report from `YLog.log` and sends it. See [Docs/EmailNotifications.md](Docs/EmailNotifications.md#resending-a-report-from-the-log).
 
 #### Maintenance sweeps
 

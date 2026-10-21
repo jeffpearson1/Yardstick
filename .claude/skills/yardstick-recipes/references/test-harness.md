@@ -1,6 +1,6 @@
 # Test Harness
 
-`G:\Intune\YardstickDev\Tests\RecipeHarness\`. None of it contacts Graph or Intune.
+`Tests\RecipeHarness\` in the Yardstick folder. None of it contacts Graph or Intune.
 Defaults resolve from `Yardstick.Project.psd1`, so `-Id <id>` alone works against
 `Recipes\Development\`; override roots only when deliberately testing elsewhere.
 
@@ -115,7 +115,7 @@ temporary analysis copies you created yourself.
 
 ## Reporting honestly
 
-Historical examples worth imitating, from `BOT-HANDOFF.md`:
+Historical examples worth imitating:
 
 - Pass: Calibre 9.14.0, NordVPN 8.11.1.0, Cryptomator 1.19.3.
 - Pass with warning: StartAllBack 3.9.25 left `C:\Program Files\StartAllBack`

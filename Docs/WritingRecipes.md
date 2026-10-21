@@ -66,7 +66,7 @@ preDownloadScript: |
 
 Leave it `false` when you intend to scrape a landing page - resolving redirects on an HTML page accomplishes nothing and costs a request.
 
-See [Recipes/firefox.yaml](../Recipes/firefox.yaml) and [Recipes/amazoncorretto21.yaml](../Recipes/amazoncorretto21.yaml).
+See [Recipes/firefox.yaml](../Recipes/firefox.yaml) and [Recipes/AmazonCorretto21.yaml](../Recipes/AmazonCorretto21.yaml).
 
 **`fileName`** (string) - The name the downloaded file is saved as, and the value substituted for the `<filename>` placeholder. Set it statically only when the name never changes; otherwise set `$fileName` in `preDownloadScript` or `downloadScript`. If `postDownloadScript` replaces the payload (extracting an MSI out of a bootstrapper, for example), it must reassign `$fileName` to the new installer.
 
@@ -108,7 +108,7 @@ Scripts execute in this order:
 1. `preDownloadScript` - Before download and version validation
 2. `downloadScript` - Replaces default BITS download (working directory set to `$BuildSpace\$id\$version`)
 3. `postDownloadScript` - After download completes (working directory set to `$BuildSpace\$id\$version`)
-4. `postRunScript` - After Intune upload (runs outside the try/catch block)
+4. `postRunScript` - Last, whether the recipe succeeded or failed
 
 ### Environment Variables Available to Scripts
 
@@ -216,10 +216,10 @@ postDownloadScript: |
 
 ### `postRunScript`
 
-Executes after the Intune upload completes. Runs outside the main try/catch block, so errors here do not prevent processing the next application.
+Runs last for every recipe, including one that failed at an earlier stage, so it is the place to undo anything the earlier scripts set up. It cannot tell from its own position whether the upload happened. An error here marks the recipe failed under the "Post-Run Script" stage and does not stop the run.
 
 Use for:
-- Cleanup operations
+- Cleanup operations, such as revoking a token the download script obtained
 - Logging
 - Notifications
 - Any post-deployment tasks
@@ -439,7 +439,7 @@ additionalDetectionRules:
 - Version comparisons with no value set (`fileDetectionVersion` for `file`, `registryDetectionValue` for `registry`) default to the recipe's `$version`, the same as for the primary rule.
 - `<filename>`, `<version>` and `<productcode>` placeholders are replaced in the path, name, key and value fields of each entry.
 - To set an entry's value from a script, change the entry in place. For example, in `preDownloadScript` use `$additionalDetectionRules[0].registryDetectionValue = "..."`.
-- Supersedence and the `{DETECT}` anchor only look at the primary rule. Keep the version comparison in the primary rule.
+- Supersedence and the DETECT anchor only look at the primary rule. Keep the version comparison in the primary rule.
 
 ### Script Detection
 
@@ -536,11 +536,7 @@ These settings control how Intune handles installation. All default to values in
     - IT Pilot Group
   ```
 
-**`availableGroups`** (array) - Groups for "Available" assignment intent.
-- Default: From `preferences.yaml`
-
-**`requiredGroups`** (array) - Groups for "Required" assignment intent.
-- Default: From `preferences.yaml`
+Required assignments are not set in a recipe. Add them to the app in Intune, and Yardstick moves them to each new version (see [Supersedence & Auto-Update](#supersedence--auto-update)).
 
 **`availableDateOffset`** (integer) - Days from now when app becomes available.
 - Default: From `preferences.yaml`
@@ -558,6 +554,7 @@ These settings control how Intune handles installation. All default to values in
 - Note: When `versionLock` is set, this is forced to 1
 
 **`versionLock`** (string) - Lock to specific version pattern using wildcards.
+- Set it in the recipe, or for your site only in `Local\recipeOverrides.yaml`. There is no preference for it.
 - Pattern: Use `x` for wildcard positions
 - Example: `versionLock: 3.11.x` (only deploy Python 3.11.x versions)
 - Example: `versionLock: 2024.x.x` (only deploy 2024.x.x versions)
@@ -604,7 +601,7 @@ applied to **available** assignments because Intune only honours it there
 - `true` -> Intune supersedence type `Replace` (uninstall the prior version first)
 - `false` -> Intune supersedence type `Update` (in-place upgrade; default)
 - Default: From `preferences.yaml` (`defaultUninstallPreviousVersion`)
-- The `{DETECT}` anchor is always superseded with `Update`, never `Replace`.
+- The DETECT anchor is always superseded with `Update`, never `Replace`.
 
 **`autoUpdateOnAssignment`** (boolean) - Enables Intune's native auto-update
 (`settings.autoUpdateSettings.autoUpdateSupersededAppsState = enabled`) so Intune
@@ -640,11 +637,11 @@ against versions that survive the run. Retention is still governed by
 `numVersionsToKeep`, and Yardstick keeps the graph inside Intune's 10-node
 supersedence limit.
 
-## The `{DETECT}` Anchor
+## The DETECT Anchor
 
 For recipes that detect installs by *version comparison* (`detectionType: msi`,
 or `file`/`registry` with `fileDetectionMethod: version`/`registryDetectionMethod: version`),
-Yardstick preserves one "anchor" version - renamed `{DETECT} <DisplayName>` -
+Yardstick preserves one "anchor" version - renamed `Ω DETECT - <DisplayName>` -
 that is never pruned or renamed.
 
 Supersedence only fires when Intune can *detect* the superseded app on the device.
@@ -715,6 +712,23 @@ replace the recipe's own when Yardstick runs it:
 - Overrides are applied after [Recipe Inheritance](#recipe-inheritance) and apply only to the recipe they name. A recipe that uses `base` needs its own entry; it does not pick up its base recipe's.
 - The file is optional. If it cannot be read, or an entry is malformed, Yardstick stops before processing any recipe, rather than uploading apps without the overridden values. `.\Test-YardstickSetup.ps1` checks the file and warns about entries that name no recipe.
 
+### Recipes that need your values
+
+A few shared recipes cannot work without a value only your organization knows, such as a Zoom vanity URL or an SCCM site code. They ship with a placeholder in capitals, `<YOUR_...>`, where that value goes:
+
+```yaml
+url: \\<YOUR_SITE_SERVER>\SMS_<YOUR_SITE_CODE>\Client
+```
+
+Copy the whole field into `Local\recipeOverrides.yaml` with your values filled in:
+
+```yaml
+sccmclient:
+  url: \\cm01.example.com\SMS_ABC\Client
+```
+
+A recipe that still has a `<YOUR_...>` placeholder after its overrides are applied fails at the Configuration stage, naming the fields to set, and the rest of the run carries on. `.\Test-YardstickSetup.ps1` lists these recipes before you run them. When you write a recipe that needs a site value, use the same form - `<YOUR_` followed by capitals, digits and underscores - so both checks find it.
+
 ## Dependency Management
 
 **`allowDependentLinkUpdates`** (boolean) - Allow updating dependency links when creating new versions.
@@ -733,13 +747,15 @@ replace the recipe's own when Yardstick runs it:
 **`dependentLinkUpdateTimeoutSeconds`** (integer) - Timeout for dependency updates.
 - Default: From `preferences.yaml` (typically 60)
 
-**`dependentApplicationBlocklist`** (array) - Application IDs to exclude from dependency updates.
+**`dependentApplicationBlocklist`** (array) - Display names of apps whose dependency on this one Yardstick should leave alone.
+- Matches the dependent app's display name in Intune, ignoring case. It is not a recipe id or an Intune app id.
 - Default: From `preferences.yaml`
+- Formerly `dependentApplicationBlacklist`. The old name still works, and Yardstick warns to rename it.
 - Example:
   ```yaml
   dependentApplicationBlocklist:
-    - LegacyApp
-    - TestApp
+    - Legacy App That Pins An Old Runtime
+    - Lab Image Bundle
   ```
 
 ## Placeholders
@@ -937,6 +953,15 @@ detectionScript: |
 ```
 
 ## Testing Your Recipe
+
+Test locally with the recipe harness before Yardstick touches Intune. It validates the schema, downloads and packages the app, then installs, detects and uninstalls it on the local machine, without contacting Graph. See [Tests/RecipeHarness/README.md](../Tests/RecipeHarness/README.md).
+
+```powershell
+.\Tests\RecipeHarness\Test-RecipeSchema.ps1 -Id yourappname
+.\Tests\RecipeHarness\Invoke-RecipeInstallTest.ps1 -Id yourappname -WhatIf -NoElevate
+```
+
+Once the harness passes, run it through Yardstick. These runs upload to your tenant:
 
 1. **Test the download and version detection:**
    ```powershell
