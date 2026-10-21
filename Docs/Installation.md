@@ -351,6 +351,8 @@ and save the ones your recipes need.
 
 ## Upgrading
 
+What changed in each release is in [CHANGELOG.md](../CHANGELOG.md).
+
 ```powershell
 git pull
 .\Install-Yardstick.ps1
