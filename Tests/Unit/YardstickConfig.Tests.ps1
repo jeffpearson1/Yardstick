@@ -68,6 +68,13 @@ Describe "Get-YardstickDefaultPreferences" {
         }
     }
 
+    It "Leaves shared sync off by default" {
+        $defaults = Get-YardstickDefaultPreferences -ProjectRoot $script:root
+        $defaults.syncSharedContent | Should -BeFalse
+        $defaults.Contains('SharedIcons') | Should -BeFalse
+        $defaults.Contains('SharedRecipeOverrides') | Should -BeFalse
+    }
+
     It "Supplies defaults that pass validation" {
         $defaults = Get-YardstickDefaultPreferences -ProjectRoot $script:root
         $prefs = @{}
@@ -153,6 +160,18 @@ SoftwareDropbox:
         $prefs.Backup | Should -BeNullOrEmpty
         $prefs.SoftwareDropbox | Should -BeNullOrEmpty
         $prefs.ContainsKey('SoftwareArchive') | Should -BeFalse
+    }
+
+    It "Resolves the shared icon folder and shared overrides file" {
+        Set-TestPreferences -Root $script:root -Yaml @"
+syncSharedContent: true
+SharedIcons: Shared\Icons
+SharedRecipeOverrides: \\server\share\Yardstick\recipeOverrides.yaml
+"@
+        $prefs = Import-YardstickPreferences -ProjectRoot $script:root
+        $prefs.syncSharedContent | Should -BeTrue
+        $prefs.SharedIcons | Should -Be (Join-Path $script:root 'Shared\Icons')
+        $prefs.SharedRecipeOverrides | Should -Be '\\server\share\Yardstick\recipeOverrides.yaml'
     }
 
     It "Resolves relative folder paths against the project root" {
@@ -397,6 +416,30 @@ Describe "Test-YardstickPreferences" {
         $result = Test-YardstickPreferences -Preferences $script:prefs
         $result.IsValid | Should -BeTrue
         $result.Warnings | Should -Match 'Backup folder'
+    }
+
+    It "Ignores unreachable shared paths while shared sync is off" {
+        $script:prefs.SharedIcons = Join-Path $TestDrive 'no-such-icons'
+        $script:prefs.SharedRecipeOverrides = Join-Path $TestDrive 'no-such-overrides.yaml'
+        (Test-YardstickPreferences -Preferences $script:prefs).Warnings | Should -BeNullOrEmpty
+    }
+
+    It "Warns when shared sync is on with nothing to sync" {
+        $script:prefs.syncSharedContent = $true
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeTrue
+        $result.Warnings | Should -Match "neither 'SharedIcons' nor 'SharedRecipeOverrides'"
+    }
+
+    It "Warns about unreachable shared paths while shared sync is on" {
+        $script:prefs.syncSharedContent = $true
+        $script:prefs.SharedIcons = Join-Path $TestDrive 'no-such-icons'
+        $script:prefs.SharedRecipeOverrides = Join-Path $TestDrive 'no-such-overrides.yaml'
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeTrue
+        $result.Warnings | Should -HaveCount 2
+        ($result.Warnings -join "`n") | Should -Match 'SharedIcons folder'
+        ($result.Warnings -join "`n") | Should -Match 'SharedRecipeOverrides file'
     }
 }
 

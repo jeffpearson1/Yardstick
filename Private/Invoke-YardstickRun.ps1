@@ -144,17 +144,6 @@ if (-not $prefsResult.IsValid) {
     exit 1
 }
 
-# Site-specific recipe fields, such as scope tags, live in Local\recipeOverrides.yaml
-# so the shared recipes work in any tenant. A bad file stops the run: dropping an
-# override would upload apps with the wrong scope tags.
-$RecipeOverridesPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
-try {
-    $RecipeOverrides = Import-RecipeOverrides -Path $RecipeOverridesPath
-} catch {
-    Write-Log "Unable to load recipe overrides from ${RecipeOverridesPath}: $($_.Exception.Message)" -Level Error
-    exit 1
-}
-
 # Run-safety timeouts. These are read before anything else touches the network on
 # purpose: every value here exists to stop the runner waiting forever, so they have
 # to be in force for the whole run, not just the recipe loop.
@@ -164,6 +153,57 @@ $Script:PackagingTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.p
 $Script:BitsStallTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.bitsStallTimeoutMinutes -Default 15 -Name 'bitsStallTimeoutMinutes'
 
 Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
+
+# Shared content: with syncSharedContent on, pull the team's icons and recipe
+# overrides from the share before any recipe is read. An unreachable share only
+# warns - the run carries on with the icons it has and the last synced overrides.
+$SharedOverridesCachePath = $null
+if ($Prefs.syncSharedContent -eq $true) {
+    if (-not [string]::IsNullOrWhiteSpace($Prefs.SharedIcons)) {
+        try {
+            $iconSync = Sync-YardstickSharedIcons -Source $Prefs.SharedIcons -Destination $Prefs.Icons
+            Write-Log "Synced $($iconSync.Copied.Count) icon(s) from $($Prefs.SharedIcons); $($iconSync.Unchanged) unchanged."
+            foreach ($name in $iconSync.Copied) { Write-Log "Copied icon $name from the shared icon folder." -Level Detail }
+            foreach ($failure in $iconSync.Failed) {
+                Write-Log "Could not copy icon $($failure.Name) from $($Prefs.SharedIcons): $($failure.Error)" -Level Warning
+            }
+        } catch {
+            Write-Log "Could not sync icons from $($Prefs.SharedIcons): $($_.Exception.Message) Using the icons already in $($Prefs.Icons)." -Level Warning
+        }
+    }
+
+    $SharedOverridesCachePath = Get-YardstickSharedRecipeOverridesCachePath -ProjectRoot $ProjectRoot
+    if (-not [string]::IsNullOrWhiteSpace($Prefs.SharedRecipeOverrides)) {
+        try {
+            $entryCount = Sync-YardstickSharedRecipeOverrides -Source $Prefs.SharedRecipeOverrides -CachePath $SharedOverridesCachePath
+            Write-Log "Synced $entryCount shared recipe override(s) from $($Prefs.SharedRecipeOverrides)."
+        } catch {
+            $cache = Get-Item -LiteralPath $SharedOverridesCachePath -ErrorAction SilentlyContinue
+            $fallback = if ($cache) {
+                "Using the copy synced on $($cache.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))."
+            } else {
+                'There is no synced copy yet, so only the local overrides apply.'
+            }
+            Write-Log "Could not sync recipe overrides: $($_.Exception.Message) $fallback" -Level Warning
+        }
+    }
+}
+
+# Site-specific recipe fields, such as scope tags, live in Local\recipeOverrides.yaml
+# so the shared recipes work in any tenant, layered over the synced shared copy when
+# shared sync is on. A bad file stops the run: dropping an override would upload
+# apps with the wrong scope tags.
+$RecipeOverridesPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
+try {
+    $overrideSet = Import-YardstickEffectiveRecipeOverrides -Path $RecipeOverridesPath -SharedPath $SharedOverridesCachePath
+    $RecipeOverrides = $overrideSet.Overrides
+    if ($overrideSet.Sources.Count -gt 1) {
+        Write-Log "Applying $($RecipeOverrides.Count) recipe override(s) from $($overrideSet.Sources -join ' and ')." -Level Detail
+    }
+} catch {
+    Write-Log "Unable to load recipe overrides from ${RecipeOverridesPath}: $($_.Exception.Message)" -Level Error
+    exit 1
+}
 
 # Validate prerequisites before importing external modules
 $prereqResult = Test-Prerequisites -ToolsPath $Prefs.Tools

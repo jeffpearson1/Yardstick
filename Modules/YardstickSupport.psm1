@@ -3765,6 +3765,219 @@ function Merge-RecipeWithOverride {
     return $merged
 }
 
+
+function Merge-RecipeOverrideSet {
+    <#
+    .SYNOPSIS
+    Layers this machine's recipe overrides on top of the shared ones.
+
+    .DESCRIPTION
+    For a recipe id in both sets, each field the local entry sets replaces the
+    shared entry's field, and shared fields the local entry leaves alone are kept.
+    An id in only one set passes through as it is.
+
+    .PARAMETER Shared
+    Overrides read from the shared file, from Import-RecipeOverrides.
+
+    .PARAMETER Local
+    Overrides read from Local\recipeOverrides.yaml, from Import-RecipeOverrides.
+
+    .OUTPUTS
+    A case-insensitive hashtable of recipe id to a hashtable of fields.
+    #>
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Shared,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Local
+    )
+
+    $merged = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($id in $Shared.Keys) {
+        $fields = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($key in $Shared[$id].Keys) { $fields[$key] = $Shared[$id][$key] }
+        $merged[[string]$id] = $fields
+    }
+    foreach ($id in $Local.Keys) {
+        if (-not $merged.ContainsKey([string]$id)) {
+            $merged[[string]$id] = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+        }
+        foreach ($key in $Local[$id].Keys) { $merged[[string]$id][$key] = $Local[$id][$key] }
+    }
+    return $merged
+}
+
+
+function Import-YardstickEffectiveRecipeOverrides {
+    <#
+    .SYNOPSIS
+    Reads the recipe overrides a run applies: the local file, layered over the
+    last synced copy of the shared file when there is one.
+
+    .DESCRIPTION
+    Either file may be missing. A malformed file throws, as Import-RecipeOverrides
+    does, because an override that silently went missing would upload apps with,
+    for example, the wrong scope tags.
+
+    .PARAMETER Path
+    This machine's overrides file (Local\recipeOverrides.yaml).
+
+    .PARAMETER SharedPath
+    The cached copy of the shared overrides file. Pass it only when shared sync is
+    on, so that turning sync off stops the cache being applied.
+
+    .OUTPUTS
+    PSCustomObject with Overrides (the merged hashtable) and Sources (the files
+    that were read).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$SharedPath
+    )
+
+    $sources = [System.Collections.Generic.List[string]]::new()
+    $local = Import-RecipeOverrides -Path $Path
+    if (Test-Path -LiteralPath $Path -PathType Leaf) { $sources.Add($Path) }
+
+    $overrides = $local
+    if ($SharedPath -and (Test-Path -LiteralPath $SharedPath -PathType Leaf)) {
+        try {
+            $shared = Import-RecipeOverrides -Path $SharedPath
+        } catch {
+            throw "The shared overrides copy '$SharedPath' is unreadable: $($_.Exception.Message)"
+        }
+        $overrides = Merge-RecipeOverrideSet -Shared $shared -Local $local
+        $sources.Insert(0, $SharedPath)
+    }
+
+    [PSCustomObject]@{
+        Overrides = $overrides
+        Sources   = [string[]]$sources
+    }
+}
+
+
+function Sync-YardstickSharedRecipeOverrides {
+    <#
+    .SYNOPSIS
+    Copies the shared recipe overrides file to its local cache.
+
+    .DESCRIPTION
+    The shared file is parsed first, and the cache is replaced only when it is
+    valid, so a bad edit on the share never displaces the last good copy. The copy
+    lands under a temporary name and is renamed into place.
+
+    Throws when the shared file cannot be read or is malformed; the cache is left
+    as it was.
+
+    .PARAMETER Source
+    The shared overrides file, from the SharedRecipeOverrides preference.
+
+    .PARAMETER CachePath
+    Where the local copy lives (Get-YardstickSharedRecipeOverridesCachePath).
+
+    .OUTPUTS
+    The number of recipe entries in the synced file.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$CachePath
+    )
+
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        throw "The shared overrides file '$Source' is not reachable."
+    }
+
+    # Read once and validate those same bytes, so the cache cannot pick up an edit
+    # made on the share between the check and the copy.
+    $content = [IO.File]::ReadAllBytes($Source)
+    $tempPath = "$CachePath.tmp"
+    try {
+        $cacheFolder = Split-Path -Parent $CachePath
+        if (-not (Test-Path -LiteralPath $cacheFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $cacheFolder -Force | Out-Null
+        }
+        [IO.File]::WriteAllBytes($tempPath, $content)
+        try {
+            $overrides = Import-RecipeOverrides -Path $tempPath
+        } catch {
+            throw "The shared overrides file '$Source' is malformed: $($_.Exception.Message)"
+        }
+        Move-Item -LiteralPath $tempPath -Destination $CachePath -Force
+    } finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+    return $overrides.Count
+}
+
+
+function Sync-YardstickSharedIcons {
+    <#
+    .SYNOPSIS
+    Copies new and changed icons from the shared icon folder to the local one.
+
+    .DESCRIPTION
+    An icon is copied when the local folder has no file of that name, or has one
+    that differs in size or last-modified time. Nothing is ever deleted, so an icon
+    that exists only on this machine stays. Only image files at the top of the
+    shared folder are considered, which leaves out Thumbs.db and .DS_Store.
+
+    Each copy lands under a temporary name and is renamed into place, so a run
+    never sees half an icon. A file that fails is reported and the rest carry on.
+
+    .PARAMETER Source
+    The shared icon folder, from the SharedIcons preference.
+
+    .PARAMETER Destination
+    The local Icons folder.
+
+    .OUTPUTS
+    PSCustomObject with Copied (file names), Unchanged (a count) and Failed
+    (PSCustomObjects with Name and Error).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
+        throw "The shared icon folder '$Source' is not reachable."
+    }
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    }
+
+    $copied = [System.Collections.Generic.List[string]]::new()
+    $failed = [System.Collections.Generic.List[object]]::new()
+    $unchanged = 0
+
+    $icons = Get-ChildItem -LiteralPath $Source -File -ErrorAction Stop |
+        Where-Object { $_.Extension -in '.png', '.jpg', '.jpeg' }
+    foreach ($icon in $icons) {
+        $target = Join-Path $Destination $icon.Name
+        $existing = Get-Item -LiteralPath $target -ErrorAction SilentlyContinue
+        if ($existing -and $existing.Length -eq $icon.Length -and
+            $existing.LastWriteTimeUtc -eq $icon.LastWriteTimeUtc) {
+            $unchanged++
+            continue
+        }
+
+        $tempTarget = "$target.tmp"
+        try {
+            Copy-Item -LiteralPath $icon.FullName -Destination $tempTarget -Force
+            Move-Item -LiteralPath $tempTarget -Destination $target -Force
+            $copied.Add($icon.Name)
+        } catch {
+            Remove-Item -LiteralPath $tempTarget -Force -ErrorAction SilentlyContinue
+            $failed.Add([PSCustomObject]@{ Name = $icon.Name; Error = $_.Exception.Message })
+        }
+    }
+
+    [PSCustomObject]@{
+        Copied    = [string[]]$copied
+        Unchanged = $unchanged
+        Failed    = $failed.ToArray()
+    }
+}
+
 function Get-RecipePlaceholder {
     <#
     .SYNOPSIS
