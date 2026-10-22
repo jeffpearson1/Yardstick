@@ -199,8 +199,26 @@ if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container
 # An override whose id matches no recipe is never applied, so a typo there would
 # quietly upload the recipe with its own (or the default) scope tags.
 $overridesPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
+# With shared sync on, a run layers the local file over the last synced copy of the
+# shared file, so these checks read both. The health check never syncs.
+$sharedCachePath = $null
+if ($prefs.syncSharedContent -eq $true) {
+    $sharedCachePath = Get-YardstickSharedRecipeOverridesCachePath -ProjectRoot $ProjectRoot
+    $sharedCache = Get-Item -LiteralPath $sharedCachePath -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace([string]$prefs.SharedRecipeOverrides)) {
+        Add-Check 'Shared sync' OK 'Shared sync is on for icons only (SharedRecipeOverrides is not set).'
+    } elseif ($sharedCache) {
+        Add-Check 'Shared sync' OK "Shared sync is on. Overrides from $($prefs.SharedRecipeOverrides) were last synced $($sharedCache.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))."
+    } else {
+        Add-Check 'Shared sync' Warn "Shared sync is on, but overrides from $($prefs.SharedRecipeOverrides) have not been synced yet. The next run syncs them."
+    }
+} else {
+    Add-Check 'Shared sync' OK 'Shared sync is off (optional: syncSharedContent).'
+}
 try {
-    $overrides = Import-RecipeOverrides -Path $overridesPath
+    $overrideSet = Import-YardstickEffectiveRecipeOverrides -Path $overridesPath -SharedPath $sharedCachePath
+    $overrides = $overrideSet.Overrides
+    $overrideSources = if ($overrideSet.Sources.Count) { $overrideSet.Sources -join ' and ' } else { $overridesPath }
     if ($overrides.Count -eq 0) {
         Add-Check 'Recipe overrides' OK "No recipe overrides (optional: $overridesPath)."
     } else {
@@ -210,9 +228,9 @@ try {
         }
         $unmatched = @($overrides.Keys | Where-Object { $_ -notin $recipeIds } | Sort-Object)
         if ($unmatched.Count -gt 0) {
-            Add-Check 'Recipe overrides' Warn "$($unmatched.Count) override(s) in $overridesPath name no recipe, so they are never applied: $($unmatched -join ', ')"
+            Add-Check 'Recipe overrides' Warn "$($unmatched.Count) override(s) in $overrideSources name no recipe, so they are never applied: $($unmatched -join ', ')"
         } else {
-            Add-Check 'Recipe overrides' OK "$($overrides.Count) recipe override(s) in $overridesPath"
+            Add-Check 'Recipe overrides' OK "$($overrides.Count) recipe override(s) in $overrideSources"
         }
     }
 
@@ -232,7 +250,7 @@ try {
         }
     }
 } catch {
-    Add-Check 'Recipe overrides' Fail "Could not read '$overridesPath': $($_.Exception.Message). Yardstick will not run until it is fixed."
+    Add-Check 'Recipe overrides' Fail "Could not read the recipe overrides: $($_.Exception.Message). Yardstick will not run until it is fixed."
 }
 
 #endregion

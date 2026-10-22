@@ -252,6 +252,10 @@ change. The example file lists them all with explanations. In particular:
 - **`Backup`** keeps a copy of every `.intunewin` file Yardstick uploads (the newest
   `backupVersionsToKeep` per recipe), so a bad release can be traced to the exact
   package. Leave it blank to turn this off.
+- **`syncSharedContent`** keeps several Yardstick machines on one set of icons and
+  recipe overrides. Set it to `true` and point `SharedIcons` and
+  `SharedRecipeOverrides` at the shared copies; each run pulls them before it reads
+  any recipe. See [Shared overrides](WritingRecipes.md#shared-overrides).
 
 Yardstick checks the file when it starts and reports invalid values - for example an
 unknown `emailDeliveryMethod`, a group name where an ID is expected, or a leftover

@@ -44,6 +44,14 @@ Backup:
 # How many .intunewin files to retain per recipe in the Backup folder - the newest
 # plus N-1 and N-2 by default. Set to 0 to keep every backup forever.
 backupVersionsToKeep: 3
+# Optional. With syncSharedContent: true, each run first copies new and changed
+# icons from SharedIcons into the Icons folder (it never deletes any), and copies
+# the SharedRecipeOverrides file to Local\recipeOverrides.shared.yaml. Entries in
+# Local\recipeOverrides.yaml are layered on top, so a field set locally wins. If
+# the share cannot be reached, the run warns and uses what it last synced.
+syncSharedContent: false
+# SharedIcons: \\server\share\Intune\Icons
+# SharedRecipeOverrides: \\server\share\Intune\Yardstick\recipeOverrides.yaml
 
 
 #####################################

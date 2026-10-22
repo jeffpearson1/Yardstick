@@ -25,7 +25,11 @@ $Script:DefaultedFolderKeys = [ordered]@{
 
 # Folder keys that are off unless set. A blank value is meaningful here (it disables
 # the feature), so these are resolved when present but never defaulted.
-$Script:OptionalFolderKeys = @('SoftwareDropbox', 'SoftwareArchive', 'Backup')
+$Script:OptionalFolderKeys = @('SoftwareDropbox', 'SoftwareArchive', 'Backup', 'SharedIcons')
+
+# File keys that are off unless set. Resolved like the optional folders, but checked
+# as files.
+$Script:OptionalFileKeys = @('SharedRecipeOverrides')
 
 # Folders the runner writes into and therefore creates when they are missing.
 # Recipes is deliberately absent: an empty recipe folder is a misconfiguration, not
@@ -122,6 +126,8 @@ function Get-YardstickDefaultPreferences {
         recipeStageTimeoutMinutes                   = 60
         packagingTimeoutMinutes                     = 30
         bitsStallTimeoutMinutes                     = 15
+
+        syncSharedContent                           = $false
 
         emailNotificationEnabled                    = $false
         emailDeliveryMethod                         = 'outlook'
@@ -246,7 +252,7 @@ function Import-YardstickPreferences {
         }
     }
 
-    foreach ($key in @($Script:DefaultedFolderKeys.Keys) + $Script:OptionalFolderKeys) {
+    foreach ($key in @($Script:DefaultedFolderKeys.Keys) + $Script:OptionalFolderKeys + $Script:OptionalFileKeys) {
         if (-not (Test-YardstickBlankValue $prefs[$key])) {
             $prefs[$key] = Resolve-YardstickPreferencePath -Path ([string]$prefs[$key]) -ProjectRoot $root
         }
@@ -408,11 +414,26 @@ function Test-YardstickPreferences {
         }
     }
 
+    $syncShared = $Preferences.syncSharedContent -eq $true
     foreach ($key in $Script:OptionalFolderKeys) {
+        # The shared paths are read only when sync is on, so an offline share does
+        # not matter while it is off.
+        if ($key -eq 'SharedIcons' -and -not $syncShared) { continue }
         $folder = [string]$Preferences[$key]
         if (-not [string]::IsNullOrWhiteSpace($folder) -and $folder -notmatch '<REPLACE_' -and
             ($problem = Get-YardstickFolderProblem -Path $folder)) {
             $warnings.Add("The $key folder '$folder' is not reachable: $problem")
+        }
+    }
+
+    if ($syncShared) {
+        if ((Test-YardstickBlankValue $Preferences.SharedIcons) -and (Test-YardstickBlankValue $Preferences.SharedRecipeOverrides)) {
+            $warnings.Add("syncSharedContent is on but neither 'SharedIcons' nor 'SharedRecipeOverrides' is set, so there is nothing to sync.")
+        }
+        $sharedOverrides = [string]$Preferences.SharedRecipeOverrides
+        if (-not [string]::IsNullOrWhiteSpace($sharedOverrides) -and $sharedOverrides -notmatch '<REPLACE_' -and
+            -not (Test-Path -LiteralPath $sharedOverrides -PathType Leaf)) {
+            $warnings.Add("The SharedRecipeOverrides file '$sharedOverrides' is not reachable. Runs will use the last synced copy, if there is one.")
         }
     }
 
@@ -432,5 +453,6 @@ Export-ModuleMember -Function @(
     'Get-YardstickPreferenceAllowedValues',
     'Get-YardstickProjectLayout',
     'Get-YardstickPreferencesPath',
-    'Get-YardstickRecipeOverridesPath'
+    'Get-YardstickRecipeOverridesPath',
+    'Get-YardstickSharedRecipeOverridesCachePath'
 )

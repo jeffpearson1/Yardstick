@@ -712,6 +712,25 @@ replace the recipe's own when Yardstick runs it:
 - Overrides are applied after [Recipe Inheritance](#recipe-inheritance) and apply only to the recipe they name. A recipe that uses `base` needs its own entry; it does not pick up its base recipe's.
 - The file is optional. If it cannot be read, or an entry is malformed, Yardstick stops before processing any recipe, rather than uploading apps without the overridden values. `.\Test-YardstickSetup.ps1` checks the file and warns about entries that name no recipe.
 
+### Shared overrides
+
+When several machines run Yardstick, keep one overrides file and one icon folder on a share and let each run pull them. Turn it on in `Local\preferences.yaml`:
+
+```yaml
+syncSharedContent: true
+SharedIcons: \\server\share\Intune\Icons
+SharedRecipeOverrides: \\server\share\Intune\Yardstick\recipeOverrides.yaml
+```
+
+Before it reads any recipe, a run:
+
+- copies icons from `SharedIcons` that the `Icons` folder lacks or has in a different size or date. It never deletes an icon, so one that exists only on this machine stays.
+- checks the `SharedRecipeOverrides` file and copies it to `Local\recipeOverrides.shared.yaml`. A malformed shared file is not copied, so the last good copy stays in use.
+
+The local `Local\recipeOverrides.yaml` is layered on top, field by field: where both files set a field for the same recipe, the local value wins, and the shared file's other fields still apply. A local entry is the way to give one machine a different value.
+
+If the share cannot be reached, the run logs a warning and carries on with the icons it has and the last synced overrides. With `syncSharedContent` off (the default), neither path is read and the synced copy is ignored.
+
 ### Recipes that need your values
 
 A few shared recipes cannot work without a value only your organization knows, such as a Zoom vanity URL or an SCCM site code. They ship with a placeholder in capitals, `<YOUR_...>`, where that value goes:

@@ -63,3 +63,16 @@ function Get-YardstickRecipeOverridesPath {
     # A project manifest from before recipe overrides existed has no entry for them.
     return Join-Path $layout.ProjectRoot 'Local\recipeOverrides.yaml'
 }
+
+function Get-YardstickSharedRecipeOverridesCachePath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProjectRoot
+    )
+
+    # The last good copy of the shared overrides file sits beside the local one, so
+    # a run can still apply it when the share is offline.
+    $localPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
+    return Join-Path (Split-Path -Parent $localPath) 'recipeOverrides.shared.yaml'
+}
