@@ -3,13 +3,27 @@
 All notable changes to Yardstick are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-10-23
 
 ### Added
 
-- `minRunInterval` recipe field: the minimum number of days between runs of a recipe,
-  for vendor sites that throttle repeated requests. Last-run times are kept in
-  `Local\recipeRunHistory.json`, and `-Force` ignores the interval.
+- **Shared icons and recipe overrides.** With `syncSharedContent: true`, each run first
+  copies new and changed icons from `SharedIcons` into the Icons folder (it never
+  deletes any) and caches the `SharedRecipeOverrides` file in
+  `Local\recipeOverrides.shared.yaml`. `Local\recipeOverrides.yaml` is layered on top,
+  field by field, so a value set locally wins. If the share can't be reached, or the
+  shared file is malformed, the run warns and uses the last copy it synced.
+  `Test-YardstickSetup.ps1` reports the sync status.
+- **`minRunInterval` recipe field.** Sets the minimum number of whole days between runs
+  of a recipe, for vendor sites that throttle repeated requests. A run counts as soon as
+  the recipe is about to contact the vendor, even if it then fails. A recipe run too
+  soon is skipped like an up-to-date one, and `-Force` ignores the interval. Last-run
+  times are kept per machine in `Local\recipeRunHistory.json`.
+- PuTTY now runs at most once a week (`minRunInterval: 7`).
+
+### Changed
+
+- The README logo adapts to dark mode and is smaller.
 
 ## [1.0.0] - 2026-10-21
 
@@ -74,4 +88,5 @@ The first versioned release. Earlier builds were unversioned (the module manifes
   that set them. Use `defaultDeploymentGroups` for available assignments; add required
   assignments in Intune.
 
+[1.1.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.1.0
 [1.0.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.0.0
