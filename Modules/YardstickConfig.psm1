@@ -454,5 +454,6 @@ Export-ModuleMember -Function @(
     'Get-YardstickProjectLayout',
     'Get-YardstickPreferencesPath',
     'Get-YardstickRecipeOverridesPath',
-    'Get-YardstickSharedRecipeOverridesCachePath'
+    'Get-YardstickSharedRecipeOverridesCachePath',
+    'Get-YardstickRecipeRunHistoryPath'
 )

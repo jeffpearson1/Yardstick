@@ -3525,6 +3525,139 @@ function Get-YardstickDropboxPayload {
 }
 
 
+function Read-YardstickRecipeRunHistory {
+    <#
+    .SYNOPSIS
+    Reads the time each recipe last contacted its vendor.
+
+    .DESCRIPTION
+    A missing file means no recipe has a recorded run. An unreadable one is
+    treated the same way, with a warning: the history only exists to space out
+    requests to vendors that throttle, so losing it costs one early run, which is
+    better than stopping every recipe that sets minRunInterval.
+
+    .PARAMETER Path
+    The run history file (Local\recipeRunHistory.json).
+
+    .OUTPUTS
+    A case-insensitive hashtable of recipe id to the [datetime] of its last run.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $history = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $history
+    }
+
+    try {
+        $parsed = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable
+    } catch {
+        Write-Log "Could not read the recipe run history at ${Path}: $($_.Exception.Message) Treating every recipe as never run." -Level Warning
+        return $history
+    }
+    if ($parsed -isnot [System.Collections.IDictionary]) {
+        return $history
+    }
+
+    foreach ($key in $parsed.Keys) {
+        # ConvertFrom-Json turns an ISO 8601 string into a [datetime] itself, but
+        # a hand-edited value may not be one.
+        $value = $parsed[$key]
+        if ($value -isnot [datetime]) {
+            $value = [string]$value -as [datetime]
+        }
+        if ($value) { $history[$key] = $value }
+    }
+    return $history
+}
+
+
+function Test-YardstickRecipeRunDue {
+    <#
+    .SYNOPSIS
+    Tests whether a recipe's minRunInterval has passed since its last run.
+
+    .DESCRIPTION
+    Counts whole calendar days, not 24-hour periods. A scheduled task fires at the
+    same time each day, but how far into the run a recipe is reached varies, so
+    with 24-hour periods a recipe set to 7 days would keep landing a few minutes
+    short and run every eighth day instead.
+
+    .PARAMETER Path
+    The run history file (Local\recipeRunHistory.json).
+
+    .PARAMETER Id
+    The recipe id.
+
+    .PARAMETER Days
+    The recipe's minRunInterval. 0 or less is always due.
+
+    .PARAMETER Now
+    The current time. Exposed for tests.
+
+    .OUTPUTS
+    PSCustomObject with IsDue, LastRun ($null when never run) and NextRun ($null
+    when due).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][int]$Days,
+        [datetime]$Now = (Get-Date)
+    )
+
+    $lastRun = $null
+    if ($Days -gt 0) {
+        $lastRun = (Read-YardstickRecipeRunHistory -Path $Path)[$Id]
+    }
+    $nextRun = if ($lastRun) { $lastRun.Date.AddDays($Days) }
+
+    return [PSCustomObject]@{
+        IsDue   = (-not $nextRun) -or ($Now.Date -ge $nextRun)
+        LastRun = $lastRun
+        NextRun = if ($nextRun -and $Now.Date -lt $nextRun) { $nextRun }
+    }
+}
+
+
+function Set-YardstickRecipeLastRun {
+    <#
+    .SYNOPSIS
+    Records that a recipe contacted its vendor.
+
+    .PARAMETER Path
+    The run history file (Local\recipeRunHistory.json). Created if missing.
+
+    .PARAMETER Id
+    The recipe id.
+
+    .PARAMETER Time
+    When the recipe ran. Defaults to now.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Id,
+        [datetime]$Time = (Get-Date)
+    )
+
+    $history = Read-YardstickRecipeRunHistory -Path $Path
+    $history[$Id] = $Time
+
+    $sorted = [ordered]@{}
+    foreach ($key in $history.Keys | Sort-Object) {
+        $sorted[$key] = $history[$key].ToString('o')
+    }
+
+    $folder = Split-Path -Parent $Path
+    if ($folder -and -not (Test-Path -LiteralPath $folder -PathType Container)) {
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    }
+    $sorted | ConvertTo-Json | Set-Content -LiteralPath $Path -Encoding utf8
+}
+
+
 function Complete-YardstickDropbox {
     <#
     .SYNOPSIS
@@ -4209,6 +4342,15 @@ function Test-RecipeSchema {
         }
     }
 
+    # minRunInterval counts whole calendar days (see Test-YardstickRecipeRunDue).
+    if ($Recipe.ContainsKey('minRunInterval') -and $null -ne $Recipe['minRunInterval']) {
+        $interval = $Recipe['minRunInterval']
+        $days = $interval -as [double]
+        if ($interval -is [bool] -or $null -eq $days -or $days -lt 0 -or $days -ne [math]::Floor($days)) {
+            $errors.Add("Field 'minRunInterval' must be a whole number of days, 0 or more (got '$interval')")
+        }
+    }
+
     # Unknown field warnings (case-insensitive)
     $knownFields = @(
         'url', 'urlRedirects', 'id', 'version', 'fileDetectionVersion', 'displayName',
@@ -4226,7 +4368,7 @@ function Test-RecipeSchema {
         'detectionScriptFileExtension', 'detectionScriptRunAs32Bit',
         'detectionScriptEnforceSignatureCheck', 'iconFile', 'description', 'publisher',
         'versionLock', 'numVersionsToKeep', 'fileType', 'softwareName',
-        'manualDownload', 'manualDownloadFolder',
+        'manualDownload', 'manualDownloadFolder', 'minRunInterval',
         'dependentApplicationBlocklist', 'dependentLinkUpdateEnabled',
         'dependentLinkUpdateRetryCount', 'dependentLinkUpdateRetryDelaySeconds',
         'dependentLinkUpdateTimeoutSeconds',

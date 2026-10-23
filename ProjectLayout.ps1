@@ -76,3 +76,16 @@ function Get-YardstickSharedRecipeOverridesCachePath {
     $localPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
     return Join-Path (Split-Path -Parent $localPath) 'recipeOverrides.shared.yaml'
 }
+
+function Get-YardstickRecipeRunHistoryPath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProjectRoot
+    )
+
+    # When each recipe last contacted its vendor, for recipes that set
+    # minRunInterval. Machine-local state, so it sits beside the local overrides.
+    $localPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
+    return Join-Path (Split-Path -Parent $localPath) 'recipeRunHistory.json'
+}
