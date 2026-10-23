@@ -190,6 +190,35 @@ Describe "Test-RecipeSchema" {
         }
     }
 
+    Context "minRunInterval" {
+        It "Accepts <Value>" -TestCases @(
+            @{ Value = 0 }
+            @{ Value = 7 }
+            @{ Value = '14' }
+        ) {
+            param($Value)
+            $recipe = New-ValidRecipe
+            $recipe['minRunInterval'] = $Value
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+            $result.Warnings | Where-Object { $_ -match "minRunInterval" } | Should -BeNullOrEmpty
+        }
+
+        It "Rejects <Value>" -TestCases @(
+            @{ Value = -1 }
+            @{ Value = 1.5 }
+            @{ Value = 'weekly' }
+            @{ Value = $true }
+        ) {
+            param($Value)
+            $recipe = New-ValidRecipe
+            $recipe['minRunInterval'] = $Value
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeFalse
+            $result.Errors | Where-Object { $_ -match "'minRunInterval' must be a whole number" } | Should -Not -BeNullOrEmpty
+        }
+    }
+
     Context "Reserved runner variables" {
         It "Warns when a preDownloadScript assigns `$temp" {
             $recipe = New-ValidRecipe

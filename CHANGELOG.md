@@ -3,6 +3,14 @@
 All notable changes to Yardstick are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `minRunInterval` recipe field: the minimum number of days between runs of a recipe,
+  for vendor sites that throttle repeated requests. Last-run times are kept in
+  `Local\recipeRunHistory.json`, and `-Force` ignores the interval.
+
 ## [1.0.0] - 2026-10-21
 
 The first versioned release. Earlier builds were unversioned (the module manifest said

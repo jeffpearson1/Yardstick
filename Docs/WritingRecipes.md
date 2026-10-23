@@ -562,6 +562,14 @@ Required assignments are not set in a recipe. Add them to the app in Intune, and
 **`displayVersion`** (string) - Override version shown in Intune (optional).
 - Useful when file version differs from marketing version
 
+**`minRunInterval`** (integer) - Minimum number of days between runs of this recipe, for vendor sites that throttle or block repeated requests.
+- Default: `0` (run every time). There is no preference for it; set it in the recipe, or for your site only in `Local\recipeOverrides.yaml`.
+- Example: `minRunInterval: 7`
+- Counts calendar days: a recipe that last ran on the 1st with `minRunInterval: 7` runs again on the 8th, whatever the time of day.
+- A run counts once the recipe is about to contact the vendor, just before its `preDownloadScript`. The recipe does not have to succeed, because a failed attempt still counts against the vendor's limit.
+- When it is too soon, the recipe is skipped like an up-to-date one (`-Repair` still runs its maintenance sweep). `-Force` ignores the interval.
+- Last-run times are kept per machine in `Local\recipeRunHistory.json`. Delete a recipe's entry to let it run on the next pass.
+
 ## Supersedence & Auto-Update
 
 Yardstick wires up Intune's **native** update path rather than shipping a custom

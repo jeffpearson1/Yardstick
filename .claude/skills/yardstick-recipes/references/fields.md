@@ -119,7 +119,8 @@ existence-only detection do not.
 `minOSVersion` (`W10_20H2` is the common floor), `architecture`,
 `maximumInstallationTimeInMinutes` (raise it for long installers),
 `numVersionsToKeep`, `versionLock` (dotted pattern with `x` wildcards,
-e.g. `3.11.x`), `dependentApplicationBlocklist`.
+e.g. `3.11.x`), `dependentApplicationBlocklist`, `minRunInterval` (whole days
+between runs, for vendor sites that throttle repeated requests; `-Force` ignores it).
 
 Do not put `scopeTags` in a shared recipe. They are tenant-specific, so they go in
 the gitignored `Local\recipeOverrides.yaml`, keyed by recipe id; see "Site-Specific

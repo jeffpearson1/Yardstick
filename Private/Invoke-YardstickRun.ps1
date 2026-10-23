@@ -205,6 +205,9 @@ try {
     exit 1
 }
 
+# When each recipe last contacted its vendor, read by recipes that set minRunInterval.
+$RecipeRunHistoryPath = Get-YardstickRecipeRunHistoryPath -ProjectRoot $ProjectRoot
+
 # Validate prerequisites before importing external modules
 $prereqResult = Test-Prerequisites -ToolsPath $Prefs.Tools
 foreach ($w in $prereqResult.Warnings) { Write-Log $w -Level Warning }
@@ -862,7 +865,10 @@ function Set-ScriptVariables {
     # a URL or download script. See Get-YardstickDropboxPayload.
     $Script:ManualDownload = if ($null -ne $Parameters.manualDownload) { [bool]$Parameters.manualDownload } else { $false }
     $Script:ManualDownloadFolder = if ($Parameters.manualDownloadFolder) { $Parameters.manualDownloadFolder } else { $Parameters.id }
-    
+
+    # Days to wait between runs, for vendors that throttle repeated requests.
+    $Script:MinRunInterval = if ($null -ne $Parameters.minRunInterval) { [int]$Parameters.minRunInterval } else { 0 }
+
     # Use parameters or fall back to preferences
     $Script:ScopeTags = if ($null -ne $Parameters.scopeTags) { $Parameters.scopeTags } else { $Preferences.defaultScopeTags }
     $Script:Owner = if ($null -ne $Parameters.owner) { $Parameters.owner } else { $Preferences.defaultOwner }
@@ -1473,6 +1479,26 @@ foreach ($AppId_Processing in $Applications) {
             $dropboxPath = $DropboxPayload.Path
             $dropboxFiles = $DropboxPayload.Files
             Write-Log "Found $($dropboxFiles.Count) staged file(s) in $dropboxPath."
+        }
+
+        # Vendors that throttle repeated requests set minRunInterval. The run is
+        # recorded before the vendor is contacted, not when the recipe succeeds: a
+        # failed attempt still counts against the vendor's limit, and retrying it
+        # every run is what gets a site to start refusing us.
+        if ($Script:MinRunInterval -gt 0) {
+            $runDue = Test-YardstickRecipeRunDue -Path $RecipeRunHistoryPath -Id $AppId_Processing -Days $Script:MinRunInterval
+            if (-not $runDue.IsDue -and -not $Force) {
+                Invoke-YardstickSkip -Reason "Last run $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm')); minRunInterval is $($Script:MinRunInterval) day(s), so the next run is on or after $($runDue.NextRun.ToString('yyyy-MM-dd'))."
+                continue
+            }
+            if (-not $runDue.IsDue) {
+                Write-Log "-Force is set: running despite minRunInterval ($($Script:MinRunInterval) day(s)); the last run was $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm'))."
+            }
+            try {
+                Set-YardstickRecipeLastRun -Path $RecipeRunHistoryPath -Id $AppId_Processing
+            } catch {
+                Write-Log "Could not record this run in ${RecipeRunHistoryPath}: $($_.Exception.Message)" -Level Warning
+            }
         }
 
         # Run the pre-download script
