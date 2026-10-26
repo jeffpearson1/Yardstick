@@ -769,6 +769,26 @@ Describe "New-YardstickAppRegistration" {
 }
 
 
+Describe "Get-YardstickPwshPath" {
+    It "Uses `$PSHOME for an MSI install, which updates in place" {
+        Get-YardstickPwshPath -PSHomePath 'C:\Program Files\PowerShell\7' -LocalAppData $TestDrive |
+            Should -Be 'C:\Program Files\PowerShell\7\pwsh.exe'
+    }
+
+    It "Uses the app execution alias for a Microsoft Store install, whose folder changes on every update" {
+        $alias = Join-Path $TestDrive 'Microsoft\WindowsApps\pwsh.exe'
+        New-Item -ItemType File -Path $alias -Force | Out-Null
+        Get-YardstickPwshPath -PSHomePath 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe' -LocalAppData $TestDrive |
+            Should -Be $alias
+    }
+
+    It "Falls back to `$PSHOME for a Store install without an alias" {
+        Get-YardstickPwshPath -PSHomePath 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe' -LocalAppData (Join-Path $TestDrive 'Empty') |
+            Should -Be 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe\pwsh.exe'
+    }
+}
+
+
 Describe "Get-YardstickScheduledTaskDefinition" {
     It "Runs every recipe unattended by default" {
         $definition = Get-YardstickScheduledTaskDefinition -ProjectRoot 'C:\Yardstick' -PwshPath 'C:\pwsh\pwsh.exe'
@@ -809,6 +829,19 @@ Describe "Register-YardstickScheduledTask" {
         Register-YardstickScheduledTask -ProjectRoot 'C:\Yardstick' -At ([datetime]'03:00') -Credential $credential
         Should -Invoke Register-ScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter {
             $User -eq 'CONTOSO\runner' -and $Password -eq 'secret' -and -not $Principal
+        }
+    }
+
+    It "Runs <Schedule> with a <Class> on days <Days>" -TestCases @(
+        # DaysOfWeek is a bit mask: Sunday 1, Monday 2, Tuesday 4 ... Saturday 64.
+        @{ Schedule = 'Daily';            Class = 'MSFT_TaskDailyTrigger';  Days = $null }
+        @{ Schedule = 'MondayToFriday';   Class = 'MSFT_TaskWeeklyTrigger'; Days = 62 }
+        @{ Schedule = 'MondayToThursday'; Class = 'MSFT_TaskWeeklyTrigger'; Days = 30 }
+    ) {
+        param($Schedule, $Class, $Days)
+        Register-YardstickScheduledTask -ProjectRoot 'C:\Yardstick' -At ([datetime]'03:00') -Schedule $Schedule
+        Should -Invoke Register-ScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter {
+            $Trigger.CimClass.CimClassName -eq $Class -and $Trigger.DaysOfWeek -eq $Days -and ([datetime]$Trigger.StartBoundary).Hour -eq 3
         }
     }
 }
@@ -1027,6 +1060,17 @@ Describe "Invoke-YardstickElevatedAction" {
             $ProjectRoot -eq 'C:\Yardstick' -and $Group -eq 'Lab' -and $At.Hour -eq 5 -and $At.Minute -eq 30 -and
             $Credential.UserName -eq 'CONTOSO\runner' -and $Credential.GetNetworkCredential().Password -eq 'secret'
         }
+    }
+
+    It "Passes on the pwsh path chosen in the user's own session, and the schedule" {
+        Mock Register-YardstickScheduledTask { } -ModuleName YardstickSetup
+        $key = [byte[]](1..32)
+        $password = ConvertFrom-SecureString -SecureString (ConvertTo-SecureString 'secret' -AsPlainText -Force) -Key $key
+        $pwsh = 'C:\Users\runner\AppData\Local\Microsoft\WindowsApps\pwsh.exe'
+        $action = ConvertTo-TestAction @{ Type = 'RegisterScheduledTask'; ProjectRoot = 'C:\Yardstick'; At = '05:30'; Schedule = 'MondayToThursday'; PwshPath = $pwsh; UserName = 'CONTOSO\runner'; Password = $password }
+
+        Invoke-YardstickElevatedAction -Action $action -Key $key
+        Should -Invoke Register-YardstickScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { $PwshPath -eq $pwsh -and $Schedule -eq 'MondayToThursday' }
     }
 
     It "Grants folder access" {

@@ -16,7 +16,7 @@ sensible default:
                    created yourself (-UseExistingApp).
   IntuneDefaults   Scope tags and a test group for new app versions.
   Email            Optional email report after each run.
-  ScheduledTask    Optional daily scheduled task.
+  ScheduledTask    Optional scheduled task, every day or on weekdays.
   Verify           Runs Test-YardstickSetup.ps1.
 
 Every step checks what is already in place, so the script is safe to run again -
@@ -113,8 +113,11 @@ account running this script, because the stored credentials belong to it.
 Without it the task runs as you, only while you are signed in, and -NonInteractive
 skips creating the task.
 
+.PARAMETER TaskSchedule
+Days the scheduled task runs: Daily (default), MondayToFriday or MondayToThursday.
+
 .PARAMETER TaskTime
-Daily start time for the scheduled task, as HH:mm. Default: 03:00.
+Start time for the scheduled task, as HH:mm. Default: 03:00.
 
 .PARAMETER TaskGroup
 Recipe group (from RecipeGroups.yaml) for the scheduled task to run instead of
@@ -178,6 +181,8 @@ param(
     [switch]$DisableOutlookPrompts,
 
     [pscredential]$TaskCredential,
+    [ValidateSet('Daily', 'MondayToFriday', 'MondayToThursday')]
+    [string]$TaskSchedule = 'Daily',
     [string]$TaskTime = '03:00',
     [string]$TaskGroup
 )
@@ -836,16 +841,35 @@ function Invoke-ScheduledTaskStep {
     if ($existingTask) {
         $info = Get-ScheduledTaskInfo -InputObject $existingTask -ErrorAction SilentlyContinue
         $when = if ($existingTask.Principal.LogonType -eq 'Interactive') { 'while signed in' } else { 'whether or not signed in' }
-        Write-YardstickSetupStatus "A Yardstick task already exists (runs as $($existingTask.Principal.UserId) $when; last result $($info.LastTaskResult))." -Level OK
-        if (-not (Read-YardstickSetupYesNo -Prompt 'Replace it?' -Default $false)) { return 'Already configured' }
+        $execute = [string]@($existingTask.Actions)[0].Execute
+        if ($execute -and -not (Test-Path -LiteralPath $execute.Trim('"'))) {
+            # Usually a Microsoft Store PowerShell that has since updated to a new folder.
+            Write-YardstickSetupStatus "The Yardstick task starts $execute, which no longer exists, so it cannot run." -Level Warn
+            if ($NonInteractive -and -not $TaskCredential) {
+                Write-YardstickSetupStatus 'Pass -TaskCredential, or run .\Install-Yardstick.ps1 -Step ScheduledTask interactively, to replace it.' -Level Skip
+                return 'Needs attention'
+            }
+            if (-not (Read-YardstickSetupYesNo -Prompt 'Replace it?' -Default $true)) { return 'Needs attention' }
+        } else {
+            Write-YardstickSetupStatus "A Yardstick task already exists (runs as $($existingTask.Principal.UserId) $when; last result $($info.LastTaskResult))." -Level OK
+            if (-not (Read-YardstickSetupYesNo -Prompt 'Replace it?' -Default $false)) { return 'Already configured' }
+        }
     } elseif ($NonInteractive -and -not $TaskCredential) {
         Write-YardstickSetupStatus 'Skipped: pass -TaskCredential to create the scheduled task.' -Level Skip
         return 'Skipped'
     } elseif (-not $NonInteractive) {
-        if (-not (Read-YardstickSetupYesNo -Prompt 'Run Yardstick automatically every day?' -Default $true)) { return 'Skipped' }
+        if (-not (Read-YardstickSetupYesNo -Prompt 'Run Yardstick automatically on a schedule?' -Default $true)) { return 'Skipped' }
     }
 
-    $time = Read-YardstickSetupValue -Prompt 'Daily start time (HH:mm)' -Default $TaskTime -Required
+    $scheduleNames = [ordered]@{
+        Daily            = 'Every day'
+        MondayToFriday   = 'Monday to Friday'
+        MondayToThursday = 'Monday to Thursday'
+    }
+    $pickedDays = @(Read-YardstickSetupChoice -Prompt 'Which days should the task run?' -Choices @($scheduleNames.Values) -Default @($scheduleNames[$TaskSchedule]))[0]
+    $schedule = @($scheduleNames.Keys | Where-Object { $scheduleNames[$_] -eq $pickedDays })[0]
+
+    $time = Read-YardstickSetupValue -Prompt 'Start time (HH:mm)' -Default $TaskTime -Required
     $at = [datetime]::MinValue
     if (-not [datetime]::TryParseExact($time, 'H:mm', [Globalization.CultureInfo]::InvariantCulture, 'None', [ref]$at)) {
         throw "'$time' is not a time in HH:mm format."
@@ -903,9 +927,11 @@ function Invoke-ScheduledTaskStep {
 
     $what = if ($group) { "recipe group '$group'" } else { 'all recipes' }
     $when = if ($credential) { 'whether or not you are signed in' } else { 'while you are signed in' }
-    $done = "Scheduled task \Yardstick\Yardstick runs $what daily at $($at.ToString('HH:mm')) as $taskUser, $when."
+    $days = if ($schedule -eq 'Daily') { 'every day' } else { $scheduleNames[$schedule] }
+    $done = "Scheduled task \Yardstick\Yardstick runs $what $days at $($at.ToString('HH:mm')) as $taskUser, $when."
+    $pwshPath = Get-YardstickPwshPath
     try {
-        Register-YardstickScheduledTask -ProjectRoot $Root -At $at -Credential $credential -Group $group | Out-Null
+        Register-YardstickScheduledTask -ProjectRoot $Root -At $at -Schedule $schedule -Credential $credential -Group $group -PwshPath $pwshPath | Out-Null
     } catch {
         # Some computers only let administrators create a task that runs while nobody
         # is signed in. Try again with administrator rights at the end of setup.
@@ -915,7 +941,9 @@ function Invoke-ScheduledTaskStep {
             Type        = 'RegisterScheduledTask'
             ProjectRoot = $Root
             At          = $at.ToString('HH:mm')
+            Schedule    = $schedule
             Group       = $group
+            PwshPath    = $pwshPath
             Credential  = $credential
         }
         return $PendingResult

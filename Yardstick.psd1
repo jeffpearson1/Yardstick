@@ -9,7 +9,7 @@
 
 RootModule = 'Yardstick.psm1'
 
-ModuleVersion = '1.0.0'
+ModuleVersion = '1.1.0'
 
 GUID = '975bd557-3e81-4a23-b56d-3eb1c6563a95'
 

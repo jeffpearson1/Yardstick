@@ -8,6 +8,7 @@ using module .\VersionPro.psm1
 Import-Module $PSScriptRoot\YardstickLog.psm1 -Scope Global
 Import-Module $PSScriptRoot\YardstickGraph.psm1 -Scope Global
 Import-Module $PSScriptRoot\YardstickIntune.psm1 -Scope Global
+Import-Module $PSScriptRoot\YardstickUserAgent.psm1 -Scope Global
 
 
 
@@ -289,7 +290,7 @@ function Get-RedirectedUrl {
         [int]$MaximumAttempts = 3
     )
 
-    $userAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::Chrome
+    $userAgent = Get-YardstickChromeUserAgent
 
     for ($attempt = 1; ; $attempt++) {
         $httpClient = $null

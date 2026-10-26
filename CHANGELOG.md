@@ -3,13 +3,47 @@
 All notable changes to Yardstick are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-10-26
 
 ### Added
 
-- `minRunInterval` recipe field: the minimum number of days between runs of a recipe,
-  for vendor sites that throttle repeated requests. Last-run times are kept in
-  `Local\recipeRunHistory.json`, and `-Force` ignores the interval.
+- **Shared icons and recipe overrides.** With `syncSharedContent: true`, each run first
+  copies new and changed icons from `SharedIcons` into the Icons folder (it never
+  deletes any) and caches the `SharedRecipeOverrides` file in
+  `Local\recipeOverrides.shared.yaml`. `Local\recipeOverrides.yaml` is layered on top,
+  field by field, so a value set locally wins. If the share can't be reached, or the
+  shared file is malformed, the run warns and uses the last copy it synced.
+  `Test-YardstickSetup.ps1` reports the sync status.
+- **`minRunInterval` recipe field.** Sets the minimum number of whole days between runs
+  of a recipe, for vendor sites that throttle repeated requests. A run counts as soon as
+  the recipe is about to contact the vendor, even if it then fails. A recipe run too
+  soon is skipped like an up-to-date one, and `-Force` ignores the interval. Last-run
+  times are kept per machine in `Local\recipeRunHistory.json`.
+- PuTTY now runs at most once a week (`minRunInterval: 7`).
+- **`Get-YardstickChromeUserAgent`** returns the user agent of the current stable
+  Chrome, read once per run from Google's release feed (and estimated from the last
+  known release if the feed can't be reached). Recipes for sites that only serve
+  browsers should call it rather than paste in a browser string. See
+  [Browser user agent](Docs/WritingRecipes.md#browser-user-agent).
+- **Weekday schedules.** The installer's `ScheduledTask` step can run Yardstick every
+  day, Monday to Friday, or Monday to Thursday (`-TaskSchedule`).
+
+### Changed
+
+- `Get-RedirectedUrl`, `Get-YardstickIcon.ps1` and the Articulate recipes present
+  themselves as the current Chrome. Before, they sent fixed, years-old Chrome versions
+  (PowerShell's built-in Chrome agent claims Chrome 7), which some sites, Dropbox
+  among them, refuse.
+- The README logo adapts to dark mode and is smaller.
+
+### Fixed
+
+- A scheduled task created with Microsoft Store PowerShell stopped working when the
+  Store updated PowerShell, because it pointed into a folder named for the old version.
+  The task now starts PowerShell through its app execution alias, which survives
+  updates. `Test-YardstickSetup.ps1` reports a task whose `pwsh.exe` no longer exists,
+  and the `ScheduledTask` step offers to replace it. If you use Store PowerShell, run
+  `.\Install-Yardstick.ps1 -Step ScheduledTask` once to move an existing task over.
 
 ## [1.0.0] - 2026-10-21
 
@@ -74,4 +108,5 @@ The first versioned release. Earlier builds were unversioned (the module manifes
   that set them. Use `defaultDeploymentGroups` for available assignments; add required
   assignments in Intune.
 
+[1.1.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.1.0
 [1.0.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.0.0

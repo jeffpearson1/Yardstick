@@ -66,6 +66,8 @@ preDownloadScript: |
 
 Leave it `false` when you intend to scrape a landing page - resolving redirects on an HTML page accomplishes nothing and costs a request.
 
+`Get-RedirectedUrl` presents itself as the current stable Chrome (see [Browser user agent](#browser-user-agent)). The resolved address is still fetched by the normal BITS download, so a host whose download links work only for the client that requested them - Dropbox's are - needs the recipe to download for itself. See [Recipes/smokelessrange3.yaml](../Recipes/smokelessrange3.yaml) for one that does.
+
 See [Recipes/firefox.yaml](../Recipes/firefox.yaml) and [Recipes/AmazonCorretto21.yaml](../Recipes/AmazonCorretto21.yaml).
 
 **`fileName`** (string) - The name the downloaded file is saved as, and the value substituted for the `<filename>` placeholder. Set it statically only when the name never changes; otherwise set `$fileName` in `preDownloadScript` or `downloadScript`. If `postDownloadScript` replaces the payload (extracting an MSI out of a bootstrapper, for example), it must reassign `$fileName` to the new installer.
@@ -102,6 +104,16 @@ Write-Log "The primary mirror did not answer. Falling back to the secondary mirr
 ```
 
 Logging an error does not stop the recipe; `throw` to fail it.
+
+#### Browser user agent
+
+When a vendor site only serves browsers, call `Get-YardstickChromeUserAgent` rather than pasting a browser string into the recipe. It returns the user agent of the current stable Chrome, read once per run from Google's release feed (and estimated from the last known release if the feed is unreachable), so it never ages into the kind of years-old browser that sites reject:
+
+```powershell
+$Products = Invoke-RestMethod -Uri https://api.articulate.com/product-artifacts -UserAgent (Get-YardstickChromeUserAgent)
+```
+
+APIs that just want to know who is calling, such as GitHub's, are better served by a plain `'Yardstick'` agent.
 
 Scripts execute in this order:
 

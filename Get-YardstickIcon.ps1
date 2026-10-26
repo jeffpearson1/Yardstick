@@ -415,8 +415,6 @@ public static extern bool DestroyIcon(IntPtr hIcon);
 #endregion
 
 #region Search
-$script:UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
-
 function ConvertFrom-BingImageHtml {
     [CmdletBinding()]
     param(
@@ -610,9 +608,10 @@ if ($RecipeId) {
 #endregion
 
 #region HTTP (UI-thread friendly)
+Import-Module (Join-Path $PSScriptRoot 'Modules\YardstickUserAgent.psm1')
 $script:Http = New-Object System.Net.Http.HttpClient
 $script:Http.Timeout = [TimeSpan]::FromSeconds(20)
-$script:Http.DefaultRequestHeaders.TryAddWithoutValidation('User-Agent', $script:UserAgent) | Out-Null
+$script:Http.DefaultRequestHeaders.TryAddWithoutValidation('User-Agent', (Get-YardstickChromeUserAgent)) | Out-Null
 $script:Http.DefaultRequestHeaders.TryAddWithoutValidation('Accept-Language', 'en-US,en;q=0.9') | Out-Null
 
 function Wait-Tasks {
