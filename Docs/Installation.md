@@ -64,7 +64,7 @@ to change.
 | `AppRegistration` | Creates an Entra app registration called Yardstick, grants it the [Graph permissions](#microsoft-graph-permissions), creates a client secret and stores it in Windows Credential Manager. Or stores the details of an app you already have. |
 | `IntuneDefaults` | Picks the scope tags for new apps and a test group that receives every new version as Available. |
 | `Email` | Optional email report after each run, through Outlook or SMTP. |
-| `ScheduledTask` | Optional daily scheduled task. |
+| `ScheduledTask` | Optional scheduled task that runs every day, Monday to Friday, or Monday to Thursday. |
 | `Verify` | Runs `Test-YardstickSetup.ps1`. |
 
 Run a single step with `-Step`, for example to renew the client secret:
@@ -282,8 +282,9 @@ See [EmailNotifications.md](EmailNotifications.md) for every setting.
 
 ## Running on a schedule
 
-The `ScheduledTask` step creates the task `\Yardstick\Yardstick`, which runs daily at a
-time you choose:
+The `ScheduledTask` step creates the task `\Yardstick\Yardstick`. It runs every day,
+Monday to Friday, or Monday to Thursday (`-TaskSchedule Daily`, `MondayToFriday` or
+`MondayToThursday`), at a time you choose:
 
 ```
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -File <Yardstick folder>\Yardstick.ps1 -All -NoInteractive
@@ -316,6 +317,13 @@ Things to know:
   setup (see [Administrator rights](#administrator-rights)).
 - If Yardstick is on a network share, the task account needs access to it, and must use
   the UNC path; mapped drive letters are not available to scheduled tasks.
+- If PowerShell came from the Microsoft Store, the task starts it through its app
+  execution alias, `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`. The Store keeps
+  PowerShell in a folder named for its exact version and removes that folder when it
+  updates, so a task that pointed there would stop working. Task Scheduler does not
+  search `PATH`, so a bare `pwsh.exe` does not work either. `.\Test-YardstickSetup.ps1`
+  reports a task whose `pwsh.exe` no longer exists; run the `ScheduledTask` step again to
+  replace it.
 - A run with administrator rights logs a warning. The files it creates belong to the
   Administrators group, and you can't change them afterwards from a normal session
   (see [Troubleshooting](#troubleshooting)).

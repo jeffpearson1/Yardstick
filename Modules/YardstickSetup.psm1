@@ -1370,8 +1370,8 @@ function Invoke-YardstickElevatedAction {
     Types:
       GrantFolderAccess      Path, Sid, Item (see Grant-YardstickFolderAccess)
       DisableOutlookPrompts  (Set-YardstickOutlookObjectModelGuard)
-      RegisterScheduledTask  ProjectRoot, At (HH:mm), Group, UserName, Password
-                             (encrypted with -Key)
+      RegisterScheduledTask  ProjectRoot, At (HH:mm), Schedule, Group, PwshPath,
+                             UserName, Password (encrypted with -Key)
     #>
     [CmdletBinding()]
     param(
@@ -1390,7 +1390,10 @@ function Invoke-YardstickElevatedAction {
         'RegisterScheduledTask' {
             $credential = [pscredential]::new($Action.UserName, (ConvertTo-SecureString -String $Action.Password -Key $Key))
             $at = [datetime]::ParseExact($Action.At, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
-            Register-YardstickScheduledTask -ProjectRoot $Action.ProjectRoot -At $at -Credential $credential -Group $Action.Group | Out-Null
+            $register = @{ ProjectRoot = $Action.ProjectRoot; At = $at; Credential = $credential; Group = $Action.Group }
+            if ($Action.PwshPath) { $register.PwshPath = $Action.PwshPath }
+            if ($Action.Schedule) { $register.Schedule = $Action.Schedule }
+            Register-YardstickScheduledTask @register | Out-Null
         }
         default { throw "Unknown setup action '$($Action.Type)'." }
     }
@@ -1400,6 +1403,34 @@ function Invoke-YardstickElevatedAction {
 
 
 #region Scheduled task
+
+function Get-YardstickPwshPath {
+    <#
+    .SYNOPSIS
+    Returns a path to pwsh.exe that still works after PowerShell updates.
+
+    .DESCRIPTION
+    A Microsoft Store (MSIX) install lives in a folder named for its exact version,
+    such as C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.7.0_x64__8wekyb3d8bbwe,
+    which Windows removes on the next update. Its app execution alias in
+    %LOCALAPPDATA%\Microsoft\WindowsApps stays put and always starts the current
+    version. Task Scheduler does not search PATH, so a bare 'pwsh.exe' does not work.
+
+    An MSI install (C:\Program Files\PowerShell\7) is updated in place, so $PSHOME
+    is already stable.
+    #>
+    param(
+        [string]$PSHomePath = $PSHOME,
+        [string]$LocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
+    )
+
+    $current = Join-Path $PSHomePath 'pwsh.exe'
+    if ($PSHomePath -notmatch '\\WindowsApps\\') { return $current }
+    $alias = Join-Path $LocalAppData 'Microsoft\WindowsApps\pwsh.exe'
+    if (Test-Path -LiteralPath $alias) { return $alias }
+    $current
+}
+
 
 function Get-YardstickScheduledTaskDefinition {
     <#
@@ -1412,7 +1443,7 @@ function Get-YardstickScheduledTaskDefinition {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
         [string]$Group,
-        [string]$PwshPath = (Join-Path $PSHOME 'pwsh.exe')
+        [string]$PwshPath = (Get-YardstickPwshPath)
     )
 
     $script = Join-Path $ProjectRoot 'Yardstick.ps1'
@@ -1428,7 +1459,7 @@ function Get-YardstickScheduledTaskDefinition {
 function Register-YardstickScheduledTask {
     <#
     .SYNOPSIS
-    Registers a daily scheduled task that runs Yardstick unattended.
+    Registers a scheduled task that runs Yardstick unattended.
 
     .DESCRIPTION
     Without -Credential the task runs as the current user, only while they are
@@ -1441,20 +1472,35 @@ function Register-YardstickScheduledTask {
     the Intune credential: Credential Manager entries belong to a single Windows
     user. Outlook cannot be reached from that session, and with Credential Guard
     on, network shares may refuse it (see Test-YardstickCredentialGuard).
+
+    .PARAMETER Schedule
+    Days the task runs at -At: Daily (default), MondayToFriday or MondayToThursday.
+
+    .PARAMETER PwshPath
+    The pwsh.exe the task starts. Defaults to Get-YardstickPwshPath for the current
+    user; pass it when registering from an elevated process that may run as a
+    different account.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
         [Parameter(Mandatory)][datetime]$At,
+        [ValidateSet('Daily', 'MondayToFriday', 'MondayToThursday')]
+        [string]$Schedule = 'Daily',
         [pscredential]$Credential,
         [string]$Group,
+        [string]$PwshPath = (Get-YardstickPwshPath),
         [string]$TaskName = 'Yardstick',
         [string]$TaskPath = '\Yardstick\'
     )
 
-    $definition = Get-YardstickScheduledTaskDefinition -ProjectRoot $ProjectRoot -Group $Group
+    $definition = Get-YardstickScheduledTaskDefinition -ProjectRoot $ProjectRoot -Group $Group -PwshPath $PwshPath
     $action = New-ScheduledTaskAction -Execute $definition.Execute -Argument $definition.Argument -WorkingDirectory $definition.WorkingDirectory
-    $trigger = New-ScheduledTaskTrigger -Daily -At $At
+    $trigger = switch ($Schedule) {
+        'MondayToFriday'   { New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $At }
+        'MondayToThursday' { New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday -At $At }
+        default            { New-ScheduledTaskTrigger -Daily -At $At }
+    }
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit (New-TimeSpan -Hours 12) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $common = @{
@@ -1543,6 +1589,7 @@ Export-ModuleMember -Function @(
     'Grant-YardstickFolderAccess'
     'Invoke-YardstickElevatedSetup'
     'Invoke-YardstickElevatedAction'
+    'Get-YardstickPwshPath'
     'Get-YardstickScheduledTaskDefinition'
     'Register-YardstickScheduledTask'
     'Test-YardstickCredentialGuard'

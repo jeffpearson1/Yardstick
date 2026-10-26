@@ -29,7 +29,7 @@ You need Windows 10/11 (or Windows Server 2019+), [PowerShell 7](https://aka.ms/
    ```powershell
    .\Install-Yardstick.ps1
    ```
-   It installs the `powershell-yaml` module, creates `Local\preferences.yaml` and the working folders, creates the Entra app registration with the Microsoft Graph permissions Yardstick needs (storing its secret in Windows Credential Manager), and optionally sets up email reports and a daily scheduled task. It finishes by running the health check.
+   It installs the `powershell-yaml` module, creates `Local\preferences.yaml` and the working folders, creates the Entra app registration with the Microsoft Graph permissions Yardstick needs (storing its secret in Windows Credential Manager), and optionally sets up email reports and a scheduled task (every day or on weekdays). It finishes by running the health check.
 3. **Package your first app:**
    ```powershell
    .\Yardstick.ps1 -AppId 7zip -NoEmail

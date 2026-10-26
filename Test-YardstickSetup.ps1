@@ -389,6 +389,10 @@ if (-not $task) {
     $whenSignedIn = $task.Principal.LogonType -eq 'Interactive'
     $when = if ($whenSignedIn) { 'only while signed in' } else { 'whether or not signed in' }
     Add-Check 'Scheduled task' OK "Task \Yardstick\Yardstick runs as $runAs, $when ($($task.State))."
+    $execute = if ($action) { ([string]$action.Execute).Trim('"') } else { '' }
+    if ($execute -and -not (Test-Path -LiteralPath $execute)) {
+        Add-Check 'Task program' Fail "The task starts $execute, which no longer exists (PowerShell was probably updated). Run .\Install-Yardstick.ps1 -Step ScheduledTask to replace the task."
+    }
     if ($action -and "$($action.Arguments)" -notlike "*$(Join-Path $ProjectRoot 'Yardstick.ps1')*") {
         Add-Check 'Task target' Warn "The task runs '$($action.Arguments)', which is not this folder's Yardstick.ps1."
     }
