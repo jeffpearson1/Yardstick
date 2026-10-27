@@ -38,6 +38,11 @@ All notable changes to Yardstick are recorded here. Versions follow
     suddenly empty is left alone and the run carries on with the last synced copy.
   - Recipe ids or fields that differ only in case are now reported as malformed rather
     than one silently replacing the other.
+  - **Before upgrading,** check `Local\recipeOverrides.yaml` on every machine that
+    syncs. Every value in it that differs from the shared file is now written to the
+    share (or reported as a conflict), so an old full copy of the shared file would
+    replace newer shared values with out-of-date ones. Delete such a copy, and remove
+    any value that should not reach every machine.
 - A missing `SharedRecipeOverrides` file in a reachable folder is no longer a warning;
   the first sync creates it. A path that is a folder is an error.
 - **Custom schedule days.** The installer's `ScheduledTask` step offers Every day,
