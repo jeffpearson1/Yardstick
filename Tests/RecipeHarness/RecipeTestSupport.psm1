@@ -661,7 +661,41 @@ function Test-RecipeDetectionRule {
     }
 }
 
+function Sync-RecipeHarnessSharedContent {
+    <#
+    .SYNOPSIS
+    Syncs icons and recipe overrides with the shared location, as a Yardstick run
+    does, when syncSharedContent is on in the Yardstick preferences.
+
+    .DESCRIPTION
+    Needs the Yardstick module (Yardstick.psd1) to be imported first. Never
+    throws: an unreachable share, a malformed file or a missing preferences file
+    is a warning, and the harness carries on with what it already has.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $YardstickDevPath)
+
+    try {
+        $preferences = Import-YardstickPreferences -ProjectRoot $YardstickDevPath -AllowMissing
+        if ($preferences.syncSharedContent -ne $true) { return }
+        $messages = Invoke-YardstickSharedContentSync -Preferences $preferences `
+            -LocalOverridesPath (Get-YardstickRecipeOverridesPath -ProjectRoot $YardstickDevPath) `
+            -SharedOverridesCachePath (Get-YardstickSharedRecipeOverridesCachePath -ProjectRoot $YardstickDevPath)
+    } catch {
+        Write-Warning "Shared icons and recipe overrides were not synced: $($_.Exception.Message)"
+        return
+    }
+    foreach ($message in $messages) {
+        switch ($message.Level) {
+            'Warning' { Write-Warning $message.Message }
+            'Info' { Write-Host $message.Message }
+            default { Write-Verbose $message.Message }
+        }
+    }
+}
+
 Export-ModuleMember -Function Test-IsElevated, Expand-RecipeString, Expand-RecipeToken,
 ConvertTo-ComparableVersion, Compare-DetectionValue, Get-InstalledPackage,
 Get-SystemSnapshot, Compare-SystemSnapshot, Invoke-TestProcess, Invoke-CommandLine,
-Invoke-DetectionScript, Get-RegistryValueForDetection, Test-RecipeDetection
+Invoke-DetectionScript, Get-RegistryValueForDetection, Test-RecipeDetection,
+Sync-RecipeHarnessSharedContent

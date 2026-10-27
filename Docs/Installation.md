@@ -60,11 +60,11 @@ to change.
 | Step | What it does |
 |---|---|
 | `Prerequisites` | Installs `powershell-yaml`, offers the optional modules, unblocks files from a zip download, checks that you can change every file in the Yardstick folder, checks the execution policy and downloads the Microsoft Win32 Content Prep Tool (`IntuneWinAppUtil.exe`). |
-| `Preferences` | Creates `Local\preferences.yaml` from `Config\Preferences.example.yaml`, creates the working folders, and asks for the app owner, the minimum Windows version and the optional Backup and SoftwareDropbox folders. |
+| `Preferences` | Creates `Local\preferences.yaml` from `Config\Preferences.example.yaml`, creates the working folders, and asks whether this is a [development-only](#development-only-instances) computer, for the app owner, the minimum Windows version, the [shared icon and recipe override](WritingRecipes.md#shared-overrides) locations and the optional Backup and SoftwareDropbox folders. Paths can be pasted with or without quotes, as Explorer's *Copy as path* adds them. |
 | `AppRegistration` | Creates an Entra app registration called Yardstick, grants it the [Graph permissions](#microsoft-graph-permissions), creates a client secret and stores it in Windows Credential Manager. Or stores the details of an app you already have. |
 | `IntuneDefaults` | Picks the scope tags for new apps and a test group that receives every new version as Available. |
 | `Email` | Optional email report after each run, through Outlook or SMTP. |
-| `ScheduledTask` | Optional scheduled task that runs every day, Monday to Friday, or Monday to Thursday. |
+| `ScheduledTask` | Optional scheduled task that runs every day, weekdays, or on a custom schedule. |
 | `Verify` | Runs `Test-YardstickSetup.ps1`. |
 
 Run a single step with `-Step`, for example to renew the client secret:
@@ -116,6 +116,27 @@ $secret = Read-Host -AsSecureString 'Client secret'
 
 Creating a new app registration always needs an interactive sign-in, so scripted
 installs use `-UseExistingApp`.
+
+### Development-only instances
+
+A development-only instance is for writing and testing recipes with the
+[recipe harness](../Tests/RecipeHarness/README.md). It never signs in to Intune or
+Microsoft Graph, so it needs no app registration, and the installer skips the
+`AppRegistration`, `IntuneDefaults`, `Email` and `ScheduledTask` steps. It can still
+sync the [shared icons and recipe overrides](WritingRecipes.md#shared-overrides), so
+an icon or override worked out while developing a recipe reaches every machine.
+
+Answer yes to *Is this a development-only computer?* in the `Preferences` step, or:
+
+```powershell
+.\Install-Yardstick.ps1 -DevelopmentOnly -SharedIcons \\server\share\Intune\Icons `
+    -SharedRecipeOverrides \\server\share\Intune\Yardstick\recipeOverrides.yaml
+```
+
+This sets `developmentOnly: true` in `Local\preferences.yaml`. `Yardstick.ps1` refuses
+to run on such a computer, and `Test-YardstickSetup.ps1` skips its Intune, email and
+scheduled task checks. To turn it into a full instance later, run
+`.\Install-Yardstick.ps1 -DevelopmentOnly:$false`.
 
 
 ## Microsoft Graph permissions
@@ -254,8 +275,10 @@ change. The example file lists them all with explanations. In particular:
   package. Leave it blank to turn this off.
 - **`syncSharedContent`** keeps several Yardstick machines on one set of icons and
   recipe overrides. Set it to `true` and point `SharedIcons` and
-  `SharedRecipeOverrides` at the shared copies; each run pulls them before it reads
-  any recipe. See [Shared overrides](WritingRecipes.md#shared-overrides).
+  `SharedRecipeOverrides` at the shared copies (the installer asks for them); each run,
+  and each recipe harness script, syncs them in both directions before it reads any
+  recipe. See [Shared overrides](WritingRecipes.md#shared-overrides).
+- **`developmentOnly`** marks a [development-only instance](#development-only-instances).
 
 Yardstick checks the file when it starts and reports invalid values - for example an
 unknown `emailDeliveryMethod`, a group name where an ID is expected, or a leftover
@@ -282,9 +305,14 @@ See [EmailNotifications.md](EmailNotifications.md) for every setting.
 
 ## Running on a schedule
 
-The `ScheduledTask` step creates the task `\Yardstick\Yardstick`. It runs every day,
-Monday to Friday, or Monday to Thursday (`-TaskSchedule Daily`, `MondayToFriday` or
-`MondayToThursday`), at a time you choose:
+The `ScheduledTask` step creates the task `\Yardstick\Yardstick`. It runs at a time you
+choose, on one of:
+
+- **Every day** (`-TaskSchedule Daily`, the default).
+- **Weekdays**, Monday to Friday (`-TaskSchedule Weekdays`).
+- **Custom**: the days you pick (`-TaskSchedule Custom -TaskDays Monday, Wednesday, Friday`).
+
+The task runs this command:
 
 ```
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -File <Yardstick folder>\Yardstick.ps1 -All -NoInteractive

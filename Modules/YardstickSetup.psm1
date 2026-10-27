@@ -76,26 +76,34 @@ function Read-YardstickSetupValue {
     <#
     .SYNOPSIS
     Prompts for a value, offering a default that Enter accepts.
+
+    .PARAMETER Path
+    The value is a file or folder path: quotes around it, as Explorer's
+    "Copy as path" adds, are removed.
     #>
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Default,
-        [switch]$Required
+        [switch]$Required,
+        [switch]$Path
     )
 
     if ($Script:NonInteractive) {
         if ($Required -and [string]::IsNullOrWhiteSpace($Default)) {
             throw "A value for '$Prompt' is required. Pass it as a parameter when using -NonInteractive."
         }
+        if ($Path) { return ConvertFrom-YardstickQuotedPath $Default }
         return $Default
     }
 
     $label = if ([string]::IsNullOrWhiteSpace($Default)) { $Prompt } else { "$Prompt [$Default]" }
     while ($true) {
         $answer = Read-Host $label
+        if ($Path) { $answer = ConvertFrom-YardstickQuotedPath $answer }
         if ([string]::IsNullOrWhiteSpace($answer)) { $answer = $Default }
         if (-not $Required -or -not [string]::IsNullOrWhiteSpace($answer)) {
             if ($null -eq $answer) { return '' }
+            if ($Path) { return ConvertFrom-YardstickQuotedPath $answer }
             return $answer.Trim()
         }
         Write-Host '  A value is required.' -ForegroundColor Yellow
@@ -1370,7 +1378,7 @@ function Invoke-YardstickElevatedAction {
     Types:
       GrantFolderAccess      Path, Sid, Item (see Grant-YardstickFolderAccess)
       DisableOutlookPrompts  (Set-YardstickOutlookObjectModelGuard)
-      RegisterScheduledTask  ProjectRoot, At (HH:mm), Schedule, Group, PwshPath,
+      RegisterScheduledTask  ProjectRoot, At (HH:mm), DaysOfWeek, Group, PwshPath,
                              UserName, Password (encrypted with -Key)
     #>
     [CmdletBinding()]
@@ -1392,7 +1400,7 @@ function Invoke-YardstickElevatedAction {
             $at = [datetime]::ParseExact($Action.At, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
             $register = @{ ProjectRoot = $Action.ProjectRoot; At = $at; Credential = $credential; Group = $Action.Group }
             if ($Action.PwshPath) { $register.PwshPath = $Action.PwshPath }
-            if ($Action.Schedule) { $register.Schedule = $Action.Schedule }
+            if ($Action.DaysOfWeek) { $register.DaysOfWeek = [DayOfWeek[]]@($Action.DaysOfWeek) }
             Register-YardstickScheduledTask @register | Out-Null
         }
         default { throw "Unknown setup action '$($Action.Type)'." }
@@ -1473,8 +1481,8 @@ function Register-YardstickScheduledTask {
     user. Outlook cannot be reached from that session, and with Credential Guard
     on, network shares may refuse it (see Test-YardstickCredentialGuard).
 
-    .PARAMETER Schedule
-    Days the task runs at -At: Daily (default), MondayToFriday or MondayToThursday.
+    .PARAMETER DaysOfWeek
+    Days the task runs at -At. Without it, or with all seven, the task runs every day.
 
     .PARAMETER PwshPath
     The pwsh.exe the task starts. Defaults to Get-YardstickPwshPath for the current
@@ -1485,8 +1493,7 @@ function Register-YardstickScheduledTask {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
         [Parameter(Mandatory)][datetime]$At,
-        [ValidateSet('Daily', 'MondayToFriday', 'MondayToThursday')]
-        [string]$Schedule = 'Daily',
+        [DayOfWeek[]]$DaysOfWeek,
         [pscredential]$Credential,
         [string]$Group,
         [string]$PwshPath = (Get-YardstickPwshPath),
@@ -1496,10 +1503,11 @@ function Register-YardstickScheduledTask {
 
     $definition = Get-YardstickScheduledTaskDefinition -ProjectRoot $ProjectRoot -Group $Group -PwshPath $PwshPath
     $action = New-ScheduledTaskAction -Execute $definition.Execute -Argument $definition.Argument -WorkingDirectory $definition.WorkingDirectory
-    $trigger = switch ($Schedule) {
-        'MondayToFriday'   { New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $At }
-        'MondayToThursday' { New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday -At $At }
-        default            { New-ScheduledTaskTrigger -Daily -At $At }
+    $days = @($DaysOfWeek | Select-Object -Unique)
+    $trigger = if ($days.Count -eq 0 -or $days.Count -eq 7) {
+        New-ScheduledTaskTrigger -Daily -At $At
+    } else {
+        New-ScheduledTaskTrigger -Weekly -DaysOfWeek $days -At $At
     }
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit (New-TimeSpan -Hours 12) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

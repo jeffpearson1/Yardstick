@@ -11,7 +11,11 @@ param(
 
     [string] $RecipesPath,
 
-    [string] $IconsPath
+    [string] $IconsPath,
+
+    # Skip the shared icon and recipe override sync. The other harness scripts
+    # pass this because they have already synced.
+    [switch] $NoSync
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +42,8 @@ if (-not (Test-Path -LiteralPath $yardstickModule -PathType Leaf)) {
 
 Import-Module powershell-yaml -MinimumVersion 0.4.12 -ErrorAction Stop
 Import-Module $yardstickModule -Force -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot 'RecipeTestSupport.psm1') -Force -ErrorAction Stop
+if (-not $NoSync) { Sync-RecipeHarnessSharedContent -YardstickDevPath $YardstickDevPath }
 
 if ($PSCmdlet.ParameterSetName -eq 'ById') {
     $RecipePath = Join-Path $workspaceRecipes "$Id.yaml"

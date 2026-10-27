@@ -139,6 +139,10 @@ Import-Module powershell-yaml -MinimumVersion 0.4.12 -ErrorAction Stop
 Import-Module (Join-Path $YardstickDevPath 'Yardstick.psd1') -Force -ErrorAction Stop
 Import-Module BitsTransfer -ErrorAction Stop
 
+# Bring in the team's icons and recipe overrides, and share ours. The elevated
+# child skips this: its parent has just done it.
+if (-not $ElevatedChild) { Sync-RecipeHarnessSharedContent -YardstickDevPath $YardstickDevPath }
+
 # Manual-download recipes use the same SoftwareDropbox setting as production
 # Yardstick. The harness only reads and copies staged media; it never invokes
 # Complete-YardstickDropbox or changes the source folder.
@@ -395,7 +399,7 @@ function Test-Recipe {
         # -- Phase: Schema ---------------------------------------------------
         $sw = [Diagnostics.Stopwatch]::StartNew()
         try {
-            & $schemaScript -RecipePath $Path -YardstickDevPath $YardstickDevPath -RecipesPath $workspaceRecipes -IconsPath $workspaceIcons | Out-Null
+            & $schemaScript -RecipePath $Path -YardstickDevPath $YardstickDevPath -RecipesPath $workspaceRecipes -IconsPath $workspaceIcons -NoSync | Out-Null
             $phases.Add((New-PhaseResult -Name 'Schema' -Status 'Pass' -DurationSec $sw.Elapsed.TotalSeconds))
         } catch {
             $phases.Add((New-PhaseResult -Name 'Schema' -Status 'Fail' -Detail "$_" -DurationSec $sw.Elapsed.TotalSeconds))

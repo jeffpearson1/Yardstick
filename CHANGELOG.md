@@ -3,6 +3,60 @@
 All notable changes to Yardstick are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Development-only instances.** `.\Install-Yardstick.ps1 -DevelopmentOnly` (or
+  answering yes to *Is this a development-only computer?*) sets `developmentOnly: true`
+  and sets up a computer for writing and testing recipes with the recipe harness. It
+  never signs in to Intune or Graph: the installer skips the `AppRegistration`,
+  `IntuneDefaults`, `Email` and `ScheduledTask` steps, `Test-YardstickSetup.ps1` skips
+  the matching checks, and `Yardstick.ps1` refuses to run. It can still sync the shared
+  icons and recipe overrides.
+- **Shared folders in the installer.** The `Preferences` step asks whether to sync
+  icons and recipe overrides with a shared folder, and for both locations
+  (`-SharedIcons`, `-SharedRecipeOverrides`; a folder means the
+  `recipeOverrides.yaml` in it).
+
+### Changed
+
+- **Shared icons and recipe overrides sync in both directions.** Icons and override
+  fields added or changed on this machine are now written to the share, as well as
+  taken from it, and the recipe harness scripts (`Invoke-RecipeLab.ps1`,
+  `Test-RecipeSchema.ps1`, `Invoke-RecipeInstallTest.ps1`) sync too.
+  - Icons: the newer copy wins; each icon is checked to be a complete PNG or JPEG
+    before it is copied; nothing is deleted.
+  - Overrides: merged field by field against the value at the last sync (kept in
+    `Local\recipeOverrides.shared.sync.json`). A field changed on both sides is
+    reported as a conflict and the local value applies; a local deletion is never
+    pushed. Entries are added to the shared file in place, keeping its comments and
+    order.
+  - Nothing is written unless both files parse, every write is read back, and the
+    shared file is changed under a lock, only if no one else changed it meanwhile,
+    keeping `recipeOverrides.yaml.bak`. A share that is unreachable, malformed, or
+    suddenly empty is left alone and the run carries on with the last synced copy.
+  - Recipe ids or fields that differ only in case are now reported as malformed rather
+    than one silently replacing the other.
+  - **Before upgrading,** check `Local\recipeOverrides.yaml` on every machine that
+    syncs. Every value in it that differs from the shared file is now written to the
+    share (or reported as a conflict), so an old full copy of the shared file would
+    replace newer shared values with out-of-date ones. Delete such a copy, and remove
+    any value that should not reach every machine.
+- A missing `SharedRecipeOverrides` file in a reachable folder is no longer a warning;
+  the first sync creates it. A path that is a folder is an error.
+- **Custom schedule days.** The installer's `ScheduledTask` step offers Every day,
+  Weekdays (Monday to Friday) or Custom, which asks which days to run
+  (`-TaskSchedule Daily|Weekdays|Custom`, `-TaskDays`). `-TaskSchedule MondayToFriday`
+  and `MondayToThursday` from 1.1.0 still work. `Register-YardstickScheduledTask` takes
+  `-DaysOfWeek` instead of `-Schedule`.
+
+### Fixed
+
+- The installer accepts paths in quotes, as Explorer's *Copy as path* produces, for
+  every folder and file it asks for, and preferences paths written in quotes resolve
+  correctly.
+
 ## [1.1.0] - 2026-10-26
 
 ### Added
@@ -108,5 +162,6 @@ The first versioned release. Earlier builds were unversioned (the module manifes
   that set them. Use `defaultDeploymentGroups` for available assignments; add required
   assignments in Intune.
 
+[Unreleased]: https://github.com/jeffpearson1/Yardstick/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.1.0
 [1.0.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.0.0

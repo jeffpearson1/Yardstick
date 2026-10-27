@@ -29,7 +29,7 @@ You need Windows 10/11 (or Windows Server 2019+), [PowerShell 7](https://aka.ms/
    ```powershell
    .\Install-Yardstick.ps1
    ```
-   It installs the `powershell-yaml` module, creates `Local\preferences.yaml` and the working folders, creates the Entra app registration with the Microsoft Graph permissions Yardstick needs (storing its secret in Windows Credential Manager), and optionally sets up email reports and a scheduled task (every day or on weekdays). It finishes by running the health check.
+   It installs the `powershell-yaml` module, creates `Local\preferences.yaml` and the working folders, creates the Entra app registration with the Microsoft Graph permissions Yardstick needs (storing its secret in Windows Credential Manager), and optionally sets up email reports and a scheduled task (every day, on weekdays, or on days you choose). It finishes by running the health check.
 3. **Package your first app:**
    ```powershell
    .\Yardstick.ps1 -AppId 7zip -NoEmail
@@ -60,6 +60,8 @@ Settings live in `Local\preferences.yaml`, which is excluded from Git. Every set
 * `SoftwareDropbox` and `SoftwareArchive` support recipes for vendors whose installer cannot be downloaded automatically. See [SoftwareDropbox.md](Docs/SoftwareDropbox.md).
 * Setting the optional `Backup` folder keeps a copy of every `.intunewin` file Yardstick uploads, so a bad release can be traced back to the exact package that shipped.
 * Site-specific recipe values, such as scope tags, go in `Local\recipeOverrides.yaml` rather than in the recipes, so the recipes can be shared and updated with `git pull`. See [Site-Specific Overrides](Docs/WritingRecipes.md#site-specific-overrides).
+* Several machines can share one icon folder and one overrides file: with `syncSharedContent: true`, every run and every recipe harness script syncs them in both directions, checking each file so a bad copy never interrupts a run. See [Shared overrides](Docs/WritingRecipes.md#shared-overrides).
+* A development-only computer (`.\Install-Yardstick.ps1 -DevelopmentOnly`) writes and tests recipes with the [recipe harness](Tests/RecipeHarness/README.md) and never connects to Intune. See [Development-only instances](Docs/Installation.md#development-only-instances).
 
 ### Icons
 

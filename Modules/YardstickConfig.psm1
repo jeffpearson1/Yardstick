@@ -128,6 +128,7 @@ function Get-YardstickDefaultPreferences {
         bitsStallTimeoutMinutes                     = 15
 
         syncSharedContent                           = $false
+        developmentOnly                             = $false
 
         emailNotificationEnabled                    = $false
         emailDeliveryMethod                         = 'outlook'
@@ -157,18 +158,39 @@ function Test-YardstickBlankValue {
 }
 
 
+function ConvertFrom-YardstickQuotedPath {
+    <#
+    .SYNOPSIS
+    Trims a path and removes one pair of quotes around it, as Explorer's
+    "Copy as path" adds.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Path)
+
+    if ($null -eq $Path) { return '' }
+    $value = $Path.Trim()
+    if ($value.Length -ge 2) {
+        $first = $value[0]
+        if (($first -eq [char]'"' -or $first -eq [char]"'") -and $value[-1] -eq $first) {
+            $value = $value.Substring(1, $value.Length - 2).Trim()
+        }
+    }
+    $value
+}
+
+
 function Resolve-YardstickPreferencePath {
     <#
     .SYNOPSIS
     Expands environment variables in a folder preference and anchors a relative
-    path to the Yardstick root. Absolute and UNC paths pass through unchanged.
+    path to the Yardstick root. Absolute and UNC paths pass through unchanged, and
+    quotes around the path are dropped.
     #>
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$ProjectRoot
     )
 
-    $expanded = [Environment]::ExpandEnvironmentVariables($Path.Trim())
+    $expanded = [Environment]::ExpandEnvironmentVariables((ConvertFrom-YardstickQuotedPath $Path))
     if ($expanded -match '<REPLACE_') {
         # Leave template placeholders untouched so validation can name them.
         return $expanded
@@ -431,9 +453,16 @@ function Test-YardstickPreferences {
             $warnings.Add("syncSharedContent is on but neither 'SharedIcons' nor 'SharedRecipeOverrides' is set, so there is nothing to sync.")
         }
         $sharedOverrides = [string]$Preferences.SharedRecipeOverrides
-        if (-not [string]::IsNullOrWhiteSpace($sharedOverrides) -and $sharedOverrides -notmatch '<REPLACE_' -and
-            -not (Test-Path -LiteralPath $sharedOverrides -PathType Leaf)) {
-            $warnings.Add("The SharedRecipeOverrides file '$sharedOverrides' is not reachable. Runs will use the last synced copy, if there is one.")
+        if (-not [string]::IsNullOrWhiteSpace($sharedOverrides) -and $sharedOverrides -notmatch '<REPLACE_') {
+            if (Test-Path -LiteralPath $sharedOverrides -PathType Container) {
+                $errors.Add("SharedRecipeOverrides '$sharedOverrides' is a folder. Point it at a file in that folder, such as $(Join-Path $sharedOverrides 'recipeOverrides.yaml').")
+            } elseif (-not (Test-Path -LiteralPath $sharedOverrides -PathType Leaf)) {
+                # A missing file in a reachable folder is created by the first sync.
+                $parent = Split-Path -Parent $sharedOverrides
+                if (-not $parent -or ($problem = Get-YardstickFolderProblem -Path $parent)) {
+                    $warnings.Add("The SharedRecipeOverrides file '$sharedOverrides' is not reachable. Runs will use the last synced copy, if there is one.")
+                }
+            }
         }
     }
 
@@ -451,6 +480,8 @@ Export-ModuleMember -Function @(
     'Initialize-YardstickFolders',
     'Test-YardstickPreferences',
     'Get-YardstickPreferenceAllowedValues',
+    'ConvertFrom-YardstickQuotedPath',
+    'Resolve-YardstickPreferencePath',
     'Get-YardstickProjectLayout',
     'Get-YardstickPreferencesPath',
     'Get-YardstickRecipeOverridesPath',

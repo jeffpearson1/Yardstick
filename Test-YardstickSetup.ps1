@@ -20,6 +20,9 @@ Nothing is changed, except that a scratch file is written to (and removed from)
 each working folder to prove it is writable. Run it after Install-Yardstick.ps1,
 after changing preferences, or before a scheduled run as a pre-flight check.
 
+On a development-only instance (developmentOnly: true), the Intune, email and
+scheduled task checks are skipped.
+
 The Intune credential is stored per Windows user, so run this as the account
 that runs Yardstick (for example the scheduled task's account).
 
@@ -58,6 +61,7 @@ if (-not $Global:LogLocation) { $Global:LogLocation = $ProjectRoot }
 if (-not $Global:LogFile) { $Global:LogFile = 'YSetupCheck.log' }
 
 $results = [System.Collections.Generic.List[object]]::new()
+$developmentOnly = $false
 
 function Add-Check {
     param(
@@ -148,6 +152,10 @@ if ($havePreferences) {
     try {
         $prefs = Import-YardstickPreferences -ProjectRoot $ProjectRoot
         Add-Check 'Preferences file' OK "Preferences: $prefsPath"
+        $developmentOnly = $prefs.developmentOnly -eq $true
+        if ($developmentOnly) {
+            Add-Check 'Instance' Info 'Development-only instance (developmentOnly: true): for the recipe harness, never connects to Intune.'
+        }
     } catch {
         $havePreferences = $false
         Add-Check 'Preferences file' Fail "Could not read '$prefsPath': $($_.Exception.Message)"
@@ -161,7 +169,7 @@ if ($havePreferences) {
     foreach ($message in $check.Errors) { Add-Check 'Preferences' Fail $message }
     foreach ($message in $check.Warnings) { Add-Check 'Preferences' Warn $message }
     if (-not $check.Errors -and -not $check.Warnings) { Add-Check 'Preferences' OK 'All preferences are valid.' }
-    if ([string]::IsNullOrWhiteSpace([string]$prefs.defaultOwner)) {
+    if (-not $developmentOnly -and [string]::IsNullOrWhiteSpace([string]$prefs.defaultOwner)) {
         Add-Check 'Owner' Warn "defaultOwner is not set, so apps are uploaded without an owner. Run .\Install-Yardstick.ps1 -Step Preferences."
     }
 }
@@ -210,7 +218,7 @@ if ($prefs.syncSharedContent -eq $true) {
     } elseif ($sharedCache) {
         Add-Check 'Shared sync' OK "Shared sync is on. Overrides from $($prefs.SharedRecipeOverrides) were last synced $($sharedCache.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))."
     } else {
-        Add-Check 'Shared sync' Warn "Shared sync is on, but overrides from $($prefs.SharedRecipeOverrides) have not been synced yet. The next run syncs them."
+        Add-Check 'Shared sync' Warn "Shared sync is on, but overrides from $($prefs.SharedRecipeOverrides) have not been synced yet. The next run, or recipe harness script, syncs them."
     }
 } else {
     Add-Check 'Shared sync' OK 'Shared sync is off (optional: syncSharedContent).'
@@ -259,63 +267,67 @@ try {
 #region Intune credential and Graph permissions
 
 Start-Area 'Intune connection'
-$target = Get-YardstickCredentialTarget -Preferences $prefs
-$credential = $null
-try {
-    $credential = Get-YardstickIntuneCredential -Target $target
-} catch {
-    Add-Check 'Credential' Fail "Could not read the Intune credential '$target': $($_.Exception.Message)"
-}
-
-if (-not $credential) {
-    if (-not ($results | Where-Object Check -eq 'Credential')) {
-        Add-Check 'Credential' Fail "No Intune credential '$target' is stored for $env:USERNAME. Run .\Install-Yardstick.ps1 -Step AppRegistration as this user."
-    }
+if ($developmentOnly) {
+    Add-Check 'Intune' Skip 'Development-only instance: Yardstick does not connect to Intune on this computer.'
 } else {
-    Add-Check 'Credential' OK "Credential '$target' (app $($credential.ClientID), tenant $($credential.TenantID))"
-
-    $expiry = Test-YardstickSecretExpiration -Credential $credential -Preferences $prefs -NoEmail
-    if (-not $expiry.ExpiresOn) {
-        Add-Check 'Secret expiry' Warn "The client secret's expiry date is not known, so Yardstick cannot warn before it expires. Run .\Set-YardstickCredential.ps1 to record it."
-    } elseif ($expiry.IsExpired) {
-        Add-Check 'Secret expiry' Fail "The client secret expired on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')). Run .\Install-Yardstick.ps1 -Step AppRegistration to create a new one."
-    } elseif ($expiry.IsExpiring) {
-        Add-Check 'Secret expiry' Warn "The client secret expires in $($expiry.DaysRemaining) day(s), on $($expiry.ExpiresOn.ToString('yyyy-MM-dd'))."
-    } else {
-        Add-Check 'Secret expiry' OK "The client secret expires on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')) ($($expiry.DaysRemaining) days)."
+    $target = Get-YardstickCredentialTarget -Preferences $prefs
+    $credential = $null
+    try {
+        $credential = Get-YardstickIntuneCredential -Target $target
+    } catch {
+        Add-Check 'Credential' Fail "Could not read the Intune credential '$target': $($_.Exception.Message)"
     }
 
-    if ($Offline) {
-        Add-Check 'Graph' Skip 'Graph sign-in skipped (-Offline).'
+    if (-not $credential) {
+        if (-not ($results | Where-Object Check -eq 'Credential')) {
+            Add-Check 'Credential' Fail "No Intune credential '$target' is stored for $env:USERNAME. Run .\Install-Yardstick.ps1 -Step AppRegistration as this user."
+        }
     } else {
-        $roles = $null
-        try {
-            $roles = @(Get-YardstickAppTokenRoles -TenantId $credential.TenantID -ClientId $credential.ClientID -ClientSecret $credential.ClientSecret)
-            Add-Check 'Graph sign-in' OK 'Signed in to Microsoft Graph with the stored credential.'
-        } catch {
-            Add-Check 'Graph sign-in' Fail "Could not sign in to Microsoft Graph: $($_.Exception.Message)"
+        Add-Check 'Credential' OK "Credential '$target' (app $($credential.ClientID), tenant $($credential.TenantID))"
+
+        $expiry = Test-YardstickSecretExpiration -Credential $credential -Preferences $prefs -NoEmail
+        if (-not $expiry.ExpiresOn) {
+            Add-Check 'Secret expiry' Warn "The client secret's expiry date is not known, so Yardstick cannot warn before it expires. Run .\Set-YardstickCredential.ps1 to record it."
+        } elseif ($expiry.IsExpired) {
+            Add-Check 'Secret expiry' Fail "The client secret expired on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')). Run .\Install-Yardstick.ps1 -Step AppRegistration to create a new one."
+        } elseif ($expiry.IsExpiring) {
+            Add-Check 'Secret expiry' Warn "The client secret expires in $($expiry.DaysRemaining) day(s), on $($expiry.ExpiresOn.ToString('yyyy-MM-dd'))."
+        } else {
+            Add-Check 'Secret expiry' OK "The client secret expires on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')) ($($expiry.DaysRemaining) days)."
         }
 
-        if ($null -ne $roles) {
-            # The token's roles claim lists the permissions that have admin consent,
-            # so this needs no extra Graph permission to check.
-            foreach ($permission in Get-YardstickRequiredGraphPermissions) {
-                if (Test-YardstickGraphRoleGranted -Roles $roles -Name $permission.Name) {
-                    Add-Check $permission.Name OK "$($permission.Name) is granted."
-                } elseif ($permission.Required) {
-                    Add-Check $permission.Name Fail "$($permission.Name) is not granted ($($permission.Reason)). Grant it with admin consent on the app registration."
-                } else {
-                    Add-Check $permission.Name Info "$($permission.Name) is not granted (optional: $($permission.Reason))."
-                }
+        if ($Offline) {
+            Add-Check 'Graph' Skip 'Graph sign-in skipped (-Offline).'
+        } else {
+            $roles = $null
+            try {
+                $roles = @(Get-YardstickAppTokenRoles -TenantId $credential.TenantID -ClientId $credential.ClientID -ClientSecret $credential.ClientSecret)
+                Add-Check 'Graph sign-in' OK 'Signed in to Microsoft Graph with the stored credential.'
+            } catch {
+                Add-Check 'Graph sign-in' Fail "Could not sign in to Microsoft Graph: $($_.Exception.Message)"
             }
 
-            if ($roles -contains 'DeviceManagementApps.ReadWrite.All') {
-                try {
-                    Invoke-RestMethod -Method Get -Uri 'https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=1&$select=id' `
-                        -Headers @{ Authorization = $Global:AuthenticationHeader.Authorization } -TimeoutSec 60 | Out-Null
-                    Add-Check 'Intune' OK 'Intune apps can be read.'
-                } catch {
-                    Add-Check 'Intune' Fail "Reading Intune apps failed: $((Get-YardstickSetupGraphError $_).Message)"
+            if ($null -ne $roles) {
+                # The token's roles claim lists the permissions that have admin consent,
+                # so this needs no extra Graph permission to check.
+                foreach ($permission in Get-YardstickRequiredGraphPermissions) {
+                    if (Test-YardstickGraphRoleGranted -Roles $roles -Name $permission.Name) {
+                        Add-Check $permission.Name OK "$($permission.Name) is granted."
+                    } elseif ($permission.Required) {
+                        Add-Check $permission.Name Fail "$($permission.Name) is not granted ($($permission.Reason)). Grant it with admin consent on the app registration."
+                    } else {
+                        Add-Check $permission.Name Info "$($permission.Name) is not granted (optional: $($permission.Reason))."
+                    }
+                }
+
+                if ($roles -contains 'DeviceManagementApps.ReadWrite.All') {
+                    try {
+                        Invoke-RestMethod -Method Get -Uri 'https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=1&$select=id' `
+                            -Headers @{ Authorization = $Global:AuthenticationHeader.Authorization } -TimeoutSec 60 | Out-Null
+                        Add-Check 'Intune' OK 'Intune apps can be read.'
+                    } catch {
+                        Add-Check 'Intune' Fail "Reading Intune apps failed: $((Get-YardstickSetupGraphError $_).Message)"
+                    }
                 }
             }
         }
@@ -346,30 +358,34 @@ if (Test-Path -LiteralPath $toolPath -PathType Leaf) {
 #region Email
 
 Start-Area 'Email'
-if ($prefs.emailNotificationEnabled -ne $true) {
-    Add-Check 'Email' Info 'Email reports are turned off. Run .\Install-Yardstick.ps1 -Step Email to set them up.'
+if ($developmentOnly) {
+    Add-Check 'Email' Skip 'Development-only instance: no email reports are sent from this computer.'
 } else {
-    $method = Get-YardstickEmailDeliveryMethod -Preferences $prefs
-    $recipients = @(@($prefs.emailRecipient) + @($prefs.adminEmailRecipient) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
-    $to = if ($recipients.Count -gt 3) { "$(($recipients | Select-Object -First 3) -join '; ') and $($recipients.Count - 3) more" } else { $recipients -join '; ' }
-    Add-Check 'Email' OK "Email reports are sent by $method to $to."
-    if ($method -eq 'smtp') {
-        $smtpTarget = Get-YardstickSmtpCredentialTarget -Preferences $prefs
-        if (Get-YardstickSmtpCredential -Target $smtpTarget) {
-            Add-Check 'SMTP credential' OK "SMTP sign-in '$smtpTarget' is stored."
-        } else {
-            Add-Check 'SMTP credential' Info "No SMTP sign-in is stored, so mail is relayed anonymously through $($prefs.smtpServer)."
-        }
+    if ($prefs.emailNotificationEnabled -ne $true) {
+        Add-Check 'Email' Info 'Email reports are turned off. Run .\Install-Yardstick.ps1 -Step Email to set them up.'
     } else {
-        if (Test-OutlookAvailability) {
-            Add-Check 'Outlook' OK 'Outlook is available.'
-            if (Test-YardstickOutlookPromptExpected) {
-                Add-Check 'Outlook prompts' Warn 'Outlook will ask you to approve every email Yardstick sends. Run .\Install-Yardstick.ps1 -Step Email to turn the prompts off.'
+        $method = Get-YardstickEmailDeliveryMethod -Preferences $prefs
+        $recipients = @(@($prefs.emailRecipient) + @($prefs.adminEmailRecipient) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+        $to = if ($recipients.Count -gt 3) { "$(($recipients | Select-Object -First 3) -join '; ') and $($recipients.Count - 3) more" } else { $recipients -join '; ' }
+        Add-Check 'Email' OK "Email reports are sent by $method to $to."
+        if ($method -eq 'smtp') {
+            $smtpTarget = Get-YardstickSmtpCredentialTarget -Preferences $prefs
+            if (Get-YardstickSmtpCredential -Target $smtpTarget) {
+                Add-Check 'SMTP credential' OK "SMTP sign-in '$smtpTarget' is stored."
             } else {
-                Add-Check 'Outlook prompts' OK 'Outlook sends without asking for approval.'
+                Add-Check 'SMTP credential' Info "No SMTP sign-in is stored, so mail is relayed anonymously through $($prefs.smtpServer)."
             }
         } else {
-            Add-Check 'Outlook' Fail 'Email is set to use Outlook, but Outlook is not available. Install Outlook or switch to SMTP with .\Install-Yardstick.ps1 -Step Email.'
+            if (Test-OutlookAvailability) {
+                Add-Check 'Outlook' OK 'Outlook is available.'
+                if (Test-YardstickOutlookPromptExpected) {
+                    Add-Check 'Outlook prompts' Warn 'Outlook will ask you to approve every email Yardstick sends. Run .\Install-Yardstick.ps1 -Step Email to turn the prompts off.'
+                } else {
+                    Add-Check 'Outlook prompts' OK 'Outlook sends without asking for approval.'
+                }
+            } else {
+                Add-Check 'Outlook' Fail 'Email is set to use Outlook, but Outlook is not available. Install Outlook or switch to SMTP with .\Install-Yardstick.ps1 -Step Email.'
+            }
         }
     }
 }
@@ -380,42 +396,46 @@ if ($prefs.emailNotificationEnabled -ne $true) {
 #region Scheduled task
 
 Start-Area 'Scheduled task'
-$task = Get-ScheduledTask -TaskPath '\Yardstick\' -TaskName 'Yardstick' -ErrorAction SilentlyContinue
-if (-not $task) {
-    Add-Check 'Scheduled task' Info 'No scheduled task. Run .\Install-Yardstick.ps1 -Step ScheduledTask to run Yardstick daily.'
+if ($developmentOnly) {
+    Add-Check 'Scheduled task' Skip 'Development-only instance: Yardstick does not run on a schedule here.'
 } else {
-    $action = @($task.Actions)[0]
-    $runAs = [string]$task.Principal.UserId
-    $whenSignedIn = $task.Principal.LogonType -eq 'Interactive'
-    $when = if ($whenSignedIn) { 'only while signed in' } else { 'whether or not signed in' }
-    Add-Check 'Scheduled task' OK "Task \Yardstick\Yardstick runs as $runAs, $when ($($task.State))."
-    $execute = if ($action) { ([string]$action.Execute).Trim('"') } else { '' }
-    if ($execute -and -not (Test-Path -LiteralPath $execute)) {
-        Add-Check 'Task program' Fail "The task starts $execute, which no longer exists (PowerShell was probably updated). Run .\Install-Yardstick.ps1 -Step ScheduledTask to replace the task."
-    }
-    if ($action -and "$($action.Arguments)" -notlike "*$(Join-Path $ProjectRoot 'Yardstick.ps1')*") {
-        Add-Check 'Task target' Warn "The task runs '$($action.Arguments)', which is not this folder's Yardstick.ps1."
-    }
-    $shortRunAs = ($runAs -split '\\')[-1]
-    if ($shortRunAs -and $shortRunAs -ne $env:USERNAME) {
-        Add-Check 'Task account' Warn "The task runs as $runAs, not $env:USERNAME. Credentials are stored per user, so run this check (and the AppRegistration step) as $runAs."
-    }
-    if (-not $whenSignedIn) {
-        if ($prefs.emailNotificationEnabled -eq $true -and (Get-YardstickEmailDeliveryMethod -Preferences $prefs) -eq 'outlook') {
-            Add-Check 'Task email' Warn 'Outlook cannot send mail from a task that runs whether or not you are signed in. Use SMTP, or run .\Install-Yardstick.ps1 -Step ScheduledTask and choose to run only while signed in.'
+    $task = Get-ScheduledTask -TaskPath '\Yardstick\' -TaskName 'Yardstick' -ErrorAction SilentlyContinue
+    if (-not $task) {
+        Add-Check 'Scheduled task' Info 'No scheduled task. Run .\Install-Yardstick.ps1 -Step ScheduledTask to run Yardstick daily.'
+    } else {
+        $action = @($task.Actions)[0]
+        $runAs = [string]$task.Principal.UserId
+        $whenSignedIn = $task.Principal.LogonType -eq 'Interactive'
+        $when = if ($whenSignedIn) { 'only while signed in' } else { 'whether or not signed in' }
+        Add-Check 'Scheduled task' OK "Task \Yardstick\Yardstick runs as $runAs, $when ($($task.State))."
+        $execute = if ($action) { ([string]$action.Execute).Trim('"') } else { '' }
+        if ($execute -and -not (Test-Path -LiteralPath $execute)) {
+            Add-Check 'Task program' Fail "The task starts $execute, which no longer exists (PowerShell was probably updated). Run .\Install-Yardstick.ps1 -Step ScheduledTask to replace the task."
         }
-        if (Test-YardstickCredentialGuard) {
-            Add-Check 'Task network' Warn 'Credential Guard is on, which can stop a task with a stored password from opening network shares ("The user name or password is incorrect"). If backups or the software dropbox fail in scheduled runs, run .\Install-Yardstick.ps1 -Step ScheduledTask and choose to run only while signed in.'
+        if ($action -and "$($action.Arguments)" -notlike "*$(Join-Path $ProjectRoot 'Yardstick.ps1')*") {
+            Add-Check 'Task target' Warn "The task runs '$($action.Arguments)', which is not this folder's Yardstick.ps1."
         }
-    }
+        $shortRunAs = ($runAs -split '\\')[-1]
+        if ($shortRunAs -and $shortRunAs -ne $env:USERNAME) {
+            Add-Check 'Task account' Warn "The task runs as $runAs, not $env:USERNAME. Credentials are stored per user, so run this check (and the AppRegistration step) as $runAs."
+        }
+        if (-not $whenSignedIn) {
+            if ($prefs.emailNotificationEnabled -eq $true -and (Get-YardstickEmailDeliveryMethod -Preferences $prefs) -eq 'outlook') {
+                Add-Check 'Task email' Warn 'Outlook cannot send mail from a task that runs whether or not you are signed in. Use SMTP, or run .\Install-Yardstick.ps1 -Step ScheduledTask and choose to run only while signed in.'
+            }
+            if (Test-YardstickCredentialGuard) {
+                Add-Check 'Task network' Warn 'Credential Guard is on, which can stop a task with a stored password from opening network shares ("The user name or password is incorrect"). If backups or the software dropbox fail in scheduled runs, run .\Install-Yardstick.ps1 -Step ScheduledTask and choose to run only while signed in.'
+            }
+        }
 
-    $info = Get-ScheduledTaskInfo -TaskPath '\Yardstick\' -TaskName 'Yardstick'
-    $next = if ($info.NextRunTime) { " Next run: $($info.NextRunTime.ToString('yyyy-MM-dd HH:mm'))." } else { '' }
-    switch ($info.LastTaskResult) {
-        0 { Add-Check 'Last run' OK "Last run on $($info.LastRunTime.ToString('yyyy-MM-dd HH:mm')) succeeded.$next" }
-        267011 { Add-Check 'Last run' Info "The task has not run yet.$next" }
-        267009 { Add-Check 'Last run' Info "The task is running now.$next" }
-        default { Add-Check 'Last run' Warn ("Last run on $($info.LastRunTime.ToString('yyyy-MM-dd HH:mm')) returned 0x{0:X}. See the log in $($prefs.Temp).$next" -f $info.LastTaskResult) }
+        $info = Get-ScheduledTaskInfo -TaskPath '\Yardstick\' -TaskName 'Yardstick'
+        $next = if ($info.NextRunTime) { " Next run: $($info.NextRunTime.ToString('yyyy-MM-dd HH:mm'))." } else { '' }
+        switch ($info.LastTaskResult) {
+            0 { Add-Check 'Last run' OK "Last run on $($info.LastRunTime.ToString('yyyy-MM-dd HH:mm')) succeeded.$next" }
+            267011 { Add-Check 'Last run' Info "The task has not run yet.$next" }
+            267009 { Add-Check 'Last run' Info "The task is running now.$next" }
+            default { Add-Check 'Last run' Warn ("Last run on $($info.LastRunTime.ToString('yyyy-MM-dd HH:mm')) returned 0x{0:X}. See the log in $($prefs.Temp).$next" -f $info.LastTaskResult) }
+        }
     }
 }
 

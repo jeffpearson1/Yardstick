@@ -67,6 +67,12 @@ $recipe = "$project\Recipes\Development\obsidian.yaml"
 
 Manual-download recipes read `SoftwareDropbox` from `Local\preferences.yaml`. The harness copies staged media into its artifact directory and never archives, moves, or modifies the dropbox source.
 
+## Shared icons and overrides
+
+When `syncSharedContent` is on in `Local\preferences.yaml`, `Invoke-RecipeLab.ps1`, `Test-RecipeSchema.ps1` and `Invoke-RecipeInstallTest.ps1` sync the `Icons` folder and `Local\recipeOverrides.yaml` with `SharedIcons` and `SharedRecipeOverrides` before they start, in both directions, just as a Yardstick run does. An icon you add while developing a recipe therefore reaches the shared folder, and other machines' icons and overrides reach you. A share that cannot be reached, or a malformed file, only produces a warning; the harness carries on. Pass `-NoSync` to `Test-RecipeSchema.ps1` to skip it. See [Shared overrides](../../Docs/WritingRecipes.md#shared-overrides).
+
+A [development-only instance](../../Docs/Installation.md#development-only-instances) (`.\Install-Yardstick.ps1 -DevelopmentOnly`) sets up a computer for the harness alone, with no Intune app registration.
+
 ## Output
 
 Download/package runs write to:

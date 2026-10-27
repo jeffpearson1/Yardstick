@@ -3989,73 +3989,140 @@ function Import-YardstickEffectiveRecipeOverrides {
 }
 
 
-function Sync-YardstickSharedRecipeOverrides {
+#region Shared content sync
+#
+# With syncSharedContent on, icons and recipe overrides are kept in step with a
+# shared location in both directions. Every file is checked before it is copied or
+# written, and every failure is reported rather than thrown at the run:
+# Invoke-YardstickSharedContentSync never throws, so a bad share costs a warning,
+# not a run.
+
+function Get-YardstickImageProblem {
     <#
     .SYNOPSIS
-    Copies the shared recipe overrides file to its local cache.
+    Returns why a file is not a complete PNG or JPEG image, or nothing when it is.
 
     .DESCRIPTION
-    The shared file is parsed first, and the cache is replaced only when it is
-    valid, so a bad edit on the share never displaces the last good copy. The copy
-    lands under a temporary name and is renamed into place.
+    Checks the file's signature and that it ends where the format says it should
+    (a PNG's IEND chunk, a JPEG's end-of-image marker), which catches a copy that
+    was cut short. Where System.Drawing is available the image is also decoded.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
 
-    Throws when the shared file cannot be read or is malformed; the cache is left
-    as it was.
+    try {
+        $bytes = [IO.File]::ReadAllBytes($Path)
+    } catch {
+        return "it cannot be read: $($_.Exception.GetBaseException().Message)"
+    }
+    if ($bytes.Length -eq 0) { return 'the file is empty' }
 
-    .PARAMETER Source
-    The shared overrides file, from the SharedRecipeOverrides preference.
+    $pngSignature = [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+    $isPng = $bytes.Length -ge 8 -and [Linq.Enumerable]::SequenceEqual([byte[]]$bytes[0..7], $pngSignature)
+    $isJpeg = $bytes.Length -ge 3 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xD8 -and $bytes[2] -eq 0xFF
 
-    .PARAMETER CachePath
-    Where the local copy lives (Get-YardstickSharedRecipeOverridesCachePath).
+    if ($isPng) {
+        # Walk the chunks: each is a 4-byte length, a 4-byte type, the data and a CRC.
+        $position = 8
+        $first = $true
+        $ended = $false
+        while ($position + 8 -le $bytes.Length) {
+            $length = ([uint32]$bytes[$position] -shl 24) -bor ([uint32]$bytes[$position + 1] -shl 16) -bor
+                ([uint32]$bytes[$position + 2] -shl 8) -bor [uint32]$bytes[$position + 3]
+            $type = [Text.Encoding]::ASCII.GetString($bytes, $position + 4, 4)
+            if ($first -and $type -ne 'IHDR') { return 'it is not a valid PNG image (no IHDR header)' }
+            $first = $false
+            $next = [int64]$position + 12 + $length
+            if ($next -gt $bytes.Length) { return 'the PNG image is cut short' }
+            $position = [int]$next
+            if ($type -eq 'IEND') { $ended = $true; break }
+        }
+        if (-not $ended) { return 'the PNG image is cut short (it has no end chunk)' }
+    } elseif ($isJpeg) {
+        # Some encoders pad the end of the file; the end-of-image marker comes before that.
+        $end = $bytes.Length - 1
+        while ($end -gt 1 -and ($bytes[$end] -eq 0x00 -or $bytes[$end] -eq 0x0A -or $bytes[$end] -eq 0x0D -or $bytes[$end] -eq 0x20)) { $end-- }
+        if ($end -lt 3 -or $bytes[$end - 1] -ne 0xFF -or $bytes[$end] -ne 0xD9) { return 'the JPEG image is cut short' }
+    } else {
+        return 'it is not a PNG or JPEG image'
+    }
 
-    .OUTPUTS
-    The number of recipe entries in the synced file.
+    if (-not $Script:ImageDecoderChecked) {
+        $Script:ImageDecoderChecked = $true
+        $Script:ImageDecoderAvailable = $false
+        try {
+            Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+            $Script:ImageDecoderAvailable = $true
+        } catch {
+            Write-Verbose "System.Drawing is not available; images are checked by structure only."
+        }
+    }
+    if ($Script:ImageDecoderAvailable) {
+        $stream = [IO.MemoryStream]::new($bytes)
+        $image = $null
+        try {
+            $image = [System.Drawing.Image]::FromStream($stream, $false, $true)
+            if ($image.Width -le 0 -or $image.Height -le 0) { return 'the image has no size' }
+        } catch {
+            return "it cannot be decoded as an image: $($_.Exception.GetBaseException().Message)"
+        } finally {
+            if ($image) { $image.Dispose() }
+            $stream.Dispose()
+        }
+    }
+}
+
+
+function Copy-YardstickSharedFile {
+    <#
+    .SYNOPSIS
+    Copies a file through a temporary name, checks what landed, and renames it into
+    place, keeping the source's last-modified time.
+
+    .PARAMETER Validate
+    A script block given the temporary copy's path. It returns a problem
+    description, or nothing when the copy is good.
     #>
     param(
         [Parameter(Mandatory)][string]$Source,
-        [Parameter(Mandatory)][string]$CachePath
+        [Parameter(Mandatory)][string]$Destination,
+        [scriptblock]$Validate
     )
 
-    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-        throw "The shared overrides file '$Source' is not reachable."
-    }
-
-    # Read once and validate those same bytes, so the cache cannot pick up an edit
-    # made on the share between the check and the copy.
-    $content = [IO.File]::ReadAllBytes($Source)
-    $tempPath = "$CachePath.tmp"
+    $folder = Split-Path -Parent $Destination
+    # A leading dot and a .tmp extension keep a leftover copy out of every listing
+    # the sync and the runner read.
+    $temp = Join-Path $folder (".{0}.{1}.tmp" -f (Split-Path -Leaf $Destination), [guid]::NewGuid().ToString('N'))
     try {
-        $cacheFolder = Split-Path -Parent $CachePath
-        if (-not (Test-Path -LiteralPath $cacheFolder -PathType Container)) {
-            New-Item -ItemType Directory -Path $cacheFolder -Force | Out-Null
+        $modified = [IO.File]::GetLastWriteTimeUtc($Source)
+        [IO.File]::Copy($Source, $temp, $true)
+        if ($Validate) {
+            $problem = & $Validate $temp
+            if ($problem) { throw "the copy did not arrive intact: $problem" }
         }
-        [IO.File]::WriteAllBytes($tempPath, $content)
-        try {
-            $overrides = Import-RecipeOverrides -Path $tempPath
-        } catch {
-            throw "The shared overrides file '$Source' is malformed: $($_.Exception.Message)"
-        }
-        Move-Item -LiteralPath $tempPath -Destination $CachePath -Force
+        [IO.File]::SetLastWriteTimeUtc($temp, $modified)
+        [IO.File]::Move($temp, $Destination, $true)
     } finally {
-        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
     }
-    return $overrides.Count
 }
 
 
 function Sync-YardstickSharedIcons {
     <#
     .SYNOPSIS
-    Copies new and changed icons from the shared icon folder to the local one.
+    Brings the local and shared icon folders up to date with each other.
 
     .DESCRIPTION
-    An icon is copied when the local folder has no file of that name, or has one
-    that differs in size or last-modified time. Nothing is ever deleted, so an icon
-    that exists only on this machine stays. Only image files at the top of the
-    shared folder are considered, which leaves out Thumbs.db and .DS_Store.
+    An icon in only one folder is copied to the other. An icon in both is copied
+    from the newer to the older one when their last-modified times differ; times
+    within two seconds of each other count as equal, since some file servers store
+    times coarsely. Nothing is ever deleted.
 
-    Each copy lands under a temporary name and is renamed into place, so a run
-    never sees half an icon. A file that fails is reported and the rest carry on.
+    Only image files at the top of each folder are considered, which leaves out
+    Thumbs.db and .DS_Store. An icon is copied only when it is a complete PNG or
+    JPEG image (Get-YardstickImageProblem), and the copy is checked again before it
+    replaces anything, so a run never sees half an icon. A file that fails is
+    reported and the rest carry on.
 
     .PARAMETER Source
     The shared icon folder, from the SharedIcons preference.
@@ -4064,8 +4131,8 @@ function Sync-YardstickSharedIcons {
     The local Icons folder.
 
     .OUTPUTS
-    PSCustomObject with Copied (file names), Unchanged (a count) and Failed
-    (PSCustomObjects with Name and Error).
+    PSCustomObject with Pulled and Pushed (file names copied from and to the
+    share), Unchanged (a count) and Failed (PSCustomObjects with Name and Error).
     #>
     param(
         [Parameter(Mandatory)][string]$Source,
@@ -4079,38 +4146,796 @@ function Sync-YardstickSharedIcons {
         New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     }
 
-    $copied = [System.Collections.Generic.List[string]]::new()
+    $pulled = [System.Collections.Generic.List[string]]::new()
+    $pushed = [System.Collections.Generic.List[string]]::new()
     $failed = [System.Collections.Generic.List[object]]::new()
     $unchanged = 0
 
-    $icons = Get-ChildItem -LiteralPath $Source -File -ErrorAction Stop |
-        Where-Object { $_.Extension -in '.png', '.jpg', '.jpeg' }
-    foreach ($icon in $icons) {
-        $target = Join-Path $Destination $icon.Name
-        $existing = Get-Item -LiteralPath $target -ErrorAction SilentlyContinue
-        if ($existing -and $existing.Length -eq $icon.Length -and
-            $existing.LastWriteTimeUtc -eq $icon.LastWriteTimeUtc) {
-            $unchanged++
-            continue
+    $listIcons = {
+        param($Folder)
+        $map = [ordered]@{}
+        Get-ChildItem -LiteralPath $Folder -File -ErrorAction Stop |
+            Where-Object { $_.Extension -in '.png', '.jpg', '.jpeg' } |
+            ForEach-Object { $map[$_.Name] = $_ }
+        $map
+    }
+    $shared = & $listIcons $Source
+    $local = & $listIcons $Destination
+    $names = @(@($shared.Keys) + @($local.Keys) | Sort-Object -Unique)
+
+    foreach ($name in $names) {
+        $sharedIcon = $shared[$name]
+        $localIcon = $local[$name]
+        if ($sharedIcon -and $localIcon) {
+            $difference = ($sharedIcon.LastWriteTimeUtc - $localIcon.LastWriteTimeUtc).TotalSeconds
+            if ([math]::Abs($difference) -le 2) {
+                if ($sharedIcon.Length -eq $localIcon.Length) {
+                    $unchanged++
+                } else {
+                    $failed.Add([PSCustomObject]@{ Name = $name; Error = 'the shared and local copies differ but were changed at the same time, so neither replaces the other' })
+                }
+                continue
+            }
+            $pull = $difference -gt 0
+        } else {
+            $pull = [bool]$sharedIcon
         }
 
-        $tempTarget = "$target.tmp"
+        $from, $to, $side = if ($pull) { $sharedIcon, (Join-Path $Destination $sharedIcon.Name), 'shared' } else { $localIcon, (Join-Path $Source $localIcon.Name), 'local' }
+        $problem = Get-YardstickImageProblem -Path $from.FullName
+        if ($problem) {
+            $failed.Add([PSCustomObject]@{ Name = $name; Error = "the $side copy was not copied because $problem" })
+            continue
+        }
         try {
-            Copy-Item -LiteralPath $icon.FullName -Destination $tempTarget -Force
-            Move-Item -LiteralPath $tempTarget -Destination $target -Force
-            $copied.Add($icon.Name)
+            Copy-YardstickSharedFile -Source $from.FullName -Destination $to -Validate { param($p) Get-YardstickImageProblem -Path $p }
+            if ($pull) { $pulled.Add($name) } else { $pushed.Add($name) }
         } catch {
-            Remove-Item -LiteralPath $tempTarget -Force -ErrorAction SilentlyContinue
-            $failed.Add([PSCustomObject]@{ Name = $icon.Name; Error = $_.Exception.Message })
+            $failed.Add([PSCustomObject]@{ Name = $name; Error = $_.Exception.GetBaseException().Message })
         }
     }
 
     [PSCustomObject]@{
-        Copied    = [string[]]$copied
+        Pulled    = [string[]]$pulled
+        Pushed    = [string[]]$pushed
         Unchanged = $unchanged
         Failed    = $failed.ToArray()
     }
 }
+
+
+function ConvertTo-YardstickCanonicalJson {
+    <#
+    .SYNOPSIS
+    Renders a parsed YAML value as compact JSON with dictionary keys sorted, so two
+    values compare equal exactly when they mean the same thing.
+    #>
+    param([AllowNull()]$Value)
+
+    $canonical = {
+        param($Item)
+        if ($Item -is [System.Collections.IDictionary]) {
+            $sorted = [ordered]@{}
+            foreach ($key in @($Item.Keys | Sort-Object { [string]$_ })) { $sorted[[string]$key] = & $canonical $Item[$key] }
+            return $sorted
+        }
+        if ($Item -is [System.Collections.IList]) {
+            $list = [System.Collections.Generic.List[object]]::new()
+            foreach ($element in $Item) { $list.Add((& $canonical $element)) }
+            return , $list
+        }
+        $Item
+    }
+    ConvertTo-Json -InputObject (& $canonical $Value) -Depth 64 -Compress
+}
+
+
+function Read-YardstickOverrideFile {
+    <#
+    .SYNOPSIS
+    Reads a recipe overrides file for syncing, keeping its text alongside the
+    parsed entries.
+
+    .DESCRIPTION
+    Applies the same rules as Import-RecipeOverrides and throws on anything it
+    would reject, plus recipe ids or fields that differ only in case, which
+    Import-RecipeOverrides would silently merge.
+
+    .OUTPUTS
+    PSCustomObject with Exists, Bytes, Hash, Text, Newline, Bom and Entries (an
+    ordered, case-insensitive dictionary of recipe id to ordered fields).
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    $bytes = [byte[]]@()
+    $exists = Test-Path -LiteralPath $Path -PathType Leaf
+    if ($exists) { $bytes = [IO.File]::ReadAllBytes($Path) }
+    ConvertFrom-YardstickOverrideBytes -Bytes $bytes -Exists $exists
+}
+
+
+function ConvertFrom-YardstickOverrideBytes {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes,
+        [bool]$Exists = $true
+    )
+
+    $bom = $Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF
+    $text = if ($bom) { [Text.Encoding]::UTF8.GetString($Bytes, 3, $Bytes.Length - 3) } else { [Text.Encoding]::UTF8.GetString($Bytes) }
+    $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes))
+
+    $entries = [ordered]@{}
+    $parsed = if ([string]::IsNullOrWhiteSpace($text)) { $null } else { ConvertFrom-Yaml -Yaml $text -Ordered }
+    if ($null -ne $parsed) {
+        if ($parsed -isnot [System.Collections.IDictionary]) {
+            throw "The file must map recipe ids to the fields they override."
+        }
+        foreach ($id in $parsed.Keys) {
+            $fields = $parsed[$id]
+            if ($fields -isnot [System.Collections.IDictionary]) {
+                throw "The entry for '$id' must list the fields it overrides, such as scopeTags."
+            }
+            if ($entries.Contains([string]$id)) {
+                throw "The recipe id '$id' appears more than once (ids are not case-sensitive)."
+            }
+            $copy = [ordered]@{}
+            foreach ($field in $fields.Keys) {
+                if ($copy.Contains([string]$field)) {
+                    throw "The entry for '$id' sets '$field' more than once (field names are not case-sensitive)."
+                }
+                $copy[[string]$field] = $fields[$field]
+            }
+            foreach ($reserved in 'id', 'base') {
+                if ($copy.Contains($reserved)) { throw "The entry for '$id' cannot override '$reserved'." }
+            }
+            $entries[[string]$id] = $copy
+        }
+
+        # The YAML reader keeps only the last of two keys that differ in case, so
+        # look for them in the text, where an entry would otherwise vanish unseen.
+        $lines = $text -split '\r?\n'
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($block in @(Get-YardstickOverrideBlocks -Lines $lines)) {
+            if (-not $seen.Add($block.Id)) {
+                throw "The recipe id '$($block.Id)' appears more than once (ids are not case-sensitive)."
+            }
+            $fieldIndent = $null
+            $fieldsSeen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            for ($i = $block.Start + 1; $i -le $block.End; $i++) {
+                if ($lines[$i] -notmatch '^(?<indent>\s+)(?<key>[^\s#''"\-?:,\[\]{}][^#:]*?)\s*:(\s|$)') { continue }
+                if ($null -eq $fieldIndent) { $fieldIndent = $Matches.indent }
+                if ($Matches.indent -ne $fieldIndent) { continue }
+                if (-not $fieldsSeen.Add($Matches.key)) {
+                    throw "The entry for '$($block.Id)' sets '$($Matches.key)' more than once (field names are not case-sensitive)."
+                }
+            }
+        }
+    }
+
+    [PSCustomObject]@{
+        Exists  = $Exists
+        Bytes   = $Bytes
+        Hash    = $hash
+        Text    = $text
+        Newline = if ($text.Contains("`r`n")) { "`r`n" } else { [Environment]::NewLine }
+        Bom     = $bom
+        Entries = $entries
+    }
+}
+
+
+function ConvertTo-YardstickYamlScalar {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [bool]) { return $(if ($Value) { 'true' } else { 'false' }) }
+    if ($Value -is [byte] -or $Value -is [int16] -or $Value -is [int] -or $Value -is [long] -or
+        $Value -is [uint16] -or $Value -is [uint32] -or $Value -is [uint64] -or $Value -is [decimal] -or
+        $Value -is [bigint]) {
+        return ([IFormattable]$Value).ToString($null, [Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($Value -is [double] -or $Value -is [single]) {
+        return ([IFormattable]$Value).ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    $text = [string]$Value
+    if ($text -match '[\x00-\x1F\x7F]') {
+        # JSON's escapes are valid in a YAML double-quoted string.
+        return (ConvertTo-Json -InputObject $text -Compress)
+    }
+    "'" + $text.Replace("'", "''") + "'"
+}
+
+
+function ConvertTo-YardstickYamlKey {
+    param([Parameter(Mandatory)][string]$Key)
+    if ($Key -match '^[A-Za-z0-9_][A-Za-z0-9_.\-]*$' -and $Key -notmatch '^(?i:true|false|yes|no|on|off|null|y|n)$' -and
+        $Key -notmatch '^[-+]?[0-9._]+$') {
+        return $Key
+    }
+    "'" + $Key.Replace("'", "''") + "'"
+}
+
+
+function ConvertTo-YardstickOverrideYaml {
+    <#
+    .SYNOPSIS
+    Writes one recipe overrides entry as YAML lines, in the layout the overrides
+    file uses: fields indented two spaces and list items four.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Fields
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $writeMap = {
+        param($Map, [int]$Indent)
+        $pad = ' ' * $Indent
+        foreach ($key in $Map.Keys) {
+            $name = ConvertTo-YardstickYamlKey ([string]$key)
+            $value = $Map[$key]
+            if ($value -is [System.Collections.IDictionary]) {
+                if ($value.Count -eq 0) { $lines.Add("${pad}${name}: {}"); continue }
+                $lines.Add("${pad}${name}:")
+                & $writeMap $value ($Indent + 2)
+            } elseif ($value -is [System.Collections.IList]) {
+                if ($value.Count -eq 0) { $lines.Add("${pad}${name}: []"); continue }
+                $lines.Add("${pad}${name}:")
+                foreach ($item in $value) {
+                    $text = if ($item -is [System.Collections.IDictionary] -or $item -is [System.Collections.IList]) {
+                        # JSON is valid YAML flow style.
+                        ConvertTo-Json -InputObject $item -Depth 64 -Compress
+                    } else {
+                        ConvertTo-YardstickYamlScalar $item
+                    }
+                    $lines.Add("$pad  - $text")
+                }
+            } else {
+                $lines.Add("${pad}${name}: $(ConvertTo-YardstickYamlScalar $value)")
+            }
+        }
+    }
+    $lines.Add("$(ConvertTo-YardstickYamlKey $Id):")
+    & $writeMap $Fields 2
+    , $lines.ToArray()
+}
+
+
+function Get-YardstickOverrideBlocks {
+    <#
+    .SYNOPSIS
+    Finds where each top-level entry of an overrides file starts and ends.
+
+    .DESCRIPTION
+    An entry runs from its "id:" line to the next top-level line. Blank lines and
+    comments at the very end belong to whatever follows, so replacing an entry
+    leaves the comments around it in place.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
+
+    $keyPattern = "^(?<key>'(?:[^']|'')*'|`"(?:[^`"\\]|\\.)*`"|[^\s#'`"\-?:,\[\]{}][^#]*?)\s*:(?:\s|$)"
+    $starts = [System.Collections.Generic.List[object]]::new()
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $line = $Lines[$i]
+        if ($line -match '^(---|\.\.\.)(\s|$)') {
+            $starts.Add([PSCustomObject]@{ Index = $i; Id = $null })
+        } elseif ($line -match $keyPattern) {
+            $key = $Matches.key
+            $id = if ($key.StartsWith("'")) {
+                $key.Substring(1, $key.Length - 2).Replace("''", "'")
+            } elseif ($key.StartsWith('"')) {
+                ConvertFrom-Json -InputObject $key
+            } else {
+                $key.Trim()
+            }
+            $starts.Add([PSCustomObject]@{ Index = $i; Id = [string]$id })
+        }
+    }
+
+    for ($n = 0; $n -lt $starts.Count; $n++) {
+        if ($null -eq $starts[$n].Id) { continue }
+        $start = $starts[$n].Index
+        $end = if ($n + 1 -lt $starts.Count) { $starts[$n + 1].Index - 1 } else { $Lines.Count - 1 }
+        while ($end -gt $start -and ($Lines[$end] -match '^\s*$' -or $Lines[$end] -match '^#')) { $end-- }
+        # Comments directly above an entry (no blank line between) travel with it
+        # when a new entry is inserted before it.
+        $lead = $start
+        while ($lead -gt 0 -and $Lines[$lead - 1] -match '^#' -and ($n -eq 0 -or $lead - 1 -gt $starts[$n - 1].Index)) { $lead-- }
+        [PSCustomObject]@{ Id = $starts[$n].Id; Start = $start; End = $end; Lead = $lead }
+    }
+}
+
+
+function Update-YardstickOverrideText {
+    <#
+    .SYNOPSIS
+    Rewrites the given entries of an overrides file's text, leaving every other
+    line - comments included - as it was.
+
+    .DESCRIPTION
+    Entries listed in Changes are replaced, added, or removed (a $null value).
+    A new entry goes in alphabetical position when the file's entries are already
+    in order, and at the end otherwise. The result is parsed again and compared
+    with Expected; anything that does not read back exactly as intended throws,
+    so a file is never written with content other than what the sync decided.
+
+    .PARAMETER Document
+    The file as read by Read-YardstickOverrideFile.
+
+    .PARAMETER Changes
+    Recipe id to the entry's complete new fields, or $null to remove the entry.
+
+    .PARAMETER Expected
+    Every entry the file should hold afterwards.
+
+    .OUTPUTS
+    The new file content as bytes, in the original encoding and line endings.
+    #>
+    param(
+        [Parameter(Mandatory)]$Document,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Changes,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Expected
+    )
+
+    $newline = $Document.Newline
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($Document.Text.Length -gt 0) {
+        $lines.AddRange([string[]]($Document.Text.TrimEnd("`r", "`n") -split "`r?`n"))
+    }
+
+    $blocks = @(Get-YardstickOverrideBlocks -Lines $lines.ToArray())
+    $blockIds = @($blocks | ForEach-Object { $_.Id })
+    $parsedIds = @($Document.Entries.Keys)
+    $sameIds = $blockIds.Count -eq $parsedIds.Count -and
+        @($blockIds | Where-Object { -not $Document.Entries.Contains($_) }).Count -eq 0
+    if (-not $sameIds) {
+        throw 'its layout is too unusual to edit safely (the entries could not be told apart line by line)'
+    }
+
+    # Work from the bottom up so earlier line numbers stay valid.
+    $byId = [ordered]@{}
+    foreach ($block in $blocks) { $byId[$block.Id] = $block }
+    foreach ($block in @($blocks | Sort-Object Start -Descending)) {
+        if (-not $Changes.Contains($block.Id)) { continue }
+        $lines.RemoveRange($block.Start, $block.End - $block.Start + 1)
+        $fields = $Changes[$block.Id]
+        if ($null -ne $fields -and $fields.Count -gt 0) {
+            $lines.InsertRange($block.Start, [string[]](ConvertTo-YardstickOverrideYaml -Id $block.Id -Fields $fields))
+        }
+    }
+
+    $added = @($Changes.Keys | Where-Object { -not $byId.Contains($_) -and $null -ne $Changes[$_] -and $Changes[$_].Count -gt 0 } |
+            Sort-Object { $_ })
+    if ($added.Count -gt 0) {
+        $existing = @(Get-YardstickOverrideBlocks -Lines $lines.ToArray())
+        $existingIds = @($existing | ForEach-Object { $_.Id })
+        $sorted = $existingIds.Count -gt 1 -and
+            (($existingIds -join "`n") -eq ((@($existingIds | Sort-Object { $_ }) -join "`n")))
+        foreach ($id in ($added | Sort-Object { $_ } -Descending)) {
+            $entryLines = [string[]](ConvertTo-YardstickOverrideYaml -Id $id -Fields $Changes[$id])
+            $existing = @(Get-YardstickOverrideBlocks -Lines $lines.ToArray())
+            $before = if ($sorted) { $existing | Where-Object { [string]::Compare($_.Id, $id, [StringComparison]::OrdinalIgnoreCase) -gt 0 } | Select-Object -First 1 }
+            if ($before) {
+                $lines.InsertRange($before.Lead, $entryLines)
+            } else {
+                $last = $existing | Select-Object -Last 1
+                $at = if ($last) { $last.End + 1 } else { $lines.Count }
+                $lines.InsertRange($at, $entryLines)
+            }
+        }
+    }
+
+    $text = ($lines -join $newline)
+    if ($lines.Count -gt 0) { $text += $newline }
+    $encoded = [Text.Encoding]::UTF8.GetBytes($text)
+    if ($Document.Bom) { $encoded = [byte[]](0xEF, 0xBB, 0xBF) + $encoded }
+
+    $check = ConvertFrom-YardstickOverrideBytes -Bytes $encoded
+    $want = ConvertTo-YardstickCanonicalJson $Expected
+    $got = ConvertTo-YardstickCanonicalJson $check.Entries
+    if ($want -cne $got) {
+        throw 'the edited file did not read back as intended, so it was left alone'
+    }
+    , $encoded
+}
+
+
+function Write-YardstickFileSafely {
+    <#
+    .SYNOPSIS
+    Replaces a file's content through a temporary file, but only when the file
+    still holds what was read earlier.
+
+    .PARAMETER ExpectedHash
+    SHA-256 (hex) of the content the change was based on; '' when the file did not
+    exist. When the file has changed since, nothing is written and this throws.
+
+    .PARAMETER Backup
+    Keep the previous content as <file>.bak.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][byte[]]$Content,
+        [AllowEmptyString()][string]$ExpectedHash,
+        [switch]$Backup
+    )
+
+    $folder = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    }
+    $temp = Join-Path $folder (".{0}.{1}.tmp" -f (Split-Path -Leaf $Path), [guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllBytes($temp, $Content)
+        $written = [IO.File]::ReadAllBytes($temp)
+        if (-not [Linq.Enumerable]::SequenceEqual($written, $Content)) { throw 'the temporary copy did not match what was written' }
+
+        $exists = Test-Path -LiteralPath $Path -PathType Leaf
+        if ($PSBoundParameters.ContainsKey('ExpectedHash')) {
+            $current = if ($exists) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($Path))) } else { '' }
+            if ($current -ne $ExpectedHash) { throw 'it was changed by someone else during the sync; the change will be retried next time' }
+        }
+        if ($exists -and $Backup) {
+            try {
+                [IO.File]::Replace($temp, $Path, "$Path.bak")
+                return
+            } catch {
+                Write-Verbose "Replacing $Path with a backup failed ($($_.Exception.Message)); moving the new copy into place instead."
+            }
+        }
+        [IO.File]::Move($temp, $Path, $true)
+    } finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+
+function Sync-YardstickSharedRecipeOverrides {
+    <#
+    .SYNOPSIS
+    Merges this machine's recipe overrides with the shared overrides file, in both
+    directions, field by field.
+
+    .DESCRIPTION
+    Each field of each entry in Local\recipeOverrides.yaml is compared with the
+    same field in the shared file and with its value when the two were last
+    synced (kept in StatePath):
+
+      - changed locally only: the local value is written to the shared file;
+      - changed on the share only: the shared value replaces the local one, and a
+        field removed from the share is removed locally;
+      - changed on both sides to different values: a conflict. Neither file
+        changes, the local value keeps applying on this machine, and the conflict
+        is reported on every sync until the two agree.
+
+    Removing a field or entry locally never removes it from the share; edit the
+    shared file to do that. Only entries the local file already has are updated
+    from the share - the rest of the shared file applies through the cached copy.
+
+    Nothing is written unless both files parse, and each write is checked by
+    reading it back. The shared file is changed under a lock file, only when no
+    one else changed it in the meantime, and its previous content is kept as
+    <file>.bak. A shared file that has gone missing or empty after earlier syncs
+    is treated as a mistake and left alone.
+
+    Afterwards the cache (CachePath) holds a validated copy of the shared file,
+    which Import-YardstickEffectiveRecipeOverrides layers the local file over.
+
+    Throws when the shared file cannot be reached or either file is malformed;
+    nothing is changed in that case.
+
+    .PARAMETER LocalPath
+    This machine's overrides file (Local\recipeOverrides.yaml).
+
+    .PARAMETER SharedPath
+    The shared overrides file, from the SharedRecipeOverrides preference.
+
+    .PARAMETER CachePath
+    The local copy of the shared file (Get-YardstickSharedRecipeOverridesCachePath).
+
+    .PARAMETER StatePath
+    Where the last synced value of each field is kept. Defaults to the cache path
+    with a .sync.json extension.
+
+    .OUTPUTS
+    PSCustomObject with Pushed, Pulled, Removed and Conflicts ("id: field"
+    strings), SharedEntries (the number of entries in the shared file) and
+    Warnings.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$LocalPath,
+        [Parameter(Mandatory)][string]$SharedPath,
+        [Parameter(Mandatory)][string]$CachePath,
+        [string]$StatePath
+    )
+
+    if (-not $StatePath) { $StatePath = [IO.Path]::ChangeExtension($CachePath, '.sync.json') }
+    $warnings = [System.Collections.Generic.List[string]]::new()
+
+    $sharedFolder = Split-Path -Parent $SharedPath
+    if (-not $sharedFolder -or -not (Test-Path -LiteralPath $sharedFolder -PathType Container)) {
+        throw "The shared overrides folder '$sharedFolder' is not reachable."
+    }
+    if (Test-Path -LiteralPath $SharedPath -PathType Container) {
+        throw "SharedRecipeOverrides '$SharedPath' is a folder, not a file."
+    }
+
+    try {
+        $local = Read-YardstickOverrideFile -Path $LocalPath
+    } catch {
+        throw "The local overrides file '$LocalPath' is malformed, so nothing was synced: $($_.Exception.Message)"
+    }
+
+    # The last synced value of each field. Without a state file (the first sync,
+    # or one from before two-way sync) the cached shared copy is the best guess.
+    $base = @{}
+    $haveState = $false
+    if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
+        try {
+            $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -AsHashtable
+            foreach ($id in $state.fields.Keys) {
+                $fields = @{}
+                foreach ($field in $state.fields[$id].Keys) { $fields[$field] = [string]$state.fields[$id][$field] }
+                $base[$id] = $fields
+            }
+            $haveState = $true
+        } catch {
+            $base = @{}
+            $warnings.Add("The sync state '$StatePath' was unreadable and has been rebuilt: $($_.Exception.Message)")
+        }
+    }
+    if (-not $haveState -and (Test-Path -LiteralPath $CachePath -PathType Leaf)) {
+        try {
+            $cached = Read-YardstickOverrideFile -Path $CachePath
+            foreach ($id in $cached.Entries.Keys) {
+                $fields = @{}
+                foreach ($field in $cached.Entries[$id].Keys) { $fields[$field] = ConvertTo-YardstickCanonicalJson $cached.Entries[$id][$field] }
+                $base[$id] = $fields
+            }
+            $haveState = $base.Count -gt 0
+        } catch {
+            Write-Verbose "The cached shared overrides are unreadable; syncing without them: $($_.Exception.Message)"
+        }
+    }
+
+    # Hold a lock file on the share while reading and writing it, so two machines
+    # cannot interleave their changes. Without write access there is no lock, and
+    # changes are only brought in.
+    $lock = $null
+    $lockProblem = $null
+    $deadline = [datetime]::UtcNow.AddSeconds(15)
+    while (-not $lock) {
+        try {
+            $lock = [IO.FileStream]::new("$SharedPath.lock", [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite,
+                [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+        } catch [System.UnauthorizedAccessException] {
+            $lockProblem = 'this account cannot write to the shared folder'
+            break
+        } catch {
+            if ([datetime]::UtcNow -gt $deadline) { $lockProblem = 'another computer was syncing it'; break }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
+    try {
+        try {
+            $shared = Read-YardstickOverrideFile -Path $SharedPath
+        } catch {
+            throw "The shared overrides file '$SharedPath' is malformed, so nothing was synced: $($_.Exception.Message)"
+        }
+        $baseCount = @($base.Keys | Where-Object { $base[$_].Count -gt 0 }).Count
+        if ($haveState -and $baseCount -gt 0 -and $shared.Entries.Count -eq 0) {
+            $what = if ($shared.Exists) { 'is now empty' } else { 'no longer exists' }
+            throw "The shared overrides file '$SharedPath' $what, although it held $baseCount entries when last synced. Nothing was synced, in case that was a mistake; restore it, or delete '$StatePath' to start afresh."
+        }
+
+        $pushed = [System.Collections.Generic.List[string]]::new()
+        $pulled = [System.Collections.Generic.List[string]]::new()
+        $removed = [System.Collections.Generic.List[string]]::new()
+        $conflicts = [System.Collections.Generic.List[string]]::new()
+        $conflictBase = @{}
+        $pulledBase = @{}
+        $newShared = [ordered]@{}
+        foreach ($id in $shared.Entries.Keys) {
+            $newShared[$id] = [ordered]@{}
+            foreach ($field in $shared.Entries[$id].Keys) { $newShared[$id][$field] = $shared.Entries[$id][$field] }
+        }
+        $newLocal = [ordered]@{}
+        foreach ($id in $local.Entries.Keys) {
+            $newLocal[$id] = [ordered]@{}
+            foreach ($field in $local.Entries[$id].Keys) { $newLocal[$id][$field] = $local.Entries[$id][$field] }
+        }
+        $sharedChanges = [ordered]@{}
+        $localChanges = [ordered]@{}
+
+        foreach ($id in @($local.Entries.Keys)) {
+            $sharedEntry = if ($shared.Entries.Contains($id)) { $shared.Entries[$id] } else { $null }
+            $baseEntry = $base[$id]
+            foreach ($field in @($local.Entries[$id].Keys)) {
+                $localValue = ConvertTo-YardstickCanonicalJson $local.Entries[$id][$field]
+                $sharedValue = if ($sharedEntry -and $sharedEntry.Contains($field)) { ConvertTo-YardstickCanonicalJson $sharedEntry[$field] } else { $null }
+                $baseValue = if ($baseEntry -and $baseEntry.ContainsKey($field)) { $baseEntry[$field] } else { $null }
+                if ($null -ne $sharedValue -and $localValue -ceq $sharedValue) { continue }
+
+                $label = "${id}: $field"
+                if ($sharedValue -ceq $baseValue) {
+                    $sharedId = if ($newShared.Contains($id)) { @($newShared.Keys | Where-Object { $_ -eq $id })[0] } else { $id }
+                    if (-not $newShared.Contains($id)) { $newShared[$id] = [ordered]@{} }
+                    $newShared[$id][$field] = $local.Entries[$id][$field]
+                    $sharedChanges[$sharedId] = $newShared[$id]
+                    $pushed.Add($label)
+                } elseif ($localValue -ceq $baseValue) {
+                    if ($null -eq $sharedValue) {
+                        $newLocal[$id].Remove($field)
+                        $removed.Add($label)
+                    } else {
+                        $newLocal[$id][$field] = $sharedEntry[$field]
+                        $pulled.Add($label)
+                    }
+                    $localChanges[$id] = if ($newLocal[$id].Count -gt 0) { $newLocal[$id] } else { $null }
+                    if (-not $pulledBase.ContainsKey($id)) { $pulledBase[$id] = @{} }
+                    $pulledBase[$id][$field] = $baseValue
+                } else {
+                    $conflicts.Add($label)
+                    if (-not $conflictBase.ContainsKey($id)) { $conflictBase[$id] = @{} }
+                    $conflictBase[$id][$field] = $baseValue
+                }
+            }
+        }
+        foreach ($id in @($localChanges.Keys)) {
+            if ($null -eq $localChanges[$id]) { $newLocal.Remove($id) }
+        }
+
+        $finalShared = $shared
+        if ($sharedChanges.Count -gt 0) {
+            try {
+                if ($lockProblem) { throw $lockProblem }
+                $bytes = Update-YardstickOverrideText -Document $shared -Changes $sharedChanges -Expected $newShared
+                Write-YardstickFileSafely -Path $SharedPath -Content $bytes -ExpectedHash $(if ($shared.Exists) { $shared.Hash } else { '' }) -Backup
+                $finalShared = ConvertFrom-YardstickOverrideBytes -Bytes $bytes
+            } catch {
+                $warnings.Add("Could not write $($pushed.Count) local change(s) to '$SharedPath' ($($pushed -join ', ')): $($_.Exception.Message)")
+                $pushed.Clear()
+            }
+        }
+
+        if ($localChanges.Count -gt 0) {
+            try {
+                $bytes = Update-YardstickOverrideText -Document $local -Changes $localChanges -Expected $newLocal
+                Write-YardstickFileSafely -Path $LocalPath -Content $bytes -ExpectedHash $local.Hash
+            } catch {
+                $warnings.Add("Could not bring $($pulled.Count + $removed.Count) shared change(s) into '$LocalPath' ($(@($pulled) + @($removed) -join ', ')): $($_.Exception.Message)")
+                # The local file still holds the old values, so remember them as the
+                # last synced ones; otherwise the next sync would push them back.
+                foreach ($id in $pulledBase.Keys) {
+                    if (-not $conflictBase.ContainsKey($id)) { $conflictBase[$id] = @{} }
+                    foreach ($field in $pulledBase[$id].Keys) { $conflictBase[$id][$field] = $pulledBase[$id][$field] }
+                }
+                $pulled.Clear()
+                $removed.Clear()
+            }
+        }
+
+        # The cache gets exactly the bytes the share now holds, once they are known to parse.
+        if ($finalShared.Exists -or $finalShared.Bytes.Length -gt 0) {
+            $cacheHash = if (Test-Path -LiteralPath $CachePath -PathType Leaf) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($CachePath))) } else { '' }
+            if ($cacheHash -ne $finalShared.Hash) {
+                Write-YardstickFileSafely -Path $CachePath -Content $finalShared.Bytes
+            }
+        }
+
+        # Record what was synced: the shared values, except where a conflict or a
+        # failed local update means the old value is still the agreed one.
+        $newBase = [ordered]@{}
+        foreach ($id in $finalShared.Entries.Keys) {
+            $fields = [ordered]@{}
+            foreach ($field in $finalShared.Entries[$id].Keys) { $fields[$field] = ConvertTo-YardstickCanonicalJson $finalShared.Entries[$id][$field] }
+            $newBase[$id] = $fields
+        }
+        foreach ($id in $conflictBase.Keys) {
+            if (-not $newBase.Contains($id)) { $newBase[$id] = [ordered]@{} }
+            foreach ($field in $conflictBase[$id].Keys) {
+                if ($null -eq $conflictBase[$id][$field]) { $newBase[$id].Remove($field) } else { $newBase[$id][$field] = $conflictBase[$id][$field] }
+            }
+            if ($newBase[$id].Count -eq 0) { $newBase.Remove($id) }
+        }
+        $stateJson = [ordered]@{ version = 1; shared = $SharedPath; fields = $newBase } | ConvertTo-Json -Depth 8
+        Write-YardstickFileSafely -Path $StatePath -Content ([Text.Encoding]::UTF8.GetBytes($stateJson))
+    } finally {
+        if ($lock) { $lock.Dispose() }
+    }
+
+    if ($lockProblem -and $pushed.Count -eq 0 -and $sharedChanges.Count -eq 0) {
+        Write-Verbose "No lock on '$SharedPath' ($lockProblem); nothing needed writing."
+    }
+
+    [PSCustomObject]@{
+        Pushed        = [string[]]$pushed
+        Pulled        = [string[]]$pulled
+        Removed       = [string[]]$removed
+        Conflicts     = [string[]]$conflicts
+        SharedEntries = $finalShared.Entries.Count
+        Warnings      = [string[]]$warnings
+    }
+}
+
+
+function Invoke-YardstickSharedContentSync {
+    <#
+    .SYNOPSIS
+    Syncs icons and recipe overrides with the shared location, when
+    syncSharedContent is on. Never throws.
+
+    .DESCRIPTION
+    Used by every run and by the recipe harness. Problems - an unreachable share,
+    a malformed file, a damaged icon - become warnings, and whatever could not be
+    synced stays as it was, so the caller carries on exactly as it would have
+    without the sync.
+
+    .PARAMETER Preferences
+    Preferences from Import-YardstickPreferences.
+
+    .PARAMETER LocalOverridesPath
+    Local\recipeOverrides.yaml (Get-YardstickRecipeOverridesPath).
+
+    .PARAMETER SharedOverridesCachePath
+    The cached shared overrides (Get-YardstickSharedRecipeOverridesCachePath).
+
+    .OUTPUTS
+    PSCustomObjects with Level (Info, Detail or Warning, as Write-Log takes) and
+    Message, in order.
+    #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Preferences,
+        [Parameter(Mandatory)][string]$LocalOverridesPath,
+        [Parameter(Mandatory)][string]$SharedOverridesCachePath
+    )
+
+    $messages = [System.Collections.Generic.List[object]]::new()
+    $say = { param($Level, $Message) $messages.Add([PSCustomObject]@{ Level = $Level; Message = $Message }) }
+    if ($Preferences.syncSharedContent -ne $true) { return }
+
+    $sharedIcons = [string]$Preferences.SharedIcons
+    if (-not [string]::IsNullOrWhiteSpace($sharedIcons)) {
+        try {
+            $icons = Sync-YardstickSharedIcons -Source $sharedIcons -Destination ([string]$Preferences.Icons)
+            & $say 'Info' "Synced icons with ${sharedIcons}: $($icons.Pulled.Count) brought in, $($icons.Pushed.Count) sent, $($icons.Unchanged) unchanged."
+            foreach ($name in $icons.Pulled) { & $say 'Detail' "Copied icon $name from the shared icon folder." }
+            foreach ($name in $icons.Pushed) { & $say 'Detail' "Copied icon $name to the shared icon folder." }
+            foreach ($failure in $icons.Failed) { & $say 'Warning' "Icon $($failure.Name) was not synced: $($failure.Error)" }
+        } catch {
+            & $say 'Warning' "Could not sync icons with ${sharedIcons}: $($_.Exception.Message) Using the icons already in $($Preferences.Icons)."
+        }
+    }
+
+    $sharedOverrides = [string]$Preferences.SharedRecipeOverrides
+    if (-not [string]::IsNullOrWhiteSpace($sharedOverrides)) {
+        try {
+            $result = Sync-YardstickSharedRecipeOverrides -LocalPath $LocalOverridesPath -SharedPath $sharedOverrides -CachePath $SharedOverridesCachePath
+            $summary = "Synced recipe overrides with ${sharedOverrides}: $($result.SharedEntries) shared entr$(if ($result.SharedEntries -eq 1) { 'y' } else { 'ies' })"
+            if ($result.Pushed.Count) { $summary += "; sent $($result.Pushed -join ', ')" }
+            if ($result.Pulled.Count) { $summary += "; updated locally $($result.Pulled -join ', ')" }
+            if ($result.Removed.Count) { $summary += "; removed locally (removed from the share) $($result.Removed -join ', ')" }
+            & $say 'Info' "$summary."
+            foreach ($warning in $result.Warnings) { & $say 'Warning' $warning }
+            foreach ($conflict in $result.Conflicts) {
+                & $say 'Warning' "Recipe override $conflict was changed both here and in the shared file. The local value applies on this computer; make the two match (or delete the field from $LocalOverridesPath to use the shared value)."
+            }
+        } catch {
+            $cache = Get-Item -LiteralPath $SharedOverridesCachePath -ErrorAction SilentlyContinue
+            $fallback = if ($cache) {
+                "Using the shared copy synced on $($cache.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))."
+            } else {
+                'There is no synced copy yet, so only the local overrides apply.'
+            }
+            & $say 'Warning' "Could not sync recipe overrides: $($_.Exception.Message) $fallback"
+        }
+    }
+
+    $messages.ToArray()
+}
+
+#endregion
 
 function Get-RecipePlaceholder {
     <#
