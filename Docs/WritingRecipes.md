@@ -734,7 +734,7 @@ replace the recipe's own when Yardstick runs it:
 
 ### Shared overrides
 
-When several machines run Yardstick, keep one overrides file and one icon folder on a share and let each run pull them. Turn it on in `Local\preferences.yaml`:
+When several machines run Yardstick, keep one overrides file and one icon folder on a share and let every machine sync with them. The installer asks for both (or pass `-SharedIcons` and `-SharedRecipeOverrides`), or turn it on in `Local\preferences.yaml`:
 
 ```yaml
 syncSharedContent: true
@@ -742,14 +742,19 @@ SharedIcons: \\server\share\Intune\Icons
 SharedRecipeOverrides: \\server\share\Intune\Yardstick\recipeOverrides.yaml
 ```
 
-Before it reads any recipe, a run:
+Every run syncs before it reads any recipe, and so do the recipe harness scripts (`Invoke-RecipeLab.ps1`, `Test-RecipeSchema.ps1` and `Invoke-RecipeInstallTest.ps1`; pass `-NoSync` to `Test-RecipeSchema.ps1` to skip it). Sync works in both directions:
 
-- copies icons from `SharedIcons` that the `Icons` folder lacks or has in a different size or date. It never deletes an icon, so one that exists only on this machine stays.
-- checks the `SharedRecipeOverrides` file and copies it to `Local\recipeOverrides.shared.yaml`. A malformed shared file is not copied, so the last good copy stays in use.
+- **Icons.** An icon only one side has is copied to the other, and where both have an icon by the same name, the newer one replaces the older. Two copies with the same date but different contents are left alone and reported. Only `.png`, `.jpg` and `.jpeg` files are synced, each is checked to be a complete image before it is copied (so a half-copied or corrupt icon never replaces a good one), and nothing is ever deleted.
+- **Recipe overrides.** Each field of each entry in `Local\recipeOverrides.yaml` is compared with the shared file and with its value at the last sync:
+  - a field you changed or added locally is written to the shared file (an entry the shared file lacks is added, in alphabetical order when the file is sorted, keeping its comments);
+  - a field someone changed on the share is updated in your local file, and a field removed from the share is removed locally;
+  - a field changed on both sides to different values is a conflict: neither file changes, your local value keeps applying on this machine, and every run warns until the two agree.
 
-The local `Local\recipeOverrides.yaml` is layered on top, field by field: where both files set a field for the same recipe, the local value wins, and the shared file's other fields still apply. A local entry is the way to give one machine a different value.
+  Deleting a field or entry locally never deletes it from the share - edit the shared file to do that. Entries that only the shared file has are not copied into your local file; they apply through the synced copy, `Local\recipeOverrides.shared.yaml`.
 
-If the share cannot be reached, the run logs a warning and carries on with the icons it has and the last synced overrides. With `syncSharedContent` off (the default), neither path is read and the synced copy is ignored.
+`Local\recipeOverrides.yaml` is layered on top of the synced copy, field by field: where both set a field for the same recipe, the local value wins, and the shared file's other fields still apply.
+
+Sync never gets in the way of a run that would otherwise be healthy. Nothing is written unless both overrides files parse, every write is checked by reading it back, and the shared file is changed only under a lock, only if no one else changed it in the meantime, and with its previous content kept as `recipeOverrides.yaml.bak`. If the share cannot be reached, a file is malformed, or the shared file has suddenly gone missing or empty, the run logs a warning and carries on with the icons it has and the last synced overrides. With `syncSharedContent` off (the default), neither path is read and the synced copy is ignored.
 
 ### Recipes that need your values
 

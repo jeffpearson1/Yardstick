@@ -16,7 +16,8 @@ sensible default:
                    created yourself (-UseExistingApp).
   IntuneDefaults   Scope tags and a test group for new app versions.
   Email            Optional email report after each run.
-  ScheduledTask    Optional scheduled task, every day or on weekdays.
+  ScheduledTask    Optional scheduled task, every day, on weekdays or on days
+                   you choose.
   Verify           Runs Test-YardstickSetup.ps1.
 
 Every step checks what is already in place, so the script is safe to run again -
@@ -67,6 +68,21 @@ Client secret of an existing app registration (with -UseExistingApp).
 .PARAMETER ClientSecretExpiresOn
 Expiry date of -ClientSecret, used for the expiry warning.
 
+.PARAMETER DevelopmentOnly
+Set up a development-only instance, for writing and testing recipes with the
+recipe harness (Tests\RecipeHarness). It never signs in to Intune or Microsoft
+Graph, so the app registration, Intune defaults, email and scheduled task steps
+are skipped. -DevelopmentOnly:$false turns a development-only instance into a
+full one.
+
+.PARAMETER SharedIcons
+Shared icon folder to sync with on every run. Setting it (or
+-SharedRecipeOverrides) turns on syncSharedContent.
+
+.PARAMETER SharedRecipeOverrides
+Shared recipe overrides file to sync with on every run. A folder means the
+recipeOverrides.yaml file in it.
+
 .PARAMETER Owner
 Shown as the Owner of every app Yardstick creates in Intune.
 
@@ -114,7 +130,13 @@ Without it the task runs as you, only while you are signed in, and -NonInteracti
 skips creating the task.
 
 .PARAMETER TaskSchedule
-Days the scheduled task runs: Daily (default), MondayToFriday or MondayToThursday.
+Days the scheduled task runs: Daily (default), Weekdays (Monday to Friday) or
+Custom (the days in -TaskDays). MondayToFriday and MondayToThursday, from 1.1.0,
+still work.
+
+.PARAMETER TaskDays
+Days for -TaskSchedule Custom, such as Monday, Wednesday, Friday. Passing it
+without -TaskSchedule implies Custom.
 
 .PARAMETER TaskTime
 Start time for the scheduled task, as HH:mm. Default: 03:00.
@@ -143,6 +165,12 @@ $secret = Read-Host -AsSecureString
 .\Install-Yardstick.ps1 -NonInteractive -UseExistingApp -TenantId $tenant -ClientId $app -ClientSecret $secret -Owner 'IT Services'
 
 Scripted install for an existing app registration.
+
+.EXAMPLE
+.\Install-Yardstick.ps1 -DevelopmentOnly -SharedIcons \\server\share\Intune\Icons -SharedRecipeOverrides \\server\share\Intune\Yardstick
+
+Sets up a computer for recipe development only, syncing icons and recipe
+overrides with the team share.
 #>
 
 # Deliberately no "#Requires -Version 7.0": Windows PowerShell 5.1 has to be able
@@ -165,6 +193,10 @@ param(
     [SecureString]$ClientSecret,
     [datetime]$ClientSecretExpiresOn,
 
+    [switch]$DevelopmentOnly,
+    [string]$SharedIcons,
+    [string]$SharedRecipeOverrides,
+
     [string]$Owner,
     [string]$MinOSVersion,
     [string[]]$ScopeTags,
@@ -181,8 +213,9 @@ param(
     [switch]$DisableOutlookPrompts,
 
     [pscredential]$TaskCredential,
-    [ValidateSet('Daily', 'MondayToFriday', 'MondayToThursday')]
+    [ValidateSet('Daily', 'Weekdays', 'Custom', 'MondayToFriday', 'MondayToThursday')]
     [string]$TaskSchedule = 'Daily',
+    [DayOfWeek[]]$TaskDays,
     [string]$TaskTime = '03:00',
     [string]$TaskGroup
 )
@@ -234,6 +267,8 @@ Write-Log -Init
 Set-YardstickSetupMode -NonInteractive:$NonInteractive
 
 $AllSteps = @('Prerequisites', 'Preferences', 'AppRegistration', 'IntuneDefaults', 'Email', 'ScheduledTask', 'Verify')
+# Steps a development-only instance skips: it never connects to Intune.
+$GraphSteps = @('AppRegistration', 'IntuneDefaults', 'Email', 'ScheduledTask')
 $Selected = if ($Step) { @($AllSteps | Where-Object { $Step -contains $_ }) } else { $AllSteps }
 $Summary = [System.Collections.Generic.List[object]]::new()
 $ElevatedActions = [System.Collections.Generic.List[object]]::new()
@@ -250,6 +285,10 @@ function Get-SetupPreferences {
 function Get-SetupPreferencesPath {
     # Every step that writes a setting needs the file to exist first.
     (New-YardstickPreferencesFile -ProjectRoot $Root).Path
+}
+
+function Test-SetupDevelopmentOnly {
+    (Get-SetupPreferences).developmentOnly -eq $true
 }
 
 function Split-AddressList {
@@ -453,6 +492,68 @@ function Invoke-PrerequisitesStep {
 }
 
 
+function Set-SharedContentPreferences {
+    <#
+    Asks for (or takes from -SharedIcons and -SharedRecipeOverrides) the shared
+    icon folder and recipe overrides file, and turns syncSharedContent on or off
+    to match.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][hashtable]$Preferences
+    )
+
+    $currentIcons = [string]$Preferences.SharedIcons
+    $currentOverrides = [string]$Preferences.SharedRecipeOverrides
+    $syncOn = $Preferences.syncSharedContent -eq $true
+
+    if ($ScriptBound.ContainsKey('SharedIcons') -or $ScriptBound.ContainsKey('SharedRecipeOverrides')) {
+        $icons = if ($ScriptBound.ContainsKey('SharedIcons')) { ConvertFrom-YardstickQuotedPath $SharedIcons } else { $currentIcons }
+        $overrides = if ($ScriptBound.ContainsKey('SharedRecipeOverrides')) { ConvertFrom-YardstickQuotedPath $SharedRecipeOverrides } else { $currentOverrides }
+    } elseif ($NonInteractive) {
+        return
+    } else {
+        Write-Host ''
+        Write-Host 'Icons and recipe overrides (such as scope tags) can be shared with the rest of your team.' -ForegroundColor DarkGray
+        Write-Host 'Every run and every recipe harness script then syncs them both ways with a shared folder.' -ForegroundColor DarkGray
+        if (-not (Read-YardstickSetupYesNo -Prompt 'Sync icons and recipe overrides with a shared folder?' -Default $syncOn)) {
+            if ($syncOn) {
+                Set-YardstickPreferenceValue -Path $Path -Key 'syncSharedContent' -Value $false
+                Write-YardstickSetupStatus 'Shared icon and recipe override sync is off.' -Level OK
+            }
+            return
+        }
+        $icons = Read-YardstickSetupValue -Prompt 'Shared icon folder (blank to leave off)' -Default $currentIcons -Path
+        $overrides = Read-YardstickSetupValue -Prompt 'Shared recipe overrides file, or the folder it is in (blank to leave off)' -Default $currentOverrides -Path
+    }
+
+    # A folder means the overrides file in it.
+    if ($overrides -and ($overrides -match '[\\/]$' -or (Test-Path -LiteralPath $overrides -PathType Container))) {
+        $overrides = Join-Path $overrides 'recipeOverrides.yaml'
+    }
+
+    if ($icons -ne $currentIcons) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value $icons }
+    if ($overrides -ne $currentOverrides) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value $overrides }
+    $enable = [bool]($icons -or $overrides)
+    if ($enable -ne $syncOn) { Set-YardstickPreferenceValue -Path $Path -Key 'syncSharedContent' -Value $enable }
+
+    if ($enable) {
+        if ($icons) {
+            if ($problem = Get-YardstickFolderProblem -Path $icons) {
+                Write-YardstickSetupStatus "Shared icon folder $icons is not reachable from here: $problem" -Level Warn
+            } else {
+                Write-YardstickSetupStatus "Icons will sync with $icons." -Level OK
+            }
+        }
+        if ($overrides) {
+            Write-YardstickSetupStatus "Recipe overrides will sync with $overrides." -Level OK
+        }
+    } elseif ($syncOn) {
+        Write-YardstickSetupStatus 'Shared icon and recipe override sync is off.' -Level OK
+    }
+}
+
+
 function Invoke-PreferencesStep {
     Write-YardstickSetupStep 'Preferences'
 
@@ -469,26 +570,46 @@ function Invoke-PreferencesStep {
         Write-YardstickSetupStatus "Created folder $folder" -Level OK
     }
 
-    Write-Host ''
-    Write-Host 'Owner is shown on every app Yardstick creates in Intune - usually your team name.' -ForegroundColor DarkGray
-    $newOwner = if ($Owner) { $Owner } else { Read-YardstickSetupValue -Prompt 'App owner' -Default ([string]$prefs.defaultOwner) }
-    if ($newOwner -ne [string]$prefs.defaultOwner) { Set-YardstickPreferenceValue -Path $path -Key 'defaultOwner' -Value $newOwner }
-
-    $osChoices = @(Get-YardstickPreferenceAllowedValues -Key 'defaultMinOSVersion')
-    $newOs = $MinOSVersion
-    if (-not $newOs) {
-        $newOs = @(Read-YardstickSetupChoice -Prompt 'Minimum Windows version for new apps:' -Choices $osChoices -Default @([string]$prefs.defaultMinOSVersion))[0]
+    $wasDevelopmentOnly = $prefs.developmentOnly -eq $true
+    if ($ScriptBound.ContainsKey('DevelopmentOnly')) {
+        $developmentOnlyInstance = [bool]$DevelopmentOnly
+    } else {
+        Write-Host ''
+        Write-Host 'A development-only computer writes and tests recipes with the recipe harness. It never' -ForegroundColor DarkGray
+        Write-Host 'signs in to Intune, so it needs no app registration, email or scheduled task.' -ForegroundColor DarkGray
+        $developmentOnlyInstance = Read-YardstickSetupYesNo -Prompt 'Is this a development-only computer?' -Default $wasDevelopmentOnly
     }
-    if ($osChoices -notcontains $newOs) { throw "'$newOs' is not a valid minimum OS version. Use one of: $($osChoices -join ', ')" }
-    if ($newOs -ne [string]$prefs.defaultMinOSVersion) { Set-YardstickPreferenceValue -Path $path -Key 'defaultMinOSVersion' -Value $newOs }
+    if ($developmentOnlyInstance -ne $wasDevelopmentOnly) {
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $developmentOnlyInstance
+    }
+    if ($developmentOnlyInstance) {
+        Write-YardstickSetupStatus 'Development-only instance: the Intune, email and scheduled task steps will be skipped.' -Level OK
+    }
 
-    if (-not $NonInteractive) {
+    if (-not $developmentOnlyInstance) {
+        Write-Host ''
+        Write-Host 'Owner is shown on every app Yardstick creates in Intune - usually your team name.' -ForegroundColor DarkGray
+        $newOwner = if ($Owner) { $Owner } else { Read-YardstickSetupValue -Prompt 'App owner' -Default ([string]$prefs.defaultOwner) }
+        if ($newOwner -ne [string]$prefs.defaultOwner) { Set-YardstickPreferenceValue -Path $path -Key 'defaultOwner' -Value $newOwner }
+
+        $osChoices = @(Get-YardstickPreferenceAllowedValues -Key 'defaultMinOSVersion')
+        $newOs = $MinOSVersion
+        if (-not $newOs) {
+            $newOs = @(Read-YardstickSetupChoice -Prompt 'Minimum Windows version for new apps:' -Choices $osChoices -Default @([string]$prefs.defaultMinOSVersion))[0]
+        }
+        if ($osChoices -notcontains $newOs) { throw "'$newOs' is not a valid minimum OS version. Use one of: $($osChoices -join ', ')" }
+        if ($newOs -ne [string]$prefs.defaultMinOSVersion) { Set-YardstickPreferenceValue -Path $path -Key 'defaultMinOSVersion' -Value $newOs }
+    }
+
+    Set-SharedContentPreferences -Path $path -Preferences $prefs
+
+    if (-not $NonInteractive -and -not $developmentOnlyInstance) {
         Write-Host ''
         Write-Host 'Optional folders: a backup location for every uploaded package, and a dropbox for' -ForegroundColor DarkGray
         Write-Host 'recipes whose installers have to be downloaded by hand (manualDownload: true).' -ForegroundColor DarkGray
         if (Read-YardstickSetupYesNo -Prompt 'Set up optional folders now?' -Default $false) {
             foreach ($key in @('Backup', 'SoftwareDropbox', 'SoftwareArchive')) {
-                $value = Read-YardstickSetupValue -Prompt "$key folder (blank to leave off)" -Default ([string]$prefs[$key])
+                $value = Read-YardstickSetupValue -Prompt "$key folder (blank to leave off)" -Default ([string]$prefs[$key]) -Path
                 if ($value -ne [string]$prefs[$key]) { Set-YardstickPreferenceValue -Path $path -Key $key -Value $value }
             }
         }
@@ -861,13 +982,36 @@ function Invoke-ScheduledTaskStep {
         if (-not (Read-YardstickSetupYesNo -Prompt 'Run Yardstick automatically on a schedule?' -Default $true)) { return 'Skipped' }
     }
 
-    $scheduleNames = [ordered]@{
-        Daily            = 'Every day'
-        MondayToFriday   = 'Monday to Friday'
-        MondayToThursday = 'Monday to Thursday'
+    # Monday first, as most calendars outside the US list the week.
+    $week = [DayOfWeek[]]('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+    $weekdays = $week[0..4]
+    $schedule = $TaskSchedule
+    # Not "if ($TaskDays)": Sunday is 0, so -TaskDays Sunday would look empty.
+    $customDays = @($TaskDays | Where-Object { $null -ne $_ })
+    # The names 1.1.0 used.
+    if ($schedule -eq 'MondayToFriday') { $schedule = 'Weekdays' }
+    if ($schedule -eq 'MondayToThursday') {
+        $schedule = 'Custom'
+        if ($customDays.Count -eq 0) { $customDays = $week[0..3] }
     }
-    $pickedDays = @(Read-YardstickSetupChoice -Prompt 'Which days should the task run?' -Choices @($scheduleNames.Values) -Default @($scheduleNames[$TaskSchedule]))[0]
-    $schedule = @($scheduleNames.Keys | Where-Object { $scheduleNames[$_] -eq $pickedDays })[0]
+    if ($customDays.Count -gt 0 -and -not $ScriptBound.ContainsKey('TaskSchedule')) { $schedule = 'Custom' }
+
+    $scheduleNames = [ordered]@{
+        Daily    = 'Every day'
+        Weekdays = 'Weekdays (Monday to Friday)'
+        Custom   = 'Custom (choose the days)'
+    }
+    $pickedSchedule = @(Read-YardstickSetupChoice -Prompt 'Which days should the task run?' -Choices @($scheduleNames.Values) -Default @($scheduleNames[$schedule]))[0]
+    $schedule = @($scheduleNames.Keys | Where-Object { $scheduleNames[$_] -eq $pickedSchedule })[0]
+    $daysOfWeek = @()
+    if ($schedule -eq 'Weekdays') {
+        $daysOfWeek = $weekdays
+    } elseif ($schedule -eq 'Custom') {
+        if ($NonInteractive -and $customDays.Count -eq 0) { throw 'Pass -TaskDays with -TaskSchedule Custom, such as -TaskDays Monday, Wednesday, Friday.' }
+        $defaultDays = if ($customDays.Count -gt 0) { $customDays } else { $weekdays }
+        $pickedDays = @(Read-YardstickSetupChoice -Prompt 'Which days?' -Choices @($week | ForEach-Object { "$_" }) -Default @($defaultDays | ForEach-Object { "$_" }) -Multiple)
+        $daysOfWeek = @($week | Where-Object { $pickedDays -contains "$_" })
+    }
 
     $time = Read-YardstickSetupValue -Prompt 'Start time (HH:mm)' -Default $TaskTime -Required
     $at = [datetime]::MinValue
@@ -927,11 +1071,17 @@ function Invoke-ScheduledTaskStep {
 
     $what = if ($group) { "recipe group '$group'" } else { 'all recipes' }
     $when = if ($credential) { 'whether or not you are signed in' } else { 'while you are signed in' }
-    $days = if ($schedule -eq 'Daily') { 'every day' } else { $scheduleNames[$schedule] }
+    $days = if ($daysOfWeek.Count -eq 0 -or $daysOfWeek.Count -eq 7) {
+        'every day'
+    } elseif ($schedule -eq 'Weekdays') {
+        'Monday to Friday'
+    } else {
+        'on ' + ($daysOfWeek -join ', ')
+    }
     $done = "Scheduled task \Yardstick\Yardstick runs $what $days at $($at.ToString('HH:mm')) as $taskUser, $when."
     $pwshPath = Get-YardstickPwshPath
     try {
-        Register-YardstickScheduledTask -ProjectRoot $Root -At $at -Schedule $schedule -Credential $credential -Group $group -PwshPath $pwshPath | Out-Null
+        Register-YardstickScheduledTask -ProjectRoot $Root -At $at -DaysOfWeek $daysOfWeek -Credential $credential -Group $group -PwshPath $pwshPath | Out-Null
     } catch {
         # Some computers only let administrators create a task that runs while nobody
         # is signed in. Try again with administrator rights at the end of setup.
@@ -941,7 +1091,7 @@ function Invoke-ScheduledTaskStep {
             Type        = 'RegisterScheduledTask'
             ProjectRoot = $Root
             At          = $at.ToString('HH:mm')
-            Schedule    = $schedule
+            DaysOfWeek  = @($daysOfWeek | ForEach-Object { "$_" })
             Group       = $group
             PwshPath    = $pwshPath
             Credential  = $credential
@@ -977,6 +1127,10 @@ foreach ($name in $Selected) {
     # The health check should see the finished setup.
     if ($name -eq 'Verify') { Invoke-ElevatedActions }
     if ($stopped) { Add-Summary $name 'Not run' ''; continue }
+    if ($name -in $GraphSteps -and (Test-SetupDevelopmentOnly)) {
+        Add-Summary $name 'Skipped' 'development-only instance'
+        continue
+    }
     try {
         $result = & "Invoke-${name}Step"
         Add-Summary $name ([string]@($result)[-1]) ''
@@ -1010,7 +1164,13 @@ if ($failed.Count -gt 0) {
     Write-Host "Fix the problems above and run .\Install-Yardstick.ps1 -Step $($failed[0].Step) to retry." -ForegroundColor Yellow
     exit 1
 }
-if (-not $Step) {
+if (-not $Step -and (Test-SetupDevelopmentOnly)) {
+    Write-Host 'This computer is set up for recipe development. Try the recipe harness:' -ForegroundColor Cyan
+    Write-Host '    .\Tests\RecipeHarness\Invoke-RecipeLab.ps1 -RecipePath .\Recipes\7zip.yaml -Stage Download'
+    Write-Host ''
+    Write-Host 'See Tests\RecipeHarness\README.md for the other harness scripts.' -ForegroundColor DarkGray
+    Write-Host 'Run .\Test-YardstickSetup.ps1 at any time to re-check this installation.' -ForegroundColor DarkGray
+} elseif (-not $Step) {
     Write-Host 'Next, try a first run with a single recipe:' -ForegroundColor Cyan
     Write-Host '    .\Yardstick.ps1 -ApplicationId 7zip -NoEmail'
     Write-Host ''

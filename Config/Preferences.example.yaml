@@ -44,11 +44,19 @@ Backup:
 # How many .intunewin files to retain per recipe in the Backup folder - the newest
 # plus N-1 and N-2 by default. Set to 0 to keep every backup forever.
 backupVersionsToKeep: 3
-# Optional. With syncSharedContent: true, each run first copies new and changed
-# icons from SharedIcons into the Icons folder (it never deletes any), and copies
-# the SharedRecipeOverrides file to Local\recipeOverrides.shared.yaml. Entries in
-# Local\recipeOverrides.yaml are layered on top, so a field set locally wins. If
-# the share cannot be reached, the run warns and uses what it last synced.
+# Optional. With syncSharedContent: true, every run and every recipe harness
+# script syncs both ways with a shared location before it starts:
+#   Icons      New and changed icons are copied in both directions between
+#              SharedIcons and the Icons folder; the newer copy wins. Nothing is
+#              deleted on either side, and a file that is not a complete PNG or
+#              JPEG image is never copied.
+#   Overrides  Entries added or changed in Local\recipeOverrides.yaml are written
+#              to the SharedRecipeOverrides file, and entries changed there are
+#              brought into the local file. Deleting an entry locally does not
+#              delete it from the share. When both sides changed the same entry,
+#              the local copy wins on this computer and a warning names it.
+# A share that cannot be reached, or a file that is malformed, is reported and
+# skipped; the run carries on with what it last synced.
 syncSharedContent: false
 # SharedIcons: \\server\share\Intune\Icons
 # SharedRecipeOverrides: \\server\share\Intune\Yardstick\recipeOverrides.yaml
@@ -57,6 +65,12 @@ syncSharedContent: false
 #####################################
 # INTUNE CONNECTION SETTINGS
 #####################################
+# Set to true on a computer that only develops and tests recipes with the recipe
+# harness (Tests\RecipeHarness). It never signs in to Intune or Microsoft Graph and
+# needs no app registration: Yardstick.ps1 refuses to run, and the shared icon and
+# recipe override sync above still works.
+developmentOnly: false
+#
 # TenantID, ClientId and ClientSecret are NOT stored here. They live in Windows
 # Credential Manager, encrypted for the account that runs Yardstick. Populate them
 # with .\Install-Yardstick.ps1 -Step AppRegistration (creates the app registration

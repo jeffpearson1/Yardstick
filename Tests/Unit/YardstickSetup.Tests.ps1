@@ -141,6 +141,10 @@ Describe "Prompt helpers" {
         It "Fails a required value that has no default" {
             { Read-YardstickSetupValue -Prompt 'Owner' -Required } | Should -Throw '*required*'
         }
+
+        It "Drops quotes around a path default" {
+            Read-YardstickSetupValue -Prompt 'Folder' -Default '"C:\My Icons"' -Path | Should -Be 'C:\My Icons'
+        }
     }
 
     Context "Interactive" {
@@ -148,6 +152,16 @@ Describe "Prompt helpers" {
             Mock Read-Host { '' } -ModuleName YardstickSetup
             Read-YardstickSetupValue -Prompt 'Owner' -Default 'IT' | Should -Be 'IT'
             Read-YardstickSetupYesNo -Prompt 'Go?' -Default $true | Should -BeTrue
+        }
+
+        It "Drops quotes around a pasted path" {
+            Mock Read-Host { ' "\\server\share\Intune Icons" ' } -ModuleName YardstickSetup
+            Read-YardstickSetupValue -Prompt 'Folder' -Path | Should -Be '\\server\share\Intune Icons'
+        }
+
+        It "Keeps quotes in a value that is not a path" {
+            Mock Read-Host { '"IT"' } -ModuleName YardstickSetup
+            Read-YardstickSetupValue -Prompt 'Owner' | Should -Be '"IT"'
         }
 
         It "Picks numbered choices" {
@@ -832,14 +846,16 @@ Describe "Register-YardstickScheduledTask" {
         }
     }
 
-    It "Runs <Schedule> with a <Class> on days <Days>" -TestCases @(
+    It "Runs on <Name> with a <Class> on days <Days>" -TestCases @(
         # DaysOfWeek is a bit mask: Sunday 1, Monday 2, Tuesday 4 ... Saturday 64.
-        @{ Schedule = 'Daily';            Class = 'MSFT_TaskDailyTrigger';  Days = $null }
-        @{ Schedule = 'MondayToFriday';   Class = 'MSFT_TaskWeeklyTrigger'; Days = 62 }
-        @{ Schedule = 'MondayToThursday'; Class = 'MSFT_TaskWeeklyTrigger'; Days = 30 }
+        @{ Name = 'no days';       DaysOfWeek = @();                                            Class = 'MSFT_TaskDailyTrigger';  Days = $null }
+        @{ Name = 'every day';     DaysOfWeek = [DayOfWeek[]](0..6);                            Class = 'MSFT_TaskDailyTrigger';  Days = $null }
+        @{ Name = 'weekdays';      DaysOfWeek = [DayOfWeek[]](1..5);                            Class = 'MSFT_TaskWeeklyTrigger'; Days = 62 }
+        @{ Name = 'Mon, Wed, Fri'; DaysOfWeek = [DayOfWeek[]]('Monday', 'Wednesday', 'Friday'); Class = 'MSFT_TaskWeeklyTrigger'; Days = 42 }
+        @{ Name = 'Sunday';        DaysOfWeek = [DayOfWeek[]]'Sunday';                          Class = 'MSFT_TaskWeeklyTrigger'; Days = 1 }
     ) {
-        param($Schedule, $Class, $Days)
-        Register-YardstickScheduledTask -ProjectRoot 'C:\Yardstick' -At ([datetime]'03:00') -Schedule $Schedule
+        param($DaysOfWeek, $Class, $Days)
+        Register-YardstickScheduledTask -ProjectRoot 'C:\Yardstick' -At ([datetime]'03:00') -DaysOfWeek $DaysOfWeek
         Should -Invoke Register-ScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter {
             $Trigger.CimClass.CimClassName -eq $Class -and $Trigger.DaysOfWeek -eq $Days -and ([datetime]$Trigger.StartBoundary).Hour -eq 3
         }
@@ -1062,15 +1078,15 @@ Describe "Invoke-YardstickElevatedAction" {
         }
     }
 
-    It "Passes on the pwsh path chosen in the user's own session, and the schedule" {
+    It "Passes on the pwsh path chosen in the user's own session, and the days" {
         Mock Register-YardstickScheduledTask { } -ModuleName YardstickSetup
         $key = [byte[]](1..32)
         $password = ConvertFrom-SecureString -SecureString (ConvertTo-SecureString 'secret' -AsPlainText -Force) -Key $key
         $pwsh = 'C:\Users\runner\AppData\Local\Microsoft\WindowsApps\pwsh.exe'
-        $action = ConvertTo-TestAction @{ Type = 'RegisterScheduledTask'; ProjectRoot = 'C:\Yardstick'; At = '05:30'; Schedule = 'MondayToThursday'; PwshPath = $pwsh; UserName = 'CONTOSO\runner'; Password = $password }
+        $action = ConvertTo-TestAction @{ Type = 'RegisterScheduledTask'; ProjectRoot = 'C:\Yardstick'; At = '05:30'; DaysOfWeek = @('Monday', 'Thursday'); PwshPath = $pwsh; UserName = 'CONTOSO\runner'; Password = $password }
 
         Invoke-YardstickElevatedAction -Action $action -Key $key
-        Should -Invoke Register-YardstickScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { $PwshPath -eq $pwsh -and $Schedule -eq 'MondayToThursday' }
+        Should -Invoke Register-YardstickScheduledTask -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { $PwshPath -eq $pwsh -and "$DaysOfWeek" -eq 'Monday Thursday' }
     }
 
     It "Grants folder access" {

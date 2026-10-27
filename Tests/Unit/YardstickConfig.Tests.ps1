@@ -83,9 +83,41 @@ Describe "Get-YardstickDefaultPreferences" {
     }
 }
 
+Describe "ConvertFrom-YardstickQuotedPath" {
+    It "Removes one pair of matching quotes and the spaces around the path" {
+        ConvertFrom-YardstickQuotedPath ' "C:\Program Files\Icons" ' | Should -Be 'C:\Program Files\Icons'
+        ConvertFrom-YardstickQuotedPath "'\\server\share\Icons'" | Should -Be '\\server\share\Icons'
+    }
+
+    It "Leaves unquoted, unmatched and empty values alone" {
+        ConvertFrom-YardstickQuotedPath 'C:\Icons' | Should -Be 'C:\Icons'
+        ConvertFrom-YardstickQuotedPath '"C:\Icons' | Should -Be '"C:\Icons'
+        ConvertFrom-YardstickQuotedPath "`"C:\Icons'" | Should -Be "`"C:\Icons'"
+        ConvertFrom-YardstickQuotedPath '' | Should -Be ''
+        ConvertFrom-YardstickQuotedPath $null | Should -Be ''
+    }
+}
+
 Describe "Import-YardstickPreferences" {
     BeforeEach {
         $script:root = New-TestProjectRoot
+    }
+
+    It "Is not a development-only instance unless the file says so" {
+        (Import-YardstickPreferences -ProjectRoot $script:root -AllowMissing).developmentOnly | Should -BeFalse
+        Set-TestPreferences -Root $script:root -Yaml 'developmentOnly: true'
+        (Import-YardstickPreferences -ProjectRoot $script:root).developmentOnly | Should -BeTrue
+    }
+
+    It "Drops quotes around folder and file paths" {
+        $icons = Join-Path $TestDrive 'Quoted Icons'
+        Set-TestPreferences -Root $script:root -Yaml @"
+Icons: '"$icons"'
+SharedRecipeOverrides: '"\\server\share\recipeOverrides.yaml"'
+"@
+        $prefs = Import-YardstickPreferences -ProjectRoot $script:root
+        $prefs.Icons | Should -Be $icons
+        $prefs.SharedRecipeOverrides | Should -Be '\\server\share\recipeOverrides.yaml'
     }
 
     It "Throws a message that points at the installer when no file exists" {
@@ -434,12 +466,28 @@ Describe "Test-YardstickPreferences" {
     It "Warns about unreachable shared paths while shared sync is on" {
         $script:prefs.syncSharedContent = $true
         $script:prefs.SharedIcons = Join-Path $TestDrive 'no-such-icons'
-        $script:prefs.SharedRecipeOverrides = Join-Path $TestDrive 'no-such-overrides.yaml'
+        $script:prefs.SharedRecipeOverrides = Join-Path $TestDrive 'no-such-share\recipeOverrides.yaml'
         $result = Test-YardstickPreferences -Preferences $script:prefs
         $result.IsValid | Should -BeTrue
         $result.Warnings | Should -HaveCount 2
         ($result.Warnings -join "`n") | Should -Match 'SharedIcons folder'
         ($result.Warnings -join "`n") | Should -Match 'SharedRecipeOverrides file'
+    }
+
+    It "Accepts a shared overrides file that does not exist yet in a reachable folder" {
+        $script:prefs.syncSharedContent = $true
+        $script:prefs.SharedRecipeOverrides = Join-Path $TestDrive 'not-created-yet.yaml'
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeTrue
+        $result.Warnings | Should -BeNullOrEmpty
+    }
+
+    It "Rejects a shared overrides path that is a folder" {
+        $script:prefs.syncSharedContent = $true
+        $script:prefs.SharedRecipeOverrides = $TestDrive
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeFalse
+        $result.Errors | Should -Match 'is a folder'
     }
 }
 

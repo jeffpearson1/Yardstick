@@ -144,6 +144,13 @@ if (-not $prefsResult.IsValid) {
     exit 1
 }
 
+# A development-only instance has no app registration and never signs in to Graph;
+# it exists to write and test recipes with the recipe harness.
+if ($Prefs.developmentOnly -eq $true) {
+    Write-Log "This is a development-only instance (developmentOnly: true in preferences.yaml), so it does not publish to Intune. Test recipes with .\Tests\RecipeHarness\Invoke-RecipeLab.ps1 instead, or set developmentOnly to false and run .\Install-Yardstick.ps1 to connect it to Intune." -Level Error
+    exit 1
+}
+
 # Run-safety timeouts. These are read before anything else touches the network on
 # purpose: every value here exists to stop the runner waiting forever, so they have
 # to be in force for the whole run, not just the recipe loop.
@@ -154,39 +161,17 @@ $Script:BitsStallTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.b
 
 Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
 
-# Shared content: with syncSharedContent on, pull the team's icons and recipe
-# overrides from the share before any recipe is read. An unreachable share only
-# warns - the run carries on with the icons it has and the last synced overrides.
+# Shared content: with syncSharedContent on, icons and recipe overrides are synced
+# both ways with the share before any recipe is read. The sync never throws: an
+# unreachable share or a malformed file only warns, and the run carries on with the
+# icons it has and the last synced overrides.
 $SharedOverridesCachePath = $null
 if ($Prefs.syncSharedContent -eq $true) {
-    if (-not [string]::IsNullOrWhiteSpace($Prefs.SharedIcons)) {
-        try {
-            $iconSync = Sync-YardstickSharedIcons -Source $Prefs.SharedIcons -Destination $Prefs.Icons
-            Write-Log "Synced $($iconSync.Copied.Count) icon(s) from $($Prefs.SharedIcons); $($iconSync.Unchanged) unchanged."
-            foreach ($name in $iconSync.Copied) { Write-Log "Copied icon $name from the shared icon folder." -Level Detail }
-            foreach ($failure in $iconSync.Failed) {
-                Write-Log "Could not copy icon $($failure.Name) from $($Prefs.SharedIcons): $($failure.Error)" -Level Warning
-            }
-        } catch {
-            Write-Log "Could not sync icons from $($Prefs.SharedIcons): $($_.Exception.Message) Using the icons already in $($Prefs.Icons)." -Level Warning
-        }
-    }
-
     $SharedOverridesCachePath = Get-YardstickSharedRecipeOverridesCachePath -ProjectRoot $ProjectRoot
-    if (-not [string]::IsNullOrWhiteSpace($Prefs.SharedRecipeOverrides)) {
-        try {
-            $entryCount = Sync-YardstickSharedRecipeOverrides -Source $Prefs.SharedRecipeOverrides -CachePath $SharedOverridesCachePath
-            Write-Log "Synced $entryCount shared recipe override(s) from $($Prefs.SharedRecipeOverrides)."
-        } catch {
-            $cache = Get-Item -LiteralPath $SharedOverridesCachePath -ErrorAction SilentlyContinue
-            $fallback = if ($cache) {
-                "Using the copy synced on $($cache.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))."
-            } else {
-                'There is no synced copy yet, so only the local overrides apply.'
-            }
-            Write-Log "Could not sync recipe overrides: $($_.Exception.Message) $fallback" -Level Warning
-        }
-    }
+    $syncMessages = Invoke-YardstickSharedContentSync -Preferences $Prefs `
+        -LocalOverridesPath (Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot) `
+        -SharedOverridesCachePath $SharedOverridesCachePath
+    foreach ($message in $syncMessages) { Write-Log $message.Message -Level $message.Level }
 }
 
 # Site-specific recipe fields, such as scope tags, live in Local\recipeOverrides.yaml
