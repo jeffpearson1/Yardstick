@@ -5,8 +5,7 @@ url: https://github.com/sqlitebrowser/sqlitebrowser/releases
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/sqlitebrowser/sqlitebrowser/releases/latest' `
-    -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/sqlitebrowser/sqlitebrowser/releases/latest'
 
   $asset = $release.assets |
     Where-Object { $_.name -match '^DB\.Browser\.for\.SQLite-v(\d+(?:\.\d+){1,3})-win64\.msi$' } |

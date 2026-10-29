@@ -481,16 +481,65 @@ Describe "Main processing loop control flow" {
         $script:YardstickAst = [System.Management.Automation.Language.Parser]::ParseFile(
             $script:YardstickPath, [ref]$null, [ref]$null)
 
-        # The main loop is the foreach over $Applications.
+        # The main loop is the foreach over each pass of recipes: every recipe
+        # first, then the ones GitHub asked to wait.
         $script:MainLoop = $script:YardstickAst.Find({
             param($node)
             $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
-            $node.Condition.Extent.Text -match '\$Applications\b'
+            $node.Condition.Extent.Text -match '\$RecipePass\b'
         }, $true)
     }
 
     It "finds the main processing loop" {
         $script:MainLoop | Should -Not -BeNullOrEmpty
+    }
+
+    It "runs the recipes GitHub asked to wait in a later pass" {
+        $passLoop = $script:MainLoop.Parent
+        while ($passLoop -and $passLoop -isnot [System.Management.Automation.Language.WhileStatementAst]) {
+            $passLoop = $passLoop.Parent
+        }
+        $passLoop | Should -Not -BeNullOrEmpty
+        $passLoop.Condition.Extent.Text | Should -Match '\$RecipePass\.Count'
+
+        # The pass loop's last statement fetches the next pass.
+        $last = $passLoop.Body.Statements[-1]
+        $last.Extent.Text | Should -Match '^\$RecipePass\s*=\s*@\(Get-YardstickDeferredRecipe\)$'
+    }
+
+    It "offers the recipe to Add-YardstickGitHubDeferral before failing <Stage>" -ForEach @(
+        @{ Stage = 'Pre-Download Script' }
+        @{ Stage = 'Version Validation' }
+        @{ Stage = 'Download Script' }
+        @{ Stage = 'Post-Download Script' }
+    ) {
+        $deferral = $script:MainLoop.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'Add-YardstickGitHubDeferral' -and
+            $node.Extent.Text -match [regex]::Escape("`"$Stage`"")
+        }, $true)
+        $deferral | Should -Not -BeNullOrEmpty
+
+        # if (Add-YardstickGitHubDeferral ...) { continue }, ahead of the failure.
+        $if = $deferral.Parent
+        while ($if -and $if -isnot [System.Management.Automation.Language.IfStatementAst]) { $if = $if.Parent }
+        $if.Clauses[0].Item2.Extent.Text | Should -Match '^\{\s*continue\s*\}$'
+        $failure = $if.Parent.Statements | Where-Object {
+            $_.Extent.StartOffset -gt $if.Extent.EndOffset -and $_.Extent.Text -match '^Add-FailedApplication\b'
+        } | Select-Object -First 1
+        $failure.Extent.Text | Should -Match ([regex]::Escape("-FailureStage `"$Stage`""))
+    }
+
+    It "does not let minRunInterval skip a recipe that was set aside" {
+        # The first attempt recorded the run, so the replay would otherwise be
+        # skipped as run too recently.
+        $guard = $script:MainLoop.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.IfStatementAst] -and
+            $node.Clauses[0].Item1.Extent.Text -match 'MinRunInterval'
+        }, $true)
+        $guard.Clauses[0].Item1.Extent.Text | Should -Match '-not \$IsDeferredReplay'
     }
 
     It "sets ErrorActionPreference to Stop, which is what makes Write-Error terminating" {

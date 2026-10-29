@@ -3,7 +3,7 @@ urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
   $apiUrl = 'https://api.github.com/repos/darktable-org/darktable/releases/latest'
-  $release = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi $apiUrl
   if (-not $release) { throw 'Could not retrieve darktable release information from GitHub.' }
 
   $version = [string]$release.tag_name

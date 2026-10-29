@@ -71,6 +71,10 @@ Icons are not included for licensing reasons. Put the icons your recipes need in
 
 Recipes that call a vendor API with their own keys read them with `Get-Secrets -VaultName <name>`. Store each vault in Credential Manager with `.\Set-YardstickCredential.ps1 -Secret <name>`, as the account that runs Yardstick. See [Recipe secrets](Docs/Installation.md#recipe-secrets).
 
+### GitHub API token
+
+Many recipes check GitHub for their latest release. GitHub allows 60 anonymous calls an hour, which one full run nearly uses up, so store a read-only token with `.\Set-YardstickCredential.ps1 -GitHub` to raise that to 5,000. See [GitHub API token](Docs/Installation.md#github-api-token).
+
 ### Recipe Tips and Tricks
 * Use the defaults (configurable in preferences.yaml) for as much stuff as you can. All the available default settings are in the example preferences.yaml file.
 * The installScript, uninstallScript, detectionScript and registryDetectionKey have an extra function - if you use ```<version>```, ```<filename>```, or ```<productcode>``` in them it will be replaced with the appropriate value after all the parameters and defaults are imported, processed, and the preDownloadScript has run.

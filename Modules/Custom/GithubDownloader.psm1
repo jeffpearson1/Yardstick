@@ -30,8 +30,11 @@ class GithubDownloader {
     }
 
     [void] Update() {
-        $releaseEndpoint = "https://api.github.com/repos/$(($this.URL -replace "https://github.com/|/releases").trimEnd("/"))/releases"
-        $releaseResponse = Invoke-RestMethod $releaseEndpoint -TimeoutSec 120
+        # Invoke-YardstickGitHubApi (YardstickGitHub.psm1, loaded globally with
+        # Yardstick) attaches the stored token and handles GitHub's rate limits.
+        $releasePath = "repos/$(($this.URL -replace "https://github.com/|/releases").trimEnd("/"))/releases"
+        $releaseEndpoint = "https://api.github.com/$releasePath"
+        $releaseResponse = Invoke-YardstickGitHubApi $releasePath
         $releaseLatest = $releaseResponse | Where-Object Prerelease -eq $this.Prerelease |
             Sort-Object published_at -Descending | Select-Object -First 1
         if (-not $releaseLatest) {

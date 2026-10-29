@@ -2,7 +2,7 @@ url: https://github.com/mltframework/shotcut
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/mltframework/shotcut/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/mltframework/shotcut/releases/latest'
   $version = $release.tag_name.TrimStart('v')
   $asset = $release.assets | Where-Object { $_.name -match '^shotcut-win64-[0-9.]+\.exe$' } | Select-Object -First 1
   if (-not $asset) { throw 'Could not find the Shotcut win64 installer.' }

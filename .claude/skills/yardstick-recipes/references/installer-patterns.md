@@ -110,8 +110,16 @@ preDownloadScript: |
 
 Set `$downloader.Prerelease = $true` only if the vendor ships through prereleases.
 Reference: `Recipes\powershell7.yaml`, `Recipes\dbeaver.yaml`, `Recipes\bluej.yaml`,
-`Recipes\djv.yaml`. Calling the GitHub REST API directly is also acceptable when
+`Recipes\djv.yaml`. Querying the GitHub REST API yourself is also acceptable when
 you need asset-selection logic the module does not express — see `sharex.yaml`.
+Always do it with `Invoke-YardstickGitHubApi '<api url or repos/... path>'`, never
+`Invoke-RestMethod`: the helper sends the stored GitHub token and waits as long as
+GitHub asks when it throttles, and `Test-RecipeSchema` warns on a direct call. Read
+`raw.githubusercontent.com` files (winget-pkgs manifests) with
+`Invoke-YardstickGitHubRaw "<full url>"`, which honours the same waits without the
+token — see `kindle.yaml`. Let either helper's error stop the script; the runner
+recognises it and replays the recipe at the end of the run. Release-asset downloads
+are not API calls and stay as plain requests.
 
 ## JetBrains IDEs
 

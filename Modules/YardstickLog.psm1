@@ -326,6 +326,7 @@ function New-YardstickAppState {
         Succeeded    = $false
         Failures     = [System.Collections.Generic.List[PSObject]]::new()
         ErrorLines   = [System.Collections.Generic.List[string]]::new()
+        Deferred     = $false
     }
 }
 
@@ -353,12 +354,20 @@ function ConvertFrom-YardstickLog {
         if ($m -match '^Starting update for (.+?)\.\.\.$') {
             if ($current) { $apps.Add($current) }
             $current = New-YardstickAppState -Id $Matches[1]
+            # A recipe GitHub asked to wait runs again later in the run; report only
+            # how that ended.
+            foreach ($deferred in @($apps | Where-Object { $_.Deferred -and $_.Id -eq $current.Id })) {
+                [void]$apps.Remove($deferred)
+            }
             continue
         }
 
         if (-not $current) { continue }
 
         switch -Regex ($m) {
+            '^(?:WARNING: )?Deferring \S+ until ' {
+                $current.Deferred = $true
+            }
             '^Retrieving all versions of application with display name: (.+)$' {
                 $current.DisplayName = $Matches[1].Trim()
             }

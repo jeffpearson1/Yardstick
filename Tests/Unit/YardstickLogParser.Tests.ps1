@@ -167,6 +167,38 @@ Describe "ConvertFrom-YardstickLog" {
         $apps[0].Dependents['Old Bundle'] | Should -Be 'Skipped (blocklisted)'
         $apps[0].Dependents['New Bundle'] | Should -Be 'Skipped (blocklisted)'
     }
+
+    It "reports a recipe GitHub asked to wait once, by how its replay ended" {
+        $apps = @(ConvertFrom-Fixture @'
+10/28/2026 08:00:01 - Starting update for kindle...
+10/28/2026 08:00:02 - [kindle] WARNING: GitHub throttled https://raw.githubusercontent.com/x.yaml with HTTP 429. No more calls to raw.githubusercontent.com until 08:01:02.
+10/28/2026 08:00:02 - [kindle] WARNING: Deferring kindle until 08:01:02: GitHub asked Yardstick to wait before calling GitHub again. It runs again after the other recipes.
+10/28/2026 08:00:03 - Starting update for snagit...
+10/28/2026 08:00:04 - [snagit] WARNING: Deferring snagit until 08:01:02: GitHub asked Yardstick to wait before calling GitHub again. It runs again after the other recipes.
+10/28/2026 08:00:05 - Starting update for putty...
+10/28/2026 08:00:06 - [putty] Done: PuTTY 0.83 (Maintained).
+10/28/2026 08:01:03 - Starting update for kindle...
+10/28/2026 08:01:04 - [kindle] Running kindle again now that GitHub's wait has passed.
+10/28/2026 08:01:05 - [kindle] Done: Kindle 2.8 (Updated).
+10/28/2026 08:01:06 - Starting update for snagit...
+10/28/2026 08:01:07 - [snagit] ERROR: Pre-Download Script failed: GitHub asked Yardstick to wait until 09:30, past the 75 minutes a run waits for GitHub.
+'@)
+        @($apps.Id) | Should -Be @('putty', 'kindle', 'snagit')
+        ($apps | Where-Object Id -eq 'kindle').Succeeded | Should -BeTrue
+        $snagit = $apps | Where-Object Id -eq 'snagit'
+        $snagit.Succeeded | Should -BeFalse
+        $snagit.Failures[0].Stage | Should -Be 'Pre-Download Script'
+    }
+
+    It "keeps a recipe that was set aside but never replayed" {
+        $apps = @(ConvertFrom-Fixture @'
+10/28/2026 08:00:01 - Starting update for kindle...
+10/28/2026 08:00:02 - [kindle] WARNING: Deferring kindle until 08:01:02: GitHub asked Yardstick to wait before calling GitHub again. It runs again after the other recipes.
+10/28/2026 08:00:03 - Starting update for putty...
+'@)
+        @($apps.Id) | Should -Be @('kindle', 'putty')
+        $apps[0].Deferred | Should -BeTrue
+    }
 }
 
 Describe "Get-YardstickFailureStage" {

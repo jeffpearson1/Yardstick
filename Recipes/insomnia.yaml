@@ -2,7 +2,7 @@ url: https://github.com/Kong/insomnia
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Kong/insomnia/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipeAuthor' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/Kong/insomnia/releases/latest'
   if (-not $release) { throw 'Could not retrieve Insomnia release information from GitHub.' }
   $version = ([string]$release.tag_name) -replace '^core@', '' -replace '^v', ''
   if ($version -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "Unexpected Insomnia version string '$version'." }

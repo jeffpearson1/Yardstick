@@ -113,7 +113,27 @@ When a vendor site only serves browsers, call `Get-YardstickChromeUserAgent` rat
 $Products = Invoke-RestMethod -Uri https://api.articulate.com/product-artifacts -UserAgent (Get-YardstickChromeUserAgent)
 ```
 
-APIs that just want to know who is calling, such as GitHub's, are better served by a plain `'Yardstick'` agent.
+APIs that just want to know who is calling are better served by a plain `'Yardstick'` agent.
+
+#### GitHub API
+
+Call `api.github.com` only through `Invoke-YardstickGitHubApi`, never with `Invoke-RestMethod`. It takes a full API URL or a path relative to it and returns what `Invoke-RestMethod` would:
+
+```powershell
+$release = Invoke-YardstickGitHubApi 'repos/brave/brave-browser/releases/latest'
+```
+
+It sends the GitHub token stored with `.\Set-YardstickCredential.ps1 -GitHub` (see [GitHub API token](Installation.md#github-api-token)) and identifies Yardstick to GitHub. Without a token every recipe on the server shares 60 calls an hour. `GithubDownloader` already uses it.
+
+Read files from `raw.githubusercontent.com`, such as winget-pkgs manifests, with `Invoke-YardstickGitHubRaw`, which takes the full URL. It never sends the token:
+
+```powershell
+$manifest = Invoke-YardstickGitHubRaw "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/a/Amazon/Kindle/$version/Amazon.Kindle.installer.yaml"
+```
+
+Both wait as long as GitHub asks when it throttles a call, as GitHub's terms require: the `Retry-After` time, the reset time once the rate limit is used up, or otherwise a minute, doubling while GitHub keeps throttling. The wait applies to every later call to any GitHub host, from any recipe. In a run the recipe is set aside and run again at the end, once the wait has passed, while the other recipes carry on; see [When GitHub asks Yardstick to wait](Installation.md#when-github-asks-yardstick-to-wait). So let the error from either helper stop the script rather than catching it and trying something else against GitHub. `Test-RecipeSchema` warns about a script that calls either host directly.
+
+Downloads from `github.com/.../releases/download/...` are not API calls; fetch those as usual.
 
 Scripts execute in this order:
 

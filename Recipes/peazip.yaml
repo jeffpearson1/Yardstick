@@ -2,7 +2,7 @@ url: https://github.com/peazip/PeaZip/releases
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/peazip/PeaZip/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/peazip/PeaZip/releases/latest'
   $asset = $release.assets |
     Where-Object { $_.name -match '^peazip-[0-9]+(?:\.[0-9]+)+\.WIN64\.exe$' } |
     Select-Object -First 1

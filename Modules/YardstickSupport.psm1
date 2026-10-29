@@ -5025,6 +5025,34 @@ function Test-RecipeSchema {
         }
     }
 
+    # GitHub API calls have to go through Invoke-YardstickGitHubApi, which attaches the
+    # stored token and stops calling while GitHub has asked Yardstick to wait. A direct
+    # call is anonymous (60 an hour for the whole server) and carries on regardless.
+    # Files on raw.githubusercontent.com likewise go through Invoke-YardstickGitHubRaw,
+    # which honours the same waits. This catches the usual shapes: the URL inline, in
+    # the recipe's url field, or in a variable assigned from a literal.
+    $gitHubHelpers = @(
+        @{ Host = 'api.github.com'; What = 'calls the GitHub API'; Helper = 'Invoke-YardstickGitHubApi'; Why = "the stored GitHub token is used and GitHub's rate limits are respected" }
+        @{ Host = 'raw.githubusercontent.com'; What = 'reads raw.githubusercontent.com'; Helper = 'Invoke-YardstickGitHubRaw'; Why = 'it waits as long as GitHub asks when it throttles' }
+    )
+    foreach ($gitHubHelper in $gitHubHelpers) {
+        $hostPattern = [regex]::Escape($gitHubHelper.Host)
+        $gitHubVariables = [System.Collections.Generic.List[string]]::new()
+        if ([string]$Recipe['url'] -match $hostPattern) { $gitHubVariables.Add('url') }
+        foreach ($match in [regex]::Matches($scriptContent, '(?im)\$(\w+)\s*=\s*["''][^"''\r\n]*' + $hostPattern)) {
+            $gitHubVariables.Add($match.Groups[1].Value)
+        }
+        $gitHubReference = @($hostPattern) + @($gitHubVariables | ForEach-Object { '\$' + [regex]::Escape($_) + '\b' })
+        $directGitHubCallPattern = '(?im)^.*\b(Invoke-RestMethod|Invoke-WebRequest|irm|iwr|curl(\.exe)?)\b.*(' + ($gitHubReference -join '|') + ')'
+        foreach ($field in 'preDownloadScript', 'downloadScript', 'postDownloadScript') {
+            $body = [string]$Recipe[$field]
+            if ([string]::IsNullOrWhiteSpace($body)) { continue }
+            if ($body -match $directGitHubCallPattern) {
+                $warnings.Add("Field '$field' $($gitHubHelper.What) directly. Use $($gitHubHelper.Helper) instead, so $($gitHubHelper.Why).")
+            }
+        }
+    }
+
     # Always-required fields
     $requiredFields = @('id', 'displayName', 'detectionType', 'iconFile', 'description', 'publisher')
     foreach ($field in $requiredFields) {

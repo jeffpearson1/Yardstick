@@ -2,7 +2,7 @@ url: https://github.com/BtbN/FFmpeg-Builds
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest'
   $candidates = foreach ($asset in $release.assets) {
     if ($asset.name -match '^ffmpeg-n([0-9]+(?:\.[0-9]+)+)-latest-win64-gpl-\1\.zip$') {
       [PSCustomObject]@{ Asset = $asset; Version = [version]$matches[1] }

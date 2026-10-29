@@ -23,6 +23,10 @@ An optional SMTP account for emailDeliveryMethod 'smtp' is stored the same way,
 under `smtpCredentialTarget` (default "Yardstick:Smtp"), with the SMTP user name
 as the credential user name and the password as the blob.
 
+An optional GitHub API token (a fine-grained personal access token) is stored
+under "Yardstick:GitHub" with "github" as the credential user name and the token
+as the blob. YardstickGitHub.psm1 attaches it to api.github.com calls only.
+
 Recipe secret vaults (read by Get-Secrets) are stored one per credential, under
 "Yardstick:Secret:<VaultName>", with the vault name as the credential user name
 and the vault's key/value pairs as a JSON object in the blob.
@@ -30,6 +34,7 @@ and the vault's key/value pairs as a JSON object in the blob.
 
 $Script:DefaultCredentialTarget = 'Yardstick:IntuneGraph'
 $Script:DefaultSmtpCredentialTarget = 'Yardstick:Smtp'
+$Script:DefaultGitHubCredentialTarget = 'Yardstick:GitHub'
 $Script:SecretVaultTargetPrefix = 'Yardstick:Secret:'
 $Script:DefaultExpirationWarningDays = 30
 $Script:DefaultNotificationIntervalHours = 24
@@ -1035,6 +1040,139 @@ function Register-YardstickSmtpCredential {
 }
 
 
+function Get-YardstickGitHubToken {
+    <#
+    .SYNOPSIS
+    Reads the stored GitHub API token from Windows Credential Manager.
+
+    .PARAMETER Target
+    Credential Manager target name. Defaults to "Yardstick:GitHub".
+
+    .OUTPUTS
+    The token as a string, or $null when none is stored.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [string]$Target = $Script:DefaultGitHubCredentialTarget
+    )
+
+    Initialize-YardstickCredentialType
+
+    $userName = $null
+    $token = $null
+    if (-not [YardstickCredentialNative]::Read($Target, [ref]$userName, [ref]$token)) {
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        return $null
+    }
+    return $token.Trim()
+}
+
+
+function Set-YardstickGitHubToken {
+    <#
+    .SYNOPSIS
+    Writes the GitHub API token to Windows Credential Manager.
+
+    .PARAMETER Target
+    Credential Manager target name.
+
+    .PARAMETER Token
+    The personal access token. Accepts a String or SecureString.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [string]$Target = $Script:DefaultGitHubCredentialTarget,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNull()]
+        $Token
+    )
+
+    Initialize-YardstickCredentialType
+
+    $plainToken = ConvertTo-PlainSecret $Token
+    if ([string]::IsNullOrWhiteSpace($plainToken)) {
+        throw "Token cannot be empty."
+    }
+
+    if ($PSCmdlet.ShouldProcess($Target, "Write Yardstick GitHub token to Windows Credential Manager")) {
+        [YardstickCredentialNative]::Write($Target, 'github', $plainToken.Trim(), "Yardstick GitHub API token")
+        Write-CredentialLog "Stored the GitHub API token in Windows Credential Manager under target '$Target'."
+    }
+}
+
+
+function Remove-YardstickGitHubToken {
+    <#
+    .SYNOPSIS
+    Deletes the stored GitHub API token from Windows Credential Manager.
+
+    .PARAMETER Target
+    Credential Manager target name.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [string]$Target = $Script:DefaultGitHubCredentialTarget
+    )
+
+    Initialize-YardstickCredentialType
+
+    if ($PSCmdlet.ShouldProcess($Target, "Delete Yardstick GitHub token from Windows Credential Manager")) {
+        if ([YardstickCredentialNative]::Delete($Target)) {
+            Write-CredentialLog "Removed the GitHub API token stored under target '$Target'."
+            return $true
+        }
+        Write-CredentialLog "No GitHub API token was stored under target '$Target'."
+        return $false
+    }
+}
+
+
+function Register-YardstickGitHubToken {
+    <#
+    .SYNOPSIS
+    Prompts for a GitHub API token and stores it securely.
+
+    .DESCRIPTION
+    Optional. Without a token, Yardstick calls the GitHub API anonymously, which
+    GitHub limits to 60 requests an hour per IP address - about one full run. A
+    token raises that to 5,000. The token is collected as a SecureString so it
+    never appears in the console or in PSReadLine history.
+
+    .PARAMETER Target
+    Credential Manager target name.
+
+    .OUTPUTS
+    The stored token.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [string]$Target = $Script:DefaultGitHubCredentialTarget
+    )
+
+    Write-Host ""
+    Write-Host "Create a fine-grained personal access token at https://github.com/settings/personal-access-tokens/new" -ForegroundColor Cyan
+    Write-Host "with Repository access 'Public repositories (read-only)', no permissions, and an expiration date." -ForegroundColor Cyan
+    Write-Host "GitHub's terms allow one token per installation: do not share it with other Yardstick servers." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "The token will be stored in Windows Credential Manager under target '$Target'," -ForegroundColor Cyan
+    Write-Host "encrypted for the current Windows user. Store it as the account that runs Yardstick." -ForegroundColor Cyan
+    Write-Host ""
+
+    $secureToken = Read-Host "GitHub token" -AsSecureString
+    if (-not $secureToken -or $secureToken.Length -eq 0) { throw "A GitHub token is required." }
+
+    Set-YardstickGitHubToken -Target $Target -Token $secureToken
+    Write-Host ""
+
+    return Get-YardstickGitHubToken -Target $Target
+}
+
+
 function Get-YardstickSecretVaultTarget {
     <#
     .SYNOPSIS
@@ -1301,6 +1439,10 @@ Export-ModuleMember -Function @(
     'Set-YardstickSmtpCredential',
     'Remove-YardstickSmtpCredential',
     'Register-YardstickSmtpCredential',
+    'Get-YardstickGitHubToken',
+    'Set-YardstickGitHubToken',
+    'Remove-YardstickGitHubToken',
+    'Register-YardstickGitHubToken',
     'Get-YardstickSecretVaultTarget',
     'Get-YardstickSecretVault',
     'Set-YardstickSecretVault',

@@ -2,7 +2,7 @@ url: https://github.com/wxMaxima-developers/wxmaxima
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/wxMaxima-developers/wxmaxima/releases/latest' -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/wxMaxima-developers/wxmaxima/releases/latest'
   if (-not $release) { throw 'Could not retrieve wxMaxima release information from GitHub.' }
   $asset = @($release.assets | Where-Object { $_.name -match '^wxMaxima-(?<ver>\d+(?:\.\d+)+)-win64\.exe$' -or $_.name -match '^wxmaxima-(?<ver>\d+(?:\.\d+)+)-Windows-x64\.exe$' })[0]
   if (-not $asset) { throw 'Could not find wxMaxima Windows x64 installer asset.' }

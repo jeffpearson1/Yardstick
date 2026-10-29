@@ -272,6 +272,52 @@ Describe "Test-RecipeSchema" {
         }
     }
 
+    Context "Direct GitHub calls" {
+        It "Warns on <Script>" -ForEach @(
+            @{ Script = "`$release = Invoke-RestMethod -Uri 'https://api.github.com/repos/o/r/releases/latest'" }
+            @{ Script = "`$release = Invoke-WebRequest 'https://api.github.com/repos/o/r/releases' -UseBasicParsing | ConvertFrom-Json" }
+            @{ Script = "`$apiUrl = 'https://api.github.com/repos/o/r/releases/latest'`n`$release = Invoke-RestMethod -Uri `$apiUrl -Headers @{ 'User-Agent' = 'x' }" }
+        ) {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = $Script
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "Field 'preDownloadScript' calls the GitHub API directly" } | Should -Not -BeNullOrEmpty
+            $result.IsValid | Should -BeTrue
+        }
+
+        It "Warns when the recipe's url field is the API URL and the script fetches it" {
+            $recipe = New-ValidRecipe
+            $recipe['url'] = 'https://api.github.com/repos/o/r/releases/latest'
+            $recipe['preDownloadScript'] = "`$release = Invoke-RestMethod -Uri `$url"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "calls the GitHub API directly" } | Should -Not -BeNullOrEmpty
+        }
+
+        It "Warns on a direct read of raw.githubusercontent.com: <Script>" -ForEach @(
+            @{ Script = "`$yaml = Invoke-RestMethod 'https://raw.githubusercontent.com/microsoft/winget-pkgs/master/x.yaml'" }
+            @{ Script = "`$manifestUrl = `"https://raw.githubusercontent.com/microsoft/winget-pkgs/master/`$version.yaml`"`n`$yaml = Invoke-WebRequest `$manifestUrl -UseBasicParsing" }
+        ) {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = $Script
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "Field 'preDownloadScript' reads raw\.githubusercontent\.com directly\. Use Invoke-YardstickGitHubRaw" } | Should -Not -BeNullOrEmpty
+            $result.Warnings | Where-Object { $_ -match "GitHub API" } | Should -BeNullOrEmpty
+            $result.IsValid | Should -BeTrue
+        }
+
+        It "Does not warn on <Script>" -ForEach @(
+            @{ Script = "`$release = Invoke-YardstickGitHubApi 'repos/o/r/releases/latest'" }
+            @{ Script = "`$apiUrl = 'https://api.github.com/repos/o/r/releases/latest'`n`$release = Invoke-YardstickGitHubApi `$apiUrl" }
+            @{ Script = "`$yaml = Invoke-YardstickGitHubRaw 'https://raw.githubusercontent.com/microsoft/winget-pkgs/master/x.yaml'" }
+            @{ Script = "Invoke-WebRequest -Uri 'https://github.com/o/r/releases/download/v1/app.msi' -OutFile app.msi" }
+        ) {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = $Script
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "GitHub API|raw\.githubusercontent\.com" } | Should -BeNullOrEmpty
+        }
+    }
+
     Context "additionalDetectionRules" {
         BeforeAll {
             function New-AdditionalRule {

@@ -5,8 +5,7 @@ preDownloadScript: |
   # Prefer the UB-Mannheim GitHub release assets over digi.bib.uni-mannheim.de. The
   # university host intermittently returns HTTP 403 to automated clients (it did so during
   # an install-test run), whereas the GitHub release serves the identical installer.
-  $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/UB-Mannheim/tesseract/releases?per_page=30' `
-    -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $releases = Invoke-YardstickGitHubApi 'https://api.github.com/repos/UB-Mannheim/tesseract/releases?per_page=30'
 
   $candidates = foreach ($release in ($releases | Where-Object { -not $_.draft })) {
     foreach ($asset in $release.assets) {

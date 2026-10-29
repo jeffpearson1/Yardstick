@@ -6,8 +6,7 @@ url: https://github.com/volatilityfoundation/volatility3/releases
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/volatilityfoundation/volatility3/releases?per_page=30' `
-    -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $releases = Invoke-YardstickGitHubApi 'https://api.github.com/repos/volatilityfoundation/volatility3/releases?per_page=30'
 
   $candidate = $null
   foreach ($release in ($releases | Where-Object { -not $_.prerelease -and -not $_.draft })) {
