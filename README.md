@@ -97,6 +97,7 @@ Many recipes check GitHub for their latest release. GitHub allows 60 anonymous c
 
 Versions can be locked to a specific value, or set of values, by adding ```versionLock:``` to a recipe, or to the recipe's entry in `Local\recipeOverrides.yaml` to lock it for your site only. There is no preference for it. Valid characters are numbers (0-9), decimals (.) and x. When the value is processed, x will be replaced with numbers of any length. 
 Example: ```versionLock: 19.42.2.x``` will match versions ```19.42.2.24335``` and ```19.42.2.1``` but not ```19.42.3.442```.
+A lock matches whole numbers: ```versionLock: 3.1``` matches ```3.1.4``` but not ```3.12.0```.
 
 ### Date Offsets
 

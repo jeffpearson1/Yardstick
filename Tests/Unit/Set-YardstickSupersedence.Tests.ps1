@@ -1125,7 +1125,7 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         Should -Invoke Remove-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'from' }
     }
 
-    It "leaves a filtered All Devices assignment alone rather than widening it to every device" {
+    It "carries an All Devices assignment's filter across" {
         Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
             @([PSCustomObject]@{
                 Type = '#microsoft.graph.allDevicesAssignmentTarget'
@@ -1136,14 +1136,28 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
         $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
-        Should -Invoke Add-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
-        Should -Invoke Remove-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
+        Should -Invoke Add-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'to' -and $FilterID -eq 'filter-1' -and $FilterMode -eq 'include' }
+        Should -Invoke Remove-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'from' }
     }
 
-    It "protects the source from deletion when it holds an assignment that cannot be migrated" {
-        # The filter is only readable by id and only settable by name, so this
-        # assignment cannot be recreated on $to. Pruning $from would destroy
-        # targeting nobody can put back, so retention has to leave it alone.
+    It "carries an All Users assignment's filter across" {
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.allLicensedUsersAssignmentTarget'
+                GroupID = $null; GroupMode = $null; Intent = 'available'
+                FilterType = 'exclude'; FilterID = 'filter-2'; Notifications = 'showAll'
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
+        Should -Invoke Add-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'to' -and $FilterID -eq 'filter-2' -and $FilterMode -eq 'exclude' }
+        Should -Invoke Remove-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'from' }
+    }
+
+    It "does not protect the source once a filtered All Devices assignment has been migrated" {
+        # The filter now travels with the assignment, so nothing is left behind
+        # on the source and retention is free to prune it.
         Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
             @([PSCustomObject]@{
                 Type = '#microsoft.graph.allDevicesAssignmentTarget'
@@ -1155,7 +1169,25 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
         $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -ProtectedSourceIds $protected
-        $protected.Contains('from') | Should -BeTrue
+        $protected.Count | Should -Be 0
+    }
+
+    It "carries Delivery Optimization priority and restart settings across" {
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-incl'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                DeliveryOptimizationPriority = 'foreground'
+                RestartSettings = [PSCustomObject]@{ gracePeriodInMinutes = 1440; countdownDisplayBeforeRestartInMinutes = 15; restartNotificationSnoozeDurationInMinutes = 240 }
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
+        Should -Invoke Add-YardstickWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            $DeliveryOptimizationPriority -eq 'foreground' -and $RestartSettings.gracePeriodInMinutes -eq 1440
+        }
     }
 
     It "does not protect the source when the assignment simply belongs to the other intent pass" {
@@ -1287,6 +1319,21 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         Should -Invoke Add-YardstickWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 0
         Should -Invoke Add-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
         Should -Invoke Add-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 0
+    }
+
+    It "protects the source from deletion when it holds a target it cannot migrate" {
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.configurationManagerCollectionAssignmentTarget'
+                GroupID = $null; GroupMode = $null; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+            })
+        }
+        $protected = [System.Collections.Generic.HashSet[string]]::new()
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -ProtectedSourceIds $protected
+        $protected.Contains('from') | Should -BeTrue
     }
 
     It "leaves the source untouched under CopyOnly" {
