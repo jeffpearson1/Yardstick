@@ -1,8 +1,9 @@
 using module ..\..\Modules\Custom\GithubDownloader.psm1
 
 BeforeAll {
-    # The class calls Invoke-RestMethod from its own scope, where Mock cannot reach.
-    # A global function of the same name comes ahead of the cmdlet.
+    # The class calls Invoke-YardstickGitHubApi from its own scope, where Mock cannot
+    # reach. In a run it finds the real one in the global scope, so a global function
+    # stands in for it here.
     function New-TestRelease {
         param([string]$Tag, [string[]]$Assets, [string]$Published = '2026-10-01T00:00:00Z', [bool]$Prerelease = $false)
         [PSCustomObject]@{
@@ -15,14 +16,14 @@ BeforeAll {
         }
     }
 
-    function global:Invoke-RestMethod {
+    function global:Invoke-YardstickGitHubApi {
         $Global:GithubDownloaderTestUri = $args[0]
         $Global:GithubDownloaderTestReleases
     }
 }
 
 AfterAll {
-    Remove-Item Function:\Invoke-RestMethod -ErrorAction SilentlyContinue
+    Remove-Item Function:\Invoke-YardstickGitHubApi -ErrorAction SilentlyContinue
     Remove-Variable GithubDownloaderTestReleases, GithubDownloaderTestUri -Scope Global -ErrorAction SilentlyContinue
 }
 
@@ -38,7 +39,7 @@ Describe "GithubDownloader" {
     It "Takes the newest release, its version and its one matching file" {
         $downloader = [GithubDownloader]::new('https://github.com/owner/app/releases', 'x64\.msi$', '\d+\.\d+\.\d+')
         $downloader.Update()
-        $Global:GithubDownloaderTestUri | Should -Be 'https://api.github.com/repos/owner/app/releases'
+        $Global:GithubDownloaderTestUri | Should -Be 'repos/owner/app/releases'
         $downloader.LatestVersion | Should -Be '2.0.0'
         $downloader.Filename | Should -Be 'app-2.0.0-x64.msi'
         $downloader.URL | Should -Be 'https://github.com/owner/app/releases/download/v2.0.0/app-2.0.0-x64.msi'

@@ -16,7 +16,7 @@ url: https://github.com/ArtifexSoftware/ghostpdl-downloads/releases
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/ArtifexSoftware/ghostpdl-downloads/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/ArtifexSoftware/ghostpdl-downloads/releases/latest'
   $asset = $release.assets | Where-Object { $_.name -match '^gs(?<digits>\d+)w64\.exe$' } | Select-Object -First 1
   if (-not $asset) { throw 'Could not find the 64-bit AGPL Ghostscript Windows installer asset.' }
   if ($asset.name -notmatch '^gs(?<digits>\d+)w64\.exe$') { throw 'Unexpected Ghostscript installer file name.' }

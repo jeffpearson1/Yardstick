@@ -16,7 +16,7 @@ BeforeAll {
 
     # Mocks need the commands to exist already. The script re-imports these, but a
     # Pester mock is an alias, which wins over the re-imported functions.
-    foreach ($module in 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune') {
+    foreach ($module in 'YardstickSupport', 'YardstickCredential', 'YardstickGitHub', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune') {
         Import-Module (Join-Path $script:repoRoot "Modules\$module.psm1") -Force
     }
 
@@ -39,7 +39,7 @@ AfterAll {
     # session state, while this file imported them into Pester's, so two copies of
     # each are loaded now. Unload both or Mock -ModuleName in the test files that
     # run next refuses to choose.
-    Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph', 'YardstickLog' -All |
+    Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph', 'YardstickGitHub', 'YardstickLog' -All |
         Remove-Module -Force -ErrorAction SilentlyContinue
 }
 
@@ -56,6 +56,10 @@ Describe "Test-YardstickSetup.ps1" {
         Mock Get-ScheduledTask { $null }
         Mock Test-OutlookAvailability { $true }
         Mock Test-YardstickOutlookPromptExpected { $false }
+        # Keep the real GitHub token on this machine, and GitHub itself, out of it.
+        Mock Get-YardstickGitHubToken { $null }
+        Mock Get-YardstickGitHubRateLimit { [pscustomobject]@{ Authenticated = $true; Limit = 5000; Remaining = 4990; Reset = (Get-Date).AddHours(1) } }
+        Mock Reset-YardstickGitHubSession {}
     }
 
     It "Fails with a pointer to the installer when there is no preferences file" {
@@ -219,5 +223,40 @@ Describe "Test-YardstickSetup.ps1" {
         ($results | Where-Object Check -eq 'Task account').Message | Should -Match 'svc-yardstick'
         ($results | Where-Object Check -eq 'Task target').Level | Should -Be 'Warn'
         ($results | Where-Object Check -eq 'Last run').Message | Should -Match '0x1\b'
+    }
+
+    Context "GitHub API token" {
+        It "Reports a missing token as information, without failing" {
+            Set-TestPreferences
+            $run = Invoke-HealthCheck -Offline
+            $check = $run.Results | Where-Object Check -eq 'GitHub token'
+            $check.Level | Should -Be 'Info'
+            $check.Message | Should -Match 'Set-YardstickCredential\.ps1 -GitHub'
+            $run.ExitCode | Should -Be 0
+        }
+
+        It "Does not call GitHub with -Offline" {
+            Set-TestPreferences
+            Mock Get-YardstickGitHubToken { 'github_pat_test' }
+            ((Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'GitHub token').Level | Should -Be 'OK'
+            Should -Invoke Get-YardstickGitHubRateLimit -Times 0 -Exactly
+        }
+
+        It "Reports the remaining calls when GitHub accepts the token" {
+            Set-TestPreferences
+            Mock Get-YardstickGitHubToken { 'github_pat_test' }
+            $check = (Invoke-HealthCheck).Results | Where-Object Check -eq 'GitHub token'
+            $check.Level | Should -Be 'OK'
+            $check.Message | Should -Match '4990 of 5000'
+        }
+
+        It "Warns when GitHub rejects the token" {
+            Set-TestPreferences
+            Mock Get-YardstickGitHubToken { 'github_pat_test' }
+            Mock Get-YardstickGitHubRateLimit { [pscustomobject]@{ Authenticated = $false; Limit = 60; Remaining = 59; Reset = (Get-Date) } }
+            $run = Invoke-HealthCheck
+            ($run.Results | Where-Object Check -eq 'GitHub token').Level | Should -Be 'Warn'
+            $run.ExitCode | Should -Be 0
+        }
     }
 }

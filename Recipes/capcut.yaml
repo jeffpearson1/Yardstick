@@ -5,13 +5,13 @@ preDownloadScript: |
   # documented download endpoints return 404. Microsoft's winget-pkgs repository is the only
   # machine-readable source. It is community-maintained (unofficial) and may lag the vendor,
   # but the installer it points at is still ByteDance's own CDN.
-  $entries = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'Yardstick' }
+  $entries = Invoke-YardstickGitHubApi $url
   $version = ($entries |
       Where-Object { $_.type -eq 'dir' -and $_.name -match '^[0-9]+(\.[0-9]+)+$' } |
       Sort-Object { [version]$_.name } -Descending |
       Select-Object -First 1).name
   if (-not $version) { throw 'No CapCut version was found in the winget-pkgs manifest index.' }
-  $manifest = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/b/ByteDance/CapCut/$version/ByteDance.CapCut.installer.yaml" -Headers @{ 'User-Agent' = 'Yardstick' }
+  $manifest = Invoke-YardstickGitHubRaw "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/b/ByteDance/CapCut/$version/ByteDance.CapCut.installer.yaml"
   if ($manifest -is [byte[]]) { $manifest = [System.Text.Encoding]::UTF8.GetString($manifest) }
   $installer = [regex]::Match($manifest, '(?s)Architecture:\s*x64.*?InstallerUrl:\s*(?<url>\S+)')
   if (-not $installer.Success) { throw "The winget-pkgs manifest for CapCut $version listed no x64 installer." }

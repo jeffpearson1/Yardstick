@@ -63,6 +63,11 @@ Ensure the icon exists in `Icons\` under the exact `iconFile` name. If none exis
 `Tests\RecipeHarness\Export-ExeIcon.ps1 -ExePath <installer> -OutputPath Icons\<id>.png`
 pulls one out of the executable.
 
+Query GitHub's API only with `Invoke-YardstickGitHubApi` (or `GithubDownloader`,
+which uses it), never `Invoke-RestMethod` against `api.github.com`, and read
+`raw.githubusercontent.com` files only with `Invoke-YardstickGitHubRaw` — see
+"GitHub releases" in `references/installer-patterns.md`.
+
 ### 4. Validate schema
 
 ```powershell

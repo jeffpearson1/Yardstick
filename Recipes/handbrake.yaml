@@ -2,7 +2,7 @@ url: https://github.com/HandBrake/HandBrake
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/HandBrake/HandBrake/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/HandBrake/HandBrake/releases/latest'
   $version = $release.tag_name.TrimStart('v')
   $asset = $release.assets | Where-Object { $_.name -match '^HandBrake-[0-9.]+-x86_64-Win_GUI\.exe$' } | Select-Object -First 1
   if (-not $asset) { throw 'Could not find the HandBrake x86_64 Windows GUI installer.' }

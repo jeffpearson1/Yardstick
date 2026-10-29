@@ -233,6 +233,63 @@ Older installations kept vaults as plaintext `<name>.yaml` files in `Local\Secre
 The first run that reads one moves it into Credential Manager and asks you to delete
 the file.
 
+### GitHub API token
+
+About sixty recipes look up their latest release through the GitHub API. Without a
+token GitHub allows 60 calls an hour for the whole computer, which one full run nearly
+uses up, so a second run in the same hour fails those recipes. A token raises the limit
+to 5,000 an hour. It is optional but recommended.
+
+1. On GitHub, create a [fine-grained personal access
+   token](https://github.com/settings/personal-access-tokens/new) with
+   **Repository access: Public repositories (read-only)**, no permissions, and an
+   expiration date.
+2. Store it as the account that runs Yardstick:
+
+   ```powershell
+   .\Set-YardstickCredential.ps1 -GitHub          # store or replace the token, then test it
+   .\Set-YardstickCredential.ps1 -GitHub -Show    # the masked token and the calls left this hour
+   .\Set-YardstickCredential.ps1 -GitHub -Remove  # delete it
+   ```
+
+It is kept in Credential Manager under `Yardstick:GitHub` and only ever sent to
+`api.github.com`. Each run logs how many calls are left, and warns when the token is
+within 14 days of expiring. If GitHub rejects the token, the run carries on without it.
+
+Follow GitHub's terms when creating the token:
+
+- **One token per installation.** GitHub does not allow sharing tokens, or using
+  several, to get past the rate limit.
+- **A person's own account, or a machine account.** A token that should not depend on
+  one person can come from a machine account, which must be created by a person who
+  is responsible for it, used only for automation. Each person may have one free
+  machine account.
+- Never commit the token or put it in `preferences.yaml`.
+
+#### When GitHub asks Yardstick to wait
+
+GitHub sometimes throttles calls even with a token, particularly to popular
+repositories such as `microsoft/winget-pkgs`. When it does, Yardstick logs GitHub's
+explanation and request ID, and makes no more calls to GitHub until the wait GitHub
+asked for has passed: the `Retry-After` time if it gave one, the reset time once the
+rate limit is used up, or otherwise a minute. If GitHub throttles again within 15
+minutes of the last wait ending, the wait doubles, up to 30 minutes.
+
+The wait covers every GitHub host: a throttled `raw.githubusercontent.com` read also
+stops API calls and release downloads, because GitHub often serves them from the same
+overloaded systems (`gitmon refuses to schedule us` in the log).
+
+The wait covers every recipe, not just the one that was throttled. A recipe that needs
+GitHub during the wait is set aside (`Deferring <id> until <time>` in the log) and the
+run carries on with the others. Once they are done, Yardstick waits for GitHub if it
+still has to and runs the set-aside recipes again. A recipe is set aside at most three
+times, and a run waits for GitHub for at most 75 minutes in all; past that, the recipes
+still waiting fail with the time GitHub asked for. The email report shows each recipe
+once, with how its last attempt ended.
+
+The recipe harness, which does not run the other recipes meanwhile, waits in place
+instead, for up to five minutes at a time.
+
 ### Client secret expiry
 
 Every run checks how long the client secret has left. Inside
@@ -377,6 +434,7 @@ The health check reports OK, Warn or Fail for:
 - the stored Intune credential, the secret's expiry, sign-in, the granted Graph
   permissions and a test call to Intune
 - `IntuneWinAppUtil.exe`
+- whether a GitHub API token is stored and accepted, and the calls left this hour
 - the email settings
 - the scheduled task and its last result
 - recipes whose icon is missing from the Icons folder

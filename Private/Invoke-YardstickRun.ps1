@@ -807,6 +807,127 @@ function Invoke-YardstickSkip {
 }
 
 
+function Add-YardstickGitHubDeferral {
+    <#
+    .SYNOPSIS
+    Sets the current recipe aside until GitHub's wait has passed, if GitHub
+    throttling is what stopped it.
+
+    .DESCRIPTION
+    GitHub asks for waits of anything from a minute to an hour. Sleeping through
+    one inside the recipe would hold up every recipe behind it, most of which never
+    call GitHub. So the recipe is set aside instead, and the main loop runs it again
+    once the others are done and the wait has passed (Get-YardstickDeferredRecipe).
+    A recipe is set aside at most MaxDeferrals times, and never for a wait longer
+    than MaxWaitMinutes.
+
+    Declared at script scope for the same reason as Invoke-YardstickSkip: it reads
+    the caller's per-recipe state ($AppId_Processing, $CurrentDisplayName) and the
+    run's $GitHubDeferral directly.
+
+    .PARAMETER Stage
+    The failure stage the recipe would otherwise be reported under.
+
+    .PARAMETER ErrorRecord
+    The error the stage failed with, if any.
+
+    .OUTPUTS
+    $true when the recipe was set aside, so the caller skips to the next recipe
+    rather than recording a failure.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Stage,
+        $ErrorRecord
+    )
+
+    $throttle = Get-YardstickGitHubThrottle -ErrorRecord $ErrorRecord
+    if (-not $throttle) { return $false }
+
+    $deferrals = [int]$GitHubDeferral.Counts[$AppId_Processing]
+    if ($deferrals -ge $GitHubDeferral.MaxDeferrals) {
+        Write-Log "GitHub is still asking Yardstick to wait after $deferrals deferral(s), so $AppId_Processing is not set aside again." -Level Warning
+        return $false
+    }
+    if ($throttle.RetryAt -gt (Get-Date).AddMinutes($GitHubDeferral.MaxWaitMinutes)) {
+        Write-Log "GitHub asked Yardstick to wait until $($throttle.RetryAt.ToString('HH:mm')), longer than the $($GitHubDeferral.MaxWaitMinutes) minutes a run waits for GitHub, so $AppId_Processing is not set aside." -Level Warning
+        return $false
+    }
+
+    $GitHubDeferral.Counts[$AppId_Processing] = $deferrals + 1
+    $GitHubDeferral.Recipes.Add([PSCustomObject]@{
+        Id          = $AppId_Processing
+        DisplayName = $CurrentDisplayName
+        Version     = $Script:Version
+        Stage       = $Stage
+        RetryAt     = $throttle.RetryAt
+        Message     = "$ErrorRecord"
+    })
+    # Send-YardstickLogReport.ps1 matches "Deferring <id> until ".
+    Write-Log "Deferring $AppId_Processing until $($throttle.RetryAt.ToString('HH:mm:ss')): GitHub asked Yardstick to wait before calling GitHub again. It runs again after the other recipes." -Level Warning
+    return $true
+}
+
+
+function Get-YardstickDeferredRecipe {
+    <#
+    .SYNOPSIS
+    Waits until GitHub's wait has passed for the earliest recipes set aside, and
+    returns their ids to run again.
+
+    .DESCRIPTION
+    Returns nothing once no recipe is waiting. If the next wait would take the run
+    past MaxWaitMinutes of waiting for GitHub in total, every recipe still waiting
+    is reported as failed instead. The watchdog is told the run is still alive
+    while it waits, so a long wait is not taken for a hung stage.
+
+    Declared at script scope because it works on the run's $GitHubDeferral.
+    #>
+    param()
+
+    $waiting = $GitHubDeferral.Recipes
+    if ($waiting.Count -eq 0) { return }
+
+    # GitHub may have asked for a longer wait since a recipe was set aside.
+    $hold = Get-YardstickGitHubHold
+    foreach ($recipe in $waiting) {
+        if ($hold -and $hold -gt $recipe.RetryAt) { $recipe.RetryAt = $hold }
+    }
+
+    $nextRetry = @($waiting | Sort-Object RetryAt)[0].RetryAt
+    $waitSeconds = [math]::Max(0, [math]::Ceiling(($nextRetry - (Get-Date)).TotalSeconds))
+    if ($waitSeconds -gt ($GitHubDeferral.MaxWaitMinutes * 60 - $GitHubDeferral.WaitedSeconds)) {
+        foreach ($recipe in @($waiting)) {
+            # Under its own "Starting update" line, which is how the log report
+            # tells which application a failure belongs to.
+            Write-Log "Starting update for $($recipe.Id)..."
+            Set-YardstickLogContext $recipe.Id
+            Add-FailedApplication -ApplicationId $recipe.Id -DisplayName $recipe.DisplayName -Version $recipe.Version -ErrorMessage "GitHub asked Yardstick to wait until $($recipe.RetryAt.ToString('HH:mm')), past the $($GitHubDeferral.MaxWaitMinutes) minutes a run waits for GitHub. $($recipe.Message)" -FailureStage $recipe.Stage
+            Clear-YardstickLogContext
+        }
+        $waiting.Clear()
+        return
+    }
+
+    if ($waitSeconds -gt 0) {
+        $ids = @($waiting | ForEach-Object Id) -join ', '
+        Write-Log "Waiting until $($nextRetry.ToString('HH:mm:ss')) ($waitSeconds seconds), as GitHub asked, before running the deferred recipe(s) again: $ids."
+        Set-YardstickWatchdogStage -AppId $ids -Stage "Waiting for GitHub until $($nextRetry.ToString('HH:mm:ss'))"
+        $waitStarted = Get-Date
+        while ((Get-Date) -lt $nextRetry) {
+            Start-Sleep -Seconds ([math]::Max(1, [math]::Min(30, [math]::Ceiling(($nextRetry - (Get-Date)).TotalSeconds))))
+            Update-YardstickWatchdogProgress
+        }
+        $GitHubDeferral.WaitedSeconds += [int]((Get-Date) - $waitStarted).TotalSeconds
+    }
+
+    $now = Get-Date
+    foreach ($recipe in @($waiting | Where-Object { $_.RetryAt -le $now })) {
+        [void]$waiting.Remove($recipe)
+        $recipe.Id
+    }
+}
+
+
 function Set-ScriptVariables {
     <#
     .SYNOPSIS
@@ -998,6 +1119,24 @@ $Script:BackupVersionsToKeep = if (($Prefs.backupVersionsToKeep -as [int]) -gt 0
 # TenantID/ClientId/ClientSecret keys in preferences.yaml are migrated on first
 # run; -NoInteractive runs fail fast rather than blocking on a prompt.
 $Script:IntuneCredential = Initialize-YardstickIntuneCredential -Preferences $Prefs -NoPrompt:$NoInteractive
+
+# Report the GitHub API budget up front: without a token, GitHub allows 60 calls an
+# hour, which a full run nearly uses up. /rate_limit itself is free. A failure here
+# only warns; the recipes that need GitHub report their own errors.
+# -DeferThrottledCalls: when GitHub asks Yardstick to wait, the GitHub helpers throw
+# at once instead of sleeping, and the main loop sets the recipe aside until the
+# end of the run (see Add-YardstickGitHubDeferral).
+try {
+    Reset-YardstickGitHubSession -DeferThrottledCalls
+    $GitHubRateLimit = Get-YardstickGitHubRateLimit
+    if ($GitHubRateLimit.Authenticated) {
+        Write-Log "GitHub API: authenticated, $($GitHubRateLimit.Remaining) of $($GitHubRateLimit.Limit) calls left this hour."
+    } else {
+        Write-Log "GitHub API: anonymous, $($GitHubRateLimit.Remaining) of $($GitHubRateLimit.Limit) calls left this hour. Store a token with .\Set-YardstickCredential.ps1 -GitHub to raise the limit to 5,000." -Level Warning
+    }
+} catch {
+    Write-Log "Could not check the GitHub API rate limit: $($_.Exception.Message)" -Level Warning
+}
 
 # Validate ApplicationId parameter
 if ($ApplicationId) {
@@ -1309,544 +1448,575 @@ Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences
 # down with it, so there the watchdog only logs.
 Start-YardstickWatchdog -TimeoutMinutes $Script:RecipeStageTimeoutMinutes -NoExit:(-not (Test-YardstickDedicatedProcess))
 
+# Recipes GitHub asks to wait are set aside (Add-YardstickGitHubDeferral) and run
+# again in a later pass, once the others are done and the wait has passed
+# (Get-YardstickDeferredRecipe). GitHub's waits apply to the whole run, not just
+# the recipe that was told to wait, and recipes that never call GitHub carry on
+# meanwhile. The bounds stop a GitHub outage from holding a run open for hours.
+$GitHubDeferral = @{
+    MaxDeferrals   = 3
+    MaxWaitMinutes = 75
+    WaitedSeconds  = 0
+    Counts         = @{}
+    Recipes        = [System.Collections.Generic.List[object]]::new()
+}
+
 # Main processing loop
 Write-Log "Processing $(@($Applications).Count) recipe(s)."
-foreach ($AppId_Processing in $Applications) {
-    # This line stays untagged: the log report starts a new app at it. Everything
-    # logged after it, until the finally below, carries the app's tag.
-    Write-Log "Starting update for $AppId_Processing..."
-    Set-YardstickLogContext $AppId_Processing
-    Set-YardstickWatchdogStage -AppId $AppId_Processing -Stage 'Starting up'
-    Set-Location $YardstickModuleRoot
+$RecipePass = @($Applications)
+while ($RecipePass.Count -gt 0) {
+    foreach ($AppId_Processing in $RecipePass) {
+        # This line stays untagged: the log report starts a new app at it. Everything
+        # logged after it, until the finally below, carries the app's tag.
+        Write-Log "Starting update for $AppId_Processing..."
+        Set-YardstickLogContext $AppId_Processing
+        Set-YardstickWatchdogStage -AppId $AppId_Processing -Stage 'Starting up'
+        Set-Location $YardstickModuleRoot
 
-    # Initialize variables for tracking
-    $CurrentDisplayName = $AppId_Processing
-
-    # Set-ScriptVariables nulls this for a recipe without a postRunScript, but the
-    # configuration and validation failures below skip out before it ever runs. The
-    # finally block still fires on those paths, so without this the previous
-    # recipe's cleanup hook would run against this one.
-    $Script:PostRunScript = $null
-
-    try {
-        # Refresh token if necessary
-        Connect-YardstickGraph
-
-        # Undo any folder variable the previous recipe overwrote before anything
-        # in this iteration reads one.
-        Restore-RunnerPathVariable
-
-        # Likewise re-assert the web timeout defaults. A recipe is free to reassign
-        # $PSDefaultParameterValues, and one that does would otherwise leave every
-        # recipe after it able to hang indefinitely again.
-        Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
-
-        # Clear the temp file. -LiteralPath and a top-level enumeration on purpose:
-        # Get-ChildItem $Temp -Exclude ".gitkeep" -Recurse quietly returns nothing
-        # when $Temp does not exist, because -Exclude turns -Path into a wildcard
-        # container query. That hid a missing temp directory for a whole run.
-        Write-Log "Clearing the temp directory..." -Level Detail
-        if (-not (Test-Path -LiteralPath $Temp -PathType Container)) {
-            throw "The Yardstick temp directory '$Temp' does not exist."
+        # A recipe GitHub asked to wait comes round again in a later pass.
+        $IsDeferredReplay = $GitHubDeferral.Counts.ContainsKey($AppId_Processing)
+        if ($IsDeferredReplay) {
+            Write-Log "Running $AppId_Processing again now that GitHub's wait has passed."
         }
-        Get-ChildItem -LiteralPath $Temp -Force |
-            Where-Object Name -ne ".gitkeep" |
-            Remove-Item -Recurse -Force
+        Clear-YardstickGitHubThrottle
 
-        # Open the YAML file and collect all necessary attributes
-        $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing)[0]
-        if (-not $recipeFile) {
-            # Only a group can list a disabled recipe: -ApplicationId is checked
-            # before the run and -All never lists one. Disabling is deliberate, so it
-            # is not reported as a failure.
-            if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing -IncludeDisabled) {
-                Write-Log "Skipping $AppId_Processing because its recipe is in a Disabled folder." -Level Warning
-            } else {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "There is no recipe named $AppId_Processing." -FailureStage "Configuration"
-            }
-            continue
-        }
+        # Initialize variables for tracking
+        $CurrentDisplayName = $AppId_Processing
+
+        # Set-ScriptVariables nulls this for a recipe without a postRunScript, but the
+        # configuration and validation failures below skip out before it ever runs. The
+        # finally block still fires on those paths, so without this the previous
+        # recipe's cleanup hook would run against this one.
+        $Script:PostRunScript = $null
+
         try {
-            $Parameters = Get-Content -LiteralPath $recipeFile.FullName -Raw | ConvertFrom-Yaml
-        } catch {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not open the recipe: $_" -FailureStage "Configuration"
-            continue
-        }
+            # Refresh token if necessary
+            Connect-YardstickGraph
 
-        # Resolve base recipe inheritance if present
-        if ($Parameters.ContainsKey('base')) {
-            try {
-                $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $Recipes
-            } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not resolve the base recipe: $_" -FailureStage "Configuration"
+            # Undo any folder variable the previous recipe overwrote before anything
+            # in this iteration reads one.
+            Restore-RunnerPathVariable
+
+            # Likewise re-assert the web timeout defaults. A recipe is free to reassign
+            # $PSDefaultParameterValues, and one that does would otherwise leave every
+            # recipe after it able to hang indefinitely again.
+            Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
+
+            # Clear the temp file. -LiteralPath and a top-level enumeration on purpose:
+            # Get-ChildItem $Temp -Exclude ".gitkeep" -Recurse quietly returns nothing
+            # when $Temp does not exist, because -Exclude turns -Path into a wildcard
+            # container query. That hid a missing temp directory for a whole run.
+            Write-Log "Clearing the temp directory..." -Level Detail
+            if (-not (Test-Path -LiteralPath $Temp -PathType Container)) {
+                throw "The Yardstick temp directory '$Temp' does not exist."
+            }
+            Get-ChildItem -LiteralPath $Temp -Force |
+                Where-Object Name -ne ".gitkeep" |
+                Remove-Item -Recurse -Force
+
+            # Open the YAML file and collect all necessary attributes
+            $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing)[0]
+            if (-not $recipeFile) {
+                # Only a group can list a disabled recipe: -ApplicationId is checked
+                # before the run and -All never lists one. Disabling is deliberate, so it
+                # is not reported as a failure.
+                if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing -IncludeDisabled) {
+                    Write-Log "Skipping $AppId_Processing because its recipe is in a Disabled folder." -Level Warning
+                } else {
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "There is no recipe named $AppId_Processing." -FailureStage "Configuration"
+                }
                 continue
             }
-        }
+            try {
+                $Parameters = Get-Content -LiteralPath $recipeFile.FullName -Raw | ConvertFrom-Yaml
+            } catch {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not open the recipe: $_" -FailureStage "Configuration"
+                continue
+            }
 
-        # Apply this site's overrides from Local\recipeOverrides.yaml
-        if ($RecipeOverrides.ContainsKey($AppId_Processing)) {
-            $Parameters = Merge-RecipeWithOverride -Recipe $Parameters -Override $RecipeOverrides[$AppId_Processing]
-            Write-Log "Applied recipe overrides: $(@($RecipeOverrides[$AppId_Processing].Keys) -join ', ')" -Level Detail
-        }
-
-        # A shared recipe that needs a value only this site knows ships with a
-        # <YOUR_...> placeholder. Left in, it would upload an install command that
-        # cannot work.
-        $placeholders = @(Get-RecipePlaceholder -Recipe $Parameters)
-        if ($placeholders) {
-            $fields = ($placeholders | ForEach-Object { "$($_.Field) ($($_.Placeholder))" }) -join ', '
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "The recipe needs this site's values for: $fields. Set those fields for $AppId_Processing in $RecipeOverridesPath." -FailureStage "Configuration"
-            continue
-        }
-
-        # Validate recipe schema before processing
-        $validation = Test-RecipeSchema -Recipe $Parameters -RecipeId $AppId_Processing
-        foreach ($w in $validation.Warnings) { Write-Log "Recipe check: $w" -Level Warning }
-        if (-not $validation.IsValid) {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage ($validation.Errors -join '; ') -FailureStage "Recipe Validation"
-            continue
-        }
-
-        # Set all script variables from parameters and preferences
-        Set-ScriptVariables -Parameters $parameters -Preferences $Prefs
-        
-        # Update tracking variables with actual values
-        $CurrentDisplayName = $Script:DisplayName
-        $DependentUpdateStatus = [ordered]@{}
-        $ProtectedDependencyAppIds = [System.Collections.Generic.HashSet[string]]::new()
-        $DependentLinkOptions = @{
-            Enabled = [bool]$Script:DependentLinkUpdateEnabled
-            RetryCount = [int]$Script:DependentLinkUpdateRetryCount
-            RetryDelaySeconds = [int]$Script:DependentLinkUpdateRetryDelaySeconds
-            TimeoutSeconds = [int]$Script:DependentLinkUpdateTimeoutSeconds
-            Blocklist = $Script:DependentApplicationBlocklist
-        }
-
-
-        if ($Repair) {
-            # Correct any naming discrepancies before we continue.
-            # Skip the Ω DETECT - anchor - it deliberately holds a different name.
-            $anchorName = Get-DetectAnchorName -DisplayName $Script:DisplayName
-            $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName | Where-Object DisplayName -ne $anchorName)
-            for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
-                if ($CurrentApps[$i].DisplayName -ne "$($Script:DisplayName) (N-$i)") {
-                    Write-Log "Renaming $($CurrentApps[$i].DisplayName) to $($Script:DisplayName) (N-$i)..."
-                    Set-YardstickWin32App -Id $CurrentApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)" | Out-Null
+            # Resolve base recipe inheritance if present
+            if ($Parameters.ContainsKey('base')) {
+                try {
+                    $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $Recipes
+                } catch {
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not resolve the base recipe: $_" -FailureStage "Configuration"
+                    continue
                 }
             }
-        }
 
+            # Apply this site's overrides from Local\recipeOverrides.yaml
+            if ($RecipeOverrides.ContainsKey($AppId_Processing)) {
+                $Parameters = Merge-RecipeWithOverride -Recipe $Parameters -Override $RecipeOverrides[$AppId_Processing]
+                Write-Log "Applied recipe overrides: $(@($RecipeOverrides[$AppId_Processing].Keys) -join ', ')" -Level Detail
+            }
 
-        # Clear stale $matches from prior recipe iterations to prevent cross-contamination
-        $null = "reset" -match "reset"
-
-        # Recipe scripts share one scope for the whole run, so a left-side cast in an
-        # earlier recipe leaves a type constraint that breaks every later recipe using
-        # that variable name. Drop any such constraint before this recipe runs.
-        Clear-RecipeVariableConstraint
-
-        # Manual-drop recipes package whatever an operator staged in the dropbox.
-        # This has to resolve before the pre-download script, because that script is
-        # where the recipe reads $dropboxPath to work out $version and $fileName.
-        $dropboxPath = $null
-        $dropboxFiles = @()
-        if ($Script:ManualDownload) {
-            try {
-                $DropboxPayload = Get-YardstickDropboxPayload -DropboxRoot $Script:SoftwareDropbox -Folder $Script:ManualDownloadFolder
-            } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage "$_" -FailureStage "Manual Drop"
+            # A shared recipe that needs a value only this site knows ships with a
+            # <YOUR_...> placeholder. Left in, it would upload an install command that
+            # cannot work.
+            $placeholders = @(Get-RecipePlaceholder -Recipe $Parameters)
+            if ($placeholders) {
+                $fields = ($placeholders | ForEach-Object { "$($_.Field) ($($_.Placeholder))" }) -join ', '
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "The recipe needs this site's values for: $fields. Set those fields for $AppId_Processing in $RecipeOverridesPath." -FailureStage "Configuration"
                 continue
             }
-            if (-not $DropboxPayload) {
-                Invoke-YardstickSkip -Reason "Nothing staged in the software dropbox for $($Script:Id)."
+
+            # Validate recipe schema before processing
+            $validation = Test-RecipeSchema -Recipe $Parameters -RecipeId $AppId_Processing
+            foreach ($w in $validation.Warnings) { Write-Log "Recipe check: $w" -Level Warning }
+            if (-not $validation.IsValid) {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage ($validation.Errors -join '; ') -FailureStage "Recipe Validation"
                 continue
             }
-            $dropboxPath = $DropboxPayload.Path
-            $dropboxFiles = $DropboxPayload.Files
-            Write-Log "Found $($dropboxFiles.Count) staged file(s) in $dropboxPath."
-        }
 
-        # Vendors that throttle repeated requests set minRunInterval. The run is
-        # recorded before the vendor is contacted, not when the recipe succeeds: a
-        # failed attempt still counts against the vendor's limit, and retrying it
-        # every run is what gets a site to start refusing us.
-        if ($Script:MinRunInterval -gt 0) {
-            $runDue = Test-YardstickRecipeRunDue -Path $RecipeRunHistoryPath -Id $AppId_Processing -Days $Script:MinRunInterval
-            if (-not $runDue.IsDue -and -not $Force) {
-                Invoke-YardstickSkip -Reason "Last run $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm')); minRunInterval is $($Script:MinRunInterval) day(s), so the next run is on or after $($runDue.NextRun.ToString('yyyy-MM-dd'))."
-                continue
+            # Set all script variables from parameters and preferences
+            Set-ScriptVariables -Parameters $parameters -Preferences $Prefs
+        
+            # Update tracking variables with actual values
+            $CurrentDisplayName = $Script:DisplayName
+            $DependentUpdateStatus = [ordered]@{}
+            $ProtectedDependencyAppIds = [System.Collections.Generic.HashSet[string]]::new()
+            $DependentLinkOptions = @{
+                Enabled = [bool]$Script:DependentLinkUpdateEnabled
+                RetryCount = [int]$Script:DependentLinkUpdateRetryCount
+                RetryDelaySeconds = [int]$Script:DependentLinkUpdateRetryDelaySeconds
+                TimeoutSeconds = [int]$Script:DependentLinkUpdateTimeoutSeconds
+                Blocklist = $Script:DependentApplicationBlocklist
             }
-            if (-not $runDue.IsDue) {
-                Write-Log "-Force is set: running despite minRunInterval ($($Script:MinRunInterval) day(s)); the last run was $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm'))."
-            }
-            try {
-                Set-YardstickRecipeLastRun -Path $RecipeRunHistoryPath -Id $AppId_Processing
-            } catch {
-                Write-Log "Could not record this run in ${RecipeRunHistoryPath}: $($_.Exception.Message)" -Level Warning
-            }
-        }
 
-        # Run the pre-download script
-        if ($Script:PreDownloadScript) {
-            Write-Log "Running the pre-download script..." -Level Detail
-            Set-YardstickWatchdogStage -Stage 'Pre-Download Script'
-            try {
-                # Pre-download scripts are almost all version probes against a vendor
-                # endpoint, so a dropped or timed-out connection fails a recipe that
-                # would have succeeded a moment later. Only genuinely transient
-                # network faults are replayed; anything else throws on the first try.
-                $preDownloadAttempts = 3
-                for ($preDownloadAttempt = 1; ; $preDownloadAttempt++) {
-                    try {
-                        Invoke-Command -ScriptBlock $Script:PreDownloadScript -NoNewScope
-                        break
-                    } catch {
-                        if ($preDownloadAttempt -ge $preDownloadAttempts -or -not (Test-YardstickTransientNetworkError -ErrorRecord $_)) { throw }
-                        Write-Log "Pre-download script failed (attempt $preDownloadAttempt/$preDownloadAttempts) on a transient network error: $($_.Exception.Message)" -Level Warning
-                        Start-Sleep -Seconds ([math]::Pow(2, $preDownloadAttempt))
+
+            if ($Repair) {
+                # Correct any naming discrepancies before we continue.
+                # Skip the Ω DETECT - anchor - it deliberately holds a different name.
+                $anchorName = Get-DetectAnchorName -DisplayName $Script:DisplayName
+                $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName | Where-Object DisplayName -ne $anchorName)
+                for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
+                    if ($CurrentApps[$i].DisplayName -ne "$($Script:DisplayName) (N-$i)") {
+                        Write-Log "Renaming $($CurrentApps[$i].DisplayName) to $($Script:DisplayName) (N-$i)..."
+                        Set-YardstickWin32App -Id $CurrentApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)" | Out-Null
                     }
                 }
-                Write-Log "Ran the pre-download script." -Level Detail
-            } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Pre-Download Script"
-                continue
             }
-        } else {
-            Write-Log "No pre-download script." -Level Detail
-        }
-
-        # Validate the extracted version before proceeding
-        $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
-
-        # Get-SameAppAllVersions returns newest first, but do not reach for
-        # $ExistingVersions.displayVersion[0]: PowerShell unrolls a single-element
-        # property projection to a scalar, so with exactly one existing app that
-        # indexes into the version *string* and yields its first character. A blank
-        # displayVersion also has to be skipped -- a renamed or manually created app
-        # can have none, and passing that to Compare-AppVersions throws and fails the
-        # whole recipe.
-        $NewestExistingVersion = Get-NewestComparableVersion -ExistingVersions $ExistingVersions
-
-        $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $AppId_Processing -ExistingVersion $NewestExistingVersion
-        foreach ($w in $versionValidation.Warnings) {
-            Write-Log "Version check: $w" -Level Warning
-        }
-        if (-not $versionValidation.IsValid) {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage ($versionValidation.Errors -join '; ') -FailureStage "Version Validation"
-            continue
-        }
-
-        # Trim whitespace from version if present (warned but not blocked above)
-        if ($Script:Version -ne $Script:Version.Trim()) {
-            $Script:Version = $Script:Version.Trim()
-            Write-Log "Trimmed whitespace from the version: '$($Script:Version)'." -Level Detail
-        }
-
-        # Check if there is an up-to-date version in the repo already
-        Write-Log "Checking if $($Script:DisplayName) $($Script:Version) is a new version..."
-        
-        if (-not $ExistingVersions) {
-            Write-Log "No existing versions of $($Script:DisplayName) in Intune. Continuing with the update." -Level Detail
-            $VersionCompareResult = 0
-        }
-        elseif (-not $NewestExistingVersion) {
-            Write-Log "No existing version of $($Script:DisplayName) has a version number to compare against. Continuing with the update."
-            $VersionCompareResult = 0
-        }
-        else {
-            $VersionCompareResult = Compare-AppVersions $Script:Version $NewestExistingVersion
-        }
-        
-        # Check various conditions to determine if we should proceed
-        $SkipReason = $null
-        if ($Force) {
-            Write-Log "-Force is set: updating $($Script:DisplayName) $($Script:Version) regardless of the versions in Intune."
-        } elseif (Test-VersionExcluded -Version $Script:Version -VersionLock $Script:VersionLock) {
-            $SkipReason = "Version is locked to $($Script:VersionLock)."
-        } elseif (@($ExistingVersions.displayVersion) -contains $Script:Version) {
-            $SkipReason = "$($Script:DisplayName) $($Script:Version) is already in Intune."
-        } elseif ($VersionCompareResult -eq 1) {
-            Write-Log "$($Script:DisplayName) $($Script:Version) is newer than $NewestExistingVersion. Updating."
-        } elseif ($VersionCompareResult -eq -1) {
-            $SkipReason = "$($Script:DisplayName) $($Script:Version) is older than the currently newest available version $NewestExistingVersion."
-        }
-
-        if ($SkipReason) {
-            Invoke-YardstickSkip -Reason $SkipReason
-            continue
-        }
 
 
-        # See if this has been run before. If there are previous files, move them to a folder called "Old"
-        if (Test-Path $BuildSpace\$($Script:Id)) {
-            if (-not (Test-Path $BuildSpace\Old)) {
-                New-Item -Path $BuildSpace -ItemType Directory -Name "Old" | Out-Null
+            # Clear stale $matches from prior recipe iterations to prevent cross-contamination
+            $null = "reset" -match "reset"
+
+            # Recipe scripts share one scope for the whole run, so a left-side cast in an
+            # earlier recipe leaves a type constraint that breaks every later recipe using
+            # that variable name. Drop any such constraint before this recipe runs.
+            Clear-RecipeVariableConstraint
+
+            # Manual-drop recipes package whatever an operator staged in the dropbox.
+            # This has to resolve before the pre-download script, because that script is
+            # where the recipe reads $dropboxPath to work out $version and $fileName.
+            $dropboxPath = $null
+            $dropboxFiles = @()
+            if ($Script:ManualDownload) {
+                try {
+                    $DropboxPayload = Get-YardstickDropboxPayload -DropboxRoot $Script:SoftwareDropbox -Folder $Script:ManualDownloadFolder
+                } catch {
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage "$_" -FailureStage "Manual Drop"
+                    continue
+                }
+                if (-not $DropboxPayload) {
+                    Invoke-YardstickSkip -Reason "Nothing staged in the software dropbox for $($Script:Id)."
+                    continue
+                }
+                $dropboxPath = $DropboxPayload.Path
+                $dropboxFiles = $DropboxPayload.Files
+                Write-Log "Found $($dropboxFiles.Count) staged file(s) in $dropboxPath."
             }
-            Write-Log "Moving the previous buildspace to Old..." -Level Detail
-            Move-Item -Path $BuildSpace\$($Script:Id) $BuildSpace\Old\$($Script:Id)-$(Get-Date -Format "MMddyyhhmmss")
-        }
-        if (Test-Path $Scripts\$($Script:Id)) {
-            if (-not (Test-Path $Scripts\Old)) {
-                New-Item -Path $Scripts -ItemType Directory -Name "Old" | Out-Null
+
+            # Vendors that throttle repeated requests set minRunInterval. The run is
+            # recorded before the vendor is contacted, not when the recipe succeeds: a
+            # failed attempt still counts against the vendor's limit, and retrying it
+            # every run is what gets a site to start refusing us. A recipe run again
+            # after GitHub asked it to wait was recorded the first time round.
+            if ($Script:MinRunInterval -gt 0 -and -not $IsDeferredReplay) {
+                $runDue = Test-YardstickRecipeRunDue -Path $RecipeRunHistoryPath -Id $AppId_Processing -Days $Script:MinRunInterval
+                if (-not $runDue.IsDue -and -not $Force) {
+                    Invoke-YardstickSkip -Reason "Last run $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm')); minRunInterval is $($Script:MinRunInterval) day(s), so the next run is on or after $($runDue.NextRun.ToString('yyyy-MM-dd'))."
+                    continue
+                }
+                if (-not $runDue.IsDue) {
+                    Write-Log "-Force is set: running despite minRunInterval ($($Script:MinRunInterval) day(s)); the last run was $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm'))."
+                }
+                try {
+                    Set-YardstickRecipeLastRun -Path $RecipeRunHistoryPath -Id $AppId_Processing
+                } catch {
+                    Write-Log "Could not record this run in ${RecipeRunHistoryPath}: $($_.Exception.Message)" -Level Warning
+                }
             }
-            Write-Log "Moving the previous script folder to Old..." -Level Detail
-            Move-Item -Path $Scripts\$($Script:Id) $Scripts\Old\$($Script:Id)-$(Get-Date -Format "MMddyyhhmmss")
-        }
 
-        # Make the new BUILDSPACE directory
-        New-Item -Path $BuildSpace\$($Script:Id) -ItemType Directory -Name $Script:Version | Out-Null
-        Set-Location $BuildSpace\$($Script:Id)\$Script:Version
-
-        Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $productCode -Version $Script:Version 
-
-        # Download the new installer
-        Write-Log "Downloading..."
-        Set-YardstickWatchdogStage -Stage 'Download'
-        if ($Script:Url) {
-            Write-Log "URL: $($Script:Url)" -Level Detail
-        }
-        if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript)) -and (-not ($Script:ManualDownload))) {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "The recipe sets no URL, download script or manual drop." -FailureStage "Download"
-            continue
-        }
-        
-        if ($Script:ManualDownload) {
-            Write-Log "Copying the staged payload from $dropboxPath..."
-            try {
-                Copy-Item -Path (Join-Path $dropboxPath '*') -Destination . -Recurse -Force
-            } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not copy the staged payload from ${dropboxPath}: $_" -FailureStage "Download"
-                continue
-            }
-        } elseif ($Script:DownloadScript) {
-            # Pop in a finally: the continue below would otherwise leave this entry on
-            # the location stack, and Invoke-Yardstick's own Pop-Location would then
-            # return the caller to the build folder instead of where they started.
-            Push-Location $BuildSpace\$Script:Id\$Script:Version
-            try {
-                Invoke-Command -ScriptBlock $Script:DownloadScript -NoNewScope
-                Write-Log "Ran the download script." -Level Detail
-            } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download Script"
-                Write-Log "Download script contents: $Script:DownloadScript" -Level Detail
-                continue
-            } finally {
-                Pop-Location
-            }
-        } else {
-            try {
-                # Bounded by a stall timeout rather than a plain Start-BitsTransfer,
-                # which blocks the runner with no way to give up.
-                Invoke-YardstickBitsDownload -Source "$($Script:Url)" `
-                    -Destination "$BuildSpace\$Script:Id\$Script:Version\$Script:FileName" `
-                    -StallTimeoutMinutes $Script:BitsStallTimeoutMinutes
-                Write-Log "Downloaded via BITS." -Level Detail
-            } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download"
-                continue
-            }
-        }
-        # Update Placeholders again in case the download script changed anything
-        Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $ProductCode -Version $Script:Version 
-        # Run the post-download script
-        if ($Script:PostDownloadScript) {
-            Write-Log "Running the post-download script..." -Level Detail
-            Set-YardstickWatchdogStage -Stage 'Post-Download Script'
-            Push-Location $BuildSpace\$Script:Id\$Script:Version
-            try {
-                Invoke-Command -ScriptBlock $Script:PostDownloadScript -NoNewScope
-                Write-Log "Ran the post-download script." -Level Detail
-            } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Download Script"
-                continue
-            } finally {
-                Pop-Location
-            }
-        }
-        # Handle script placeholder replacement
-        $ProductCode = ""
-        if ($Script:FileName -match "\.msi$") {
-            $ProductCode = Get-MSIProductCode $BuildSpace\$Script:Id\$Script:Version\$Script:FileName | Where-Object { $_ -match "^\{[0-9A-Fa-f\-]{36}\}$" }
-            Write-Log "Product code: $ProductCode" -Level Detail
-            if (-not $ProductCode) {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not read the MSI product code from $Script:FileName." -FailureStage "MSI Product Code Retrieval"
-                continue
-            }
-        }
-        # Update placeholders for the final time
-        Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $ProductCode -Version $Script:Version
-
-        # DEBUG: Make sure that there aren't any placeholder strings left
-        if ($Script:InstallScript -match "<filename>|<productcode>|<version>" -or
-            $Script:PowerShellInstallScript -match "<filename>|<productcode>|<version>" -or
-            $Script:UninstallScript -match "<filename>|<productcode>|<version>" -or
-            $Script:PowerShellUninstallScript -match "<filename>|<productcode>|<version>" -or
-            $Script:DetectionScript -match "<filename>|<productcode>|<version>") {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in the scripts." -FailureStage "Placeholder Replacement"
-            continue
-        }
-
-        # Write the contents of the install and uninstall scripts to files if they are PowerShell scripts.
-        # Add-NativeBitnessGuard is applied here rather than at assignment so the
-        # recipe-authored text stays intact for logging and the placeholder audit
-        # above; only the file that actually ships in the package carries it.
-        if ($Script:PowerShellInstallScript) {
-            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\install.ps1 -Value (Add-NativeBitnessGuard -ScriptContent $Script:PowerShellInstallScript) -Force
-        }
-
-        if ($Script:PowerShellUninstallScript) {
-            Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\uninstall.ps1 -Value (Add-NativeBitnessGuard -ScriptContent $Script:PowerShellUninstallScript) -Force
-        }
-
-        # Generate the .intunewin file
-        Set-Location $YardstickModuleRoot
-        Write-Log "Packaging the .intunewin file..." -Level Detail
-        Set-YardstickWatchdogStage -Stage 'Packaging'
-        $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force -TimeoutMinutes $Script:PackagingTimeoutMinutes
-
-        # Upload .intunewin file to Intune
-        # Detection Types
-        # Intune does not require an icon, so a missing file must not discard a
-        # package that has already been downloaded and built.
-        $Icon = $null
-        $missingIcon = $null
-        if (Test-Path -LiteralPath "$($Icons)\$($Script:IconFile)" -PathType Leaf) {
-            $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
-        } else {
-            $missingIcon = if ($Script:IconFile) { [string]$Script:IconFile } else { '(no iconFile set)' }
-            Write-Log "Icon file $($Script:IconFile) is not in the Icons folder. Uploading without an icon." -Level Warning
-        }
-        if (-not $Script:FileDetectionVersion) {
-            $Script:FileDetectionVersion = $Script:Version
-        }
-
-        $DetectionRule = New-DetectionRule -DetectionType $Script:DetectionType -ProductCode $ProductCode
-
-        # Generate the min OS requirement rule
-        $RequirementRule = New-YardstickWin32AppRequirementRule -Architecture $Script:Architecture -MinimumSupportedWindowsRelease $Script:MinOSVersion
-
-        # Create the Intune App
-        Write-Log "Uploading $Script:DisplayName $Script:Version to Intune..."
-        Set-YardstickWatchdogStage -Stage 'Upload'
-        Connect-YardstickGraph
-        try {
-            if ($Script:AllowUserUninstall) {
-                $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes -AllowAvailableUninstall
+            # Run the pre-download script
+            if ($Script:PreDownloadScript) {
+                Write-Log "Running the pre-download script..." -Level Detail
+                Set-YardstickWatchdogStage -Stage 'Pre-Download Script'
+                try {
+                    # Pre-download scripts are almost all version probes against a vendor
+                    # endpoint, so a dropped or timed-out connection fails a recipe that
+                    # would have succeeded a moment later. Only genuinely transient
+                    # network faults are replayed; anything else throws on the first try.
+                    $preDownloadAttempts = 3
+                    for ($preDownloadAttempt = 1; ; $preDownloadAttempt++) {
+                        try {
+                            Invoke-Command -ScriptBlock $Script:PreDownloadScript -NoNewScope
+                            break
+                        } catch {
+                            if ($preDownloadAttempt -ge $preDownloadAttempts -or -not (Test-YardstickTransientNetworkError -ErrorRecord $_)) { throw }
+                            Write-Log "Pre-download script failed (attempt $preDownloadAttempt/$preDownloadAttempts) on a transient network error: $($_.Exception.Message)" -Level Warning
+                            Start-Sleep -Seconds ([math]::Pow(2, $preDownloadAttempt))
+                        }
+                    }
+                    Write-Log "Ran the pre-download script." -Level Detail
+                } catch {
+                    if (Add-YardstickGitHubDeferral -Stage "Pre-Download Script" -ErrorRecord $_) { continue }
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Pre-Download Script"
+                    continue
+                }
             } else {
-                $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
+                Write-Log "No pre-download script." -Level Detail
             }
-            Write-Log "Uploaded. Waiting for Intune to publish it..."
-            $PublishTimeout = (Get-Date).AddMinutes(30)
-            do {
-                Start-Sleep -Seconds 15
-                $LiveWin32App = Get-YardstickWin32App -Id $Win32App.id
-                if ((Get-Date) -gt $PublishTimeout) {
-                    throw "Timed out waiting for Intune to publish $Script:DisplayName after 30 minutes (state: $($LiveWin32App.publishingState))"
-                }
-            } while ($LiveWin32App.publishingState -ne "published")
-            $UploadedAt = Get-Date
-        } catch {
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Upload"
-            continue
-        }
 
-        # Hand the .intunewin off to a background thread that copies it to the
-        # backup share and then deletes the local copy. Staging it out of
-        # $Published first is what stops the next app's
-        # New-YardstickWin32AppPackage -Force (which names its output from the setup
-        # file, so two recipes can collide) from clobbering a file the thread is
-        # still reading. Nothing in here may throw - a bad backup share must not
-        # turn a successful upload into a failed application.
-        if ($Script:BackupEnabled) {
-            try {
-                $BackupFileName = Get-YardstickBackupFileName -AppId $Script:Id -Version $Script:Version -Timestamp $UploadedAt
-                $StageDir = Join-Path (Join-Path $Published '_BackupQueue') $Script:Id
-                if (-not (Test-Path -LiteralPath $StageDir)) {
-                    New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
-                }
-                $StagedPath = Join-Path $StageDir $BackupFileName
-                Invoke-WithRetry -Label "Stage .intunewin for backup" -MaxRetries 3 -DelaySeconds 1 `
-                    -ScriptBlock { Move-Item -LiteralPath $App.path -Destination $StagedPath -Force } `
-                    -VerifyBlock { Test-Path -LiteralPath $StagedPath } | Out-Null
-                if (-not (Test-Path -LiteralPath $StagedPath)) {
-                    throw "could not stage $($App.path)"
-                }
-                Start-YardstickBackup -SourcePath $StagedPath -BackupRoot $Script:Backup -AppId $Script:Id `
-                    -FileName $BackupFileName -VersionsToKeep $Script:BackupVersionsToKeep
-                Write-Log "Queued a backup of $BackupFileName to $Script:Backup." -Level Detail
-            } catch {
-                # Send-YardstickLogReport.ps1 matches "Could not queue backup for <id>: ".
-                Write-Log "Could not queue backup for $($Script:Id): $_" -Level Warning
+            # Validate the extracted version before proceeding
+            $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
+
+            # Get-SameAppAllVersions returns newest first, but do not reach for
+            # $ExistingVersions.displayVersion[0]: PowerShell unrolls a single-element
+            # property projection to a scalar, so with exactly one existing app that
+            # indexes into the version *string* and yields its first character. A blank
+            # displayVersion also has to be skipped -- a renamed or manually created app
+            # can have none, and passing that to Compare-AppVersions throws and fails the
+            # whole recipe.
+            $NewestExistingVersion = Get-NewestComparableVersion -ExistingVersions $ExistingVersions
+
+            $versionValidation = Test-ExtractedVersion -Version $Script:Version -ApplicationId $AppId_Processing -ExistingVersion $NewestExistingVersion
+            foreach ($w in $versionValidation.Warnings) {
+                Write-Log "Version check: $w" -Level Warning
             }
-        }
-
-        # The payload is published, so retire it out of the dropbox. Leaving the
-        # dropbox empty is what makes the next run skip this recipe rather than
-        # republishing the same build. A failure here must not fail the app - the
-        # operator just has to clear the folder by hand.
-        if ($Script:ManualDownload) {
-            try {
-                Complete-YardstickDropbox -DropboxPath $dropboxPath -ArchiveRoot $Script:SoftwareArchive `
-                    -Folder $Script:ManualDownloadFolder -Version $Script:Version
-            } catch {
-                Write-Log "Could not archive the manual drop: $_" -Level Warning
+            if (-not $versionValidation.IsValid) {
+                # A pre-download script that catches GitHub's refusal itself ends up here
+                # with no version.
+                if (Add-YardstickGitHubDeferral -Stage "Version Validation") { continue }
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $(if ($null -ne $Script:Version) { $Script:Version } else { "null" }) -ErrorMessage ($versionValidation.Errors -join '; ') -FailureStage "Version Validation"
+                continue
             }
-        }
+
+            # Trim whitespace from version if present (warned but not blocked above)
+            if ($Script:Version -ne $Script:Version.Trim()) {
+                $Script:Version = $Script:Version.Trim()
+                Write-Log "Trimmed whitespace from the version: '$($Script:Version)'." -Level Detail
+            }
+
+            # Check if there is an up-to-date version in the repo already
+            Write-Log "Checking if $($Script:DisplayName) $($Script:Version) is a new version..."
+        
+            if (-not $ExistingVersions) {
+                Write-Log "No existing versions of $($Script:DisplayName) in Intune. Continuing with the update." -Level Detail
+                $VersionCompareResult = 0
+            }
+            elseif (-not $NewestExistingVersion) {
+                Write-Log "No existing version of $($Script:DisplayName) has a version number to compare against. Continuing with the update."
+                $VersionCompareResult = 0
+            }
+            else {
+                $VersionCompareResult = Compare-AppVersions $Script:Version $NewestExistingVersion
+            }
+        
+            # Check various conditions to determine if we should proceed
+            $SkipReason = $null
+            if ($Force) {
+                Write-Log "-Force is set: updating $($Script:DisplayName) $($Script:Version) regardless of the versions in Intune."
+            } elseif (Test-VersionExcluded -Version $Script:Version -VersionLock $Script:VersionLock) {
+                $SkipReason = "Version is locked to $($Script:VersionLock)."
+            } elseif (@($ExistingVersions.displayVersion) -contains $Script:Version) {
+                $SkipReason = "$($Script:DisplayName) $($Script:Version) is already in Intune."
+            } elseif ($VersionCompareResult -eq 1) {
+                Write-Log "$($Script:DisplayName) $($Script:Version) is newer than $NewestExistingVersion. Updating."
+            } elseif ($VersionCompareResult -eq -1) {
+                $SkipReason = "$($Script:DisplayName) $($Script:Version) is older than the currently newest available version $NewestExistingVersion."
+            }
+
+            if ($SkipReason) {
+                Invoke-YardstickSkip -Reason $SkipReason
+                continue
+            }
 
 
-        ###################################################
-        # SUPERSEDENCE, RETENTION, AUTO-UPDATE
-        ###################################################
+            # See if this has been run before. If there are previous files, move them to a folder called "Old"
+            if (Test-Path $BuildSpace\$($Script:Id)) {
+                if (-not (Test-Path $BuildSpace\Old)) {
+                    New-Item -Path $BuildSpace -ItemType Directory -Name "Old" | Out-Null
+                }
+                Write-Log "Moving the previous buildspace to Old..." -Level Detail
+                Move-Item -Path $BuildSpace\$($Script:Id) $BuildSpace\Old\$($Script:Id)-$(Get-Date -Format "MMddyyhhmmss")
+            }
+            if (Test-Path $Scripts\$($Script:Id)) {
+                if (-not (Test-Path $Scripts\Old)) {
+                    New-Item -Path $Scripts -ItemType Directory -Name "Old" | Out-Null
+                }
+                Write-Log "Moving the previous script folder to Old..." -Level Detail
+                Move-Item -Path $Scripts\$($Script:Id) $Scripts\Old\$($Script:Id)-$(Get-Date -Format "MMddyyhhmmss")
+            }
 
-        $Maintenance = Invoke-YardstickAppMaintenance -NewAppId $Win32App.id
-        $CurrentApp        = $Maintenance.CurrentApp
-        $supersededCount   = $Maintenance.SupersededCount
-        $autoUpdateApplied = $Maintenance.AutoUpdateApplied
-        $anchorStatus      = $Maintenance.AnchorStatus
+            # Make the new BUILDSPACE directory
+            New-Item -Path $BuildSpace\$($Script:Id) -ItemType Directory -Name $Script:Version | Out-Null
+            Set-Location $BuildSpace\$($Script:Id)\$Script:Version
 
-        $ActionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
-        $autoStatusParts = @()
-        if ($supersededCount -gt 0)   { $autoStatusParts += "supersedes $supersededCount" }
-        if ($autoUpdateApplied -gt 0) { $autoStatusParts += "auto-update on $autoUpdateApplied assignment(s)" }
-        if ($anchorStatus)            { $autoStatusParts += "anchor: $anchorStatus" }
-        $autoStatus = if ($autoStatusParts.Count -gt 0) { $autoStatusParts -join ', ' } else { $null }
-        Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus -AutoUpdateStatus $autoStatus -MissingIcon $missingIcon
+            Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $productCode -Version $Script:Version 
 
-    } catch {
-        # Catch any unexpected errors during processing
-        Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "General Processing"
-        if (-not((Get-Location).ProviderPath -eq $YardstickModuleRoot)) {
+            # Download the new installer
+            Write-Log "Downloading..."
+            Set-YardstickWatchdogStage -Stage 'Download'
+            if ($Script:Url) {
+                Write-Log "URL: $($Script:Url)" -Level Detail
+            }
+            if ((-not ($Script:Url)) -and (-not ($Script:DownloadScript)) -and (-not ($Script:ManualDownload))) {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "The recipe sets no URL, download script or manual drop." -FailureStage "Download"
+                continue
+            }
+        
+            if ($Script:ManualDownload) {
+                Write-Log "Copying the staged payload from $dropboxPath..."
+                try {
+                    Copy-Item -Path (Join-Path $dropboxPath '*') -Destination . -Recurse -Force
+                } catch {
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not copy the staged payload from ${dropboxPath}: $_" -FailureStage "Download"
+                    continue
+                }
+            } elseif ($Script:DownloadScript) {
+                # Pop in a finally: the continue below would otherwise leave this entry on
+                # the location stack, and Invoke-Yardstick's own Pop-Location would then
+                # return the caller to the build folder instead of where they started.
+                Push-Location $BuildSpace\$Script:Id\$Script:Version
+                try {
+                    Invoke-Command -ScriptBlock $Script:DownloadScript -NoNewScope
+                    Write-Log "Ran the download script." -Level Detail
+                } catch {
+                    if (Add-YardstickGitHubDeferral -Stage "Download Script" -ErrorRecord $_) { continue }
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download Script"
+                    Write-Log "Download script contents: $Script:DownloadScript" -Level Detail
+                    continue
+                } finally {
+                    Pop-Location
+                }
+            } else {
+                try {
+                    # Bounded by a stall timeout rather than a plain Start-BitsTransfer,
+                    # which blocks the runner with no way to give up.
+                    Invoke-YardstickBitsDownload -Source "$($Script:Url)" `
+                        -Destination "$BuildSpace\$Script:Id\$Script:Version\$Script:FileName" `
+                        -StallTimeoutMinutes $Script:BitsStallTimeoutMinutes
+                    Write-Log "Downloaded via BITS." -Level Detail
+                } catch {
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download"
+                    continue
+                }
+            }
+            # Update Placeholders again in case the download script changed anything
+            Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $ProductCode -Version $Script:Version 
+            # Run the post-download script
+            if ($Script:PostDownloadScript) {
+                Write-Log "Running the post-download script..." -Level Detail
+                Set-YardstickWatchdogStage -Stage 'Post-Download Script'
+                Push-Location $BuildSpace\$Script:Id\$Script:Version
+                try {
+                    Invoke-Command -ScriptBlock $Script:PostDownloadScript -NoNewScope
+                    Write-Log "Ran the post-download script." -Level Detail
+                } catch {
+                    if (Add-YardstickGitHubDeferral -Stage "Post-Download Script" -ErrorRecord $_) { continue }
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Download Script"
+                    continue
+                } finally {
+                    Pop-Location
+                }
+            }
+            # Handle script placeholder replacement
+            $ProductCode = ""
+            if ($Script:FileName -match "\.msi$") {
+                $ProductCode = Get-MSIProductCode $BuildSpace\$Script:Id\$Script:Version\$Script:FileName | Where-Object { $_ -match "^\{[0-9A-Fa-f\-]{36}\}$" }
+                Write-Log "Product code: $ProductCode" -Level Detail
+                if (-not $ProductCode) {
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "Could not read the MSI product code from $Script:FileName." -FailureStage "MSI Product Code Retrieval"
+                    continue
+                }
+            }
+            # Update placeholders for the final time
+            Update-ScriptPlaceholders -FileName $Script:FileName -ProductCode $ProductCode -Version $Script:Version
+
+            # DEBUG: Make sure that there aren't any placeholder strings left
+            if ($Script:InstallScript -match "<filename>|<productcode>|<version>" -or
+                $Script:PowerShellInstallScript -match "<filename>|<productcode>|<version>" -or
+                $Script:UninstallScript -match "<filename>|<productcode>|<version>" -or
+                $Script:PowerShellUninstallScript -match "<filename>|<productcode>|<version>" -or
+                $Script:DetectionScript -match "<filename>|<productcode>|<version>") {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "One or more placeholder strings were not replaced in the scripts." -FailureStage "Placeholder Replacement"
+                continue
+            }
+
+            # Write the contents of the install and uninstall scripts to files if they are PowerShell scripts.
+            # Add-NativeBitnessGuard is applied here rather than at assignment so the
+            # recipe-authored text stays intact for logging and the placeholder audit
+            # above; only the file that actually ships in the package carries it.
+            if ($Script:PowerShellInstallScript) {
+                Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\install.ps1 -Value (Add-NativeBitnessGuard -ScriptContent $Script:PowerShellInstallScript) -Force
+            }
+
+            if ($Script:PowerShellUninstallScript) {
+                Set-Content -Path $BuildSpace\$Script:Id\$Script:Version\uninstall.ps1 -Value (Add-NativeBitnessGuard -ScriptContent $Script:PowerShellUninstallScript) -Force
+            }
+
+            # Generate the .intunewin file
             Set-Location $YardstickModuleRoot
-        }
-    } finally {
-        # In a finally because the stage handlers above skip to the next recipe with
-        # `continue`, which leaves the try without ever entering the catch. The
-        # post-run script is a recipe's cleanup hook - crowdstrikefalcon revokes its
-        # OAuth token there - so it has to run on the failure path too, and the
-        # backup drain has to happen before the next iteration starts deleting
-        # .intunewin files.
+            Write-Log "Packaging the .intunewin file..." -Level Detail
+            Set-YardstickWatchdogStage -Stage 'Packaging'
+            $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force -TimeoutMinutes $Script:PackagingTimeoutMinutes
 
-        # Run the post-run script
-        if ($Script:PostRunScript) {
-            Write-Log "Running the post-run script..." -Level Detail
-            Set-YardstickWatchdogStage -Stage 'Post-Run Script'
-            try {
-                Invoke-Command -ScriptBlock $Script:PostRunScript -NoNewScope
-                Write-Log "Ran the post-run script." -Level Detail
-            } catch {
-                # Not Write-Error: $ErrorActionPreference is 'Stop', so a Write-Error
-                # here would throw out of the finally and kill the run.
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Run Script"
+            # Upload .intunewin file to Intune
+            # Detection Types
+            # Intune does not require an icon, so a missing file must not discard a
+            # package that has already been downloaded and built.
+            $Icon = $null
+            $missingIcon = $null
+            if (Test-Path -LiteralPath "$($Icons)\$($Script:IconFile)" -PathType Leaf) {
+                $Icon = New-YardstickWin32AppIcon -FilePath "$($Icons)\$($Script:IconFile)"
+            } else {
+                $missingIcon = if ($Script:IconFile) { [string]$Script:IconFile } else { '(no iconFile set)' }
+                Write-Log "Icon file $($Script:IconFile) is not in the Icons folder. Uploading without an icon." -Level Warning
             }
-        }
+            if (-not $Script:FileDetectionVersion) {
+                $Script:FileDetectionVersion = $Script:Version
+            }
 
-        # Drain this app's backup before moving on, so at most one copy is ever in
-        # flight and an abrupt exit in the next iteration cannot orphan it. The
-        # thread still ran concurrently with all the supersedence and assignment work
-        # above, which is where the time actually goes.
-        Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
-        Clear-YardstickLogContext
+            $DetectionRule = New-DetectionRule -DetectionType $Script:DetectionType -ProductCode $ProductCode
+
+            # Generate the min OS requirement rule
+            $RequirementRule = New-YardstickWin32AppRequirementRule -Architecture $Script:Architecture -MinimumSupportedWindowsRelease $Script:MinOSVersion
+
+            # Create the Intune App
+            Write-Log "Uploading $Script:DisplayName $Script:Version to Intune..."
+            Set-YardstickWatchdogStage -Stage 'Upload'
+            Connect-YardstickGraph
+            try {
+                if ($Script:AllowUserUninstall) {
+                    $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes -AllowAvailableUninstall
+                } else {
+                    $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
+                }
+                Write-Log "Uploaded. Waiting for Intune to publish it..."
+                $PublishTimeout = (Get-Date).AddMinutes(30)
+                do {
+                    Start-Sleep -Seconds 15
+                    $LiveWin32App = Get-YardstickWin32App -Id $Win32App.id
+                    if ((Get-Date) -gt $PublishTimeout) {
+                        throw "Timed out waiting for Intune to publish $Script:DisplayName after 30 minutes (state: $($LiveWin32App.publishingState))"
+                    }
+                } while ($LiveWin32App.publishingState -ne "published")
+                $UploadedAt = Get-Date
+            } catch {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Upload"
+                continue
+            }
+
+            # Hand the .intunewin off to a background thread that copies it to the
+            # backup share and then deletes the local copy. Staging it out of
+            # $Published first is what stops the next app's
+            # New-YardstickWin32AppPackage -Force (which names its output from the setup
+            # file, so two recipes can collide) from clobbering a file the thread is
+            # still reading. Nothing in here may throw - a bad backup share must not
+            # turn a successful upload into a failed application.
+            if ($Script:BackupEnabled) {
+                try {
+                    $BackupFileName = Get-YardstickBackupFileName -AppId $Script:Id -Version $Script:Version -Timestamp $UploadedAt
+                    $StageDir = Join-Path (Join-Path $Published '_BackupQueue') $Script:Id
+                    if (-not (Test-Path -LiteralPath $StageDir)) {
+                        New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
+                    }
+                    $StagedPath = Join-Path $StageDir $BackupFileName
+                    Invoke-WithRetry -Label "Stage .intunewin for backup" -MaxRetries 3 -DelaySeconds 1 `
+                        -ScriptBlock { Move-Item -LiteralPath $App.path -Destination $StagedPath -Force } `
+                        -VerifyBlock { Test-Path -LiteralPath $StagedPath } | Out-Null
+                    if (-not (Test-Path -LiteralPath $StagedPath)) {
+                        throw "could not stage $($App.path)"
+                    }
+                    Start-YardstickBackup -SourcePath $StagedPath -BackupRoot $Script:Backup -AppId $Script:Id `
+                        -FileName $BackupFileName -VersionsToKeep $Script:BackupVersionsToKeep
+                    Write-Log "Queued a backup of $BackupFileName to $Script:Backup." -Level Detail
+                } catch {
+                    # Send-YardstickLogReport.ps1 matches "Could not queue backup for <id>: ".
+                    Write-Log "Could not queue backup for $($Script:Id): $_" -Level Warning
+                }
+            }
+
+            # The payload is published, so retire it out of the dropbox. Leaving the
+            # dropbox empty is what makes the next run skip this recipe rather than
+            # republishing the same build. A failure here must not fail the app - the
+            # operator just has to clear the folder by hand.
+            if ($Script:ManualDownload) {
+                try {
+                    Complete-YardstickDropbox -DropboxPath $dropboxPath -ArchiveRoot $Script:SoftwareArchive `
+                        -Folder $Script:ManualDownloadFolder -Version $Script:Version
+                } catch {
+                    Write-Log "Could not archive the manual drop: $_" -Level Warning
+                }
+            }
+
+
+            ###################################################
+            # SUPERSEDENCE, RETENTION, AUTO-UPDATE
+            ###################################################
+
+            $Maintenance = Invoke-YardstickAppMaintenance -NewAppId $Win32App.id
+            $CurrentApp        = $Maintenance.CurrentApp
+            $supersededCount   = $Maintenance.SupersededCount
+            $autoUpdateApplied = $Maintenance.AutoUpdateApplied
+            $anchorStatus      = $Maintenance.AnchorStatus
+
+            $ActionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
+            $autoStatusParts = @()
+            if ($supersededCount -gt 0)   { $autoStatusParts += "supersedes $supersededCount" }
+            if ($autoUpdateApplied -gt 0) { $autoStatusParts += "auto-update on $autoUpdateApplied assignment(s)" }
+            if ($anchorStatus)            { $autoStatusParts += "anchor: $anchorStatus" }
+            $autoStatus = if ($autoStatusParts.Count -gt 0) { $autoStatusParts -join ', ' } else { $null }
+            Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus -AutoUpdateStatus $autoStatus -MissingIcon $missingIcon
+
+        } catch {
+            # Catch any unexpected errors during processing
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "General Processing"
+            if (-not((Get-Location).ProviderPath -eq $YardstickModuleRoot)) {
+                Set-Location $YardstickModuleRoot
+            }
+        } finally {
+            # In a finally because the stage handlers above skip to the next recipe with
+            # `continue`, which leaves the try without ever entering the catch. The
+            # post-run script is a recipe's cleanup hook - crowdstrikefalcon revokes its
+            # OAuth token there - so it has to run on the failure path too, and the
+            # backup drain has to happen before the next iteration starts deleting
+            # .intunewin files.
+
+            # Run the post-run script
+            if ($Script:PostRunScript) {
+                Write-Log "Running the post-run script..." -Level Detail
+                Set-YardstickWatchdogStage -Stage 'Post-Run Script'
+                try {
+                    Invoke-Command -ScriptBlock $Script:PostRunScript -NoNewScope
+                    Write-Log "Ran the post-run script." -Level Detail
+                } catch {
+                    # Not Write-Error: $ErrorActionPreference is 'Stop', so a Write-Error
+                    # here would throw out of the finally and kill the run.
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Run Script"
+                }
+            }
+
+            # Drain this app's backup before moving on, so at most one copy is ever in
+            # flight and an abrupt exit in the next iteration cannot orphan it. The
+            # thread still ran concurrently with all the supersedence and assignment work
+            # above, which is where the time actually goes.
+            Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
+            Clear-YardstickLogContext
+        }
     }
+    $RecipePass = @(Get-YardstickDeferredRecipe)
 }
 Write-Log "Finished processing $(@($Applications).Count) recipe(s)."
 

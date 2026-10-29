@@ -337,6 +337,41 @@ if ($developmentOnly) {
 #endregion
 
 
+#region GitHub API
+
+# Recipes call the GitHub API on development-only instances too, so this is
+# checked everywhere. A token is optional: without one, GitHub allows 60 calls an
+# hour, about one full run.
+Start-Area 'GitHub API'
+$gitHubToken = $null
+try {
+    $gitHubToken = Get-YardstickGitHubToken
+} catch {
+    Add-Check 'GitHub token' Warn "Could not read the GitHub API token: $($_.Exception.Message)"
+}
+if (-not $gitHubToken) {
+    if (-not ($results | Where-Object Check -eq 'GitHub token')) {
+        Add-Check 'GitHub token' Info 'No GitHub API token is stored, so GitHub calls are anonymous and limited to 60 an hour. Run .\Set-YardstickCredential.ps1 -GitHub to store one.'
+    }
+} elseif ($Offline) {
+    Add-Check 'GitHub token' OK 'A GitHub API token is stored. Checking it was skipped (-Offline).'
+} else {
+    try {
+        Reset-YardstickGitHubSession
+        $rateLimit = Get-YardstickGitHubRateLimit
+        if ($rateLimit.Authenticated) {
+            Add-Check 'GitHub token' OK "GitHub accepted the stored token: $($rateLimit.Remaining) of $($rateLimit.Limit) calls left this hour."
+        } else {
+            Add-Check 'GitHub token' Warn 'GitHub rejected the stored token, so runs fall back to anonymous calls. Store a new one with .\Set-YardstickCredential.ps1 -GitHub.'
+        }
+    } catch {
+        Add-Check 'GitHub token' Warn "Could not check the GitHub API token: $($_.Exception.Message)"
+    }
+}
+
+#endregion
+
+
 #region Packaging tool
 
 Start-Area 'Packaging'

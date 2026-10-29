@@ -4,7 +4,7 @@ preDownloadScript: |
   # GitHub's releases feed also contains Beta and Nightly builds whose prerelease
   # flags are not consistent. The repository's /releases/latest endpoint is the
   # authoritative stable release selected by Brave's maintainers.
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/brave/brave-browser/releases/latest' -Headers @{ 'User-Agent' = 'Yardstick' }
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/brave/brave-browser/releases/latest'
   if ($release.draft -or $release.prerelease -or $release.name -notmatch '^Release\s+v') {
     throw "The Brave latest-release endpoint did not return a stable release ('$($release.name)')."
   }

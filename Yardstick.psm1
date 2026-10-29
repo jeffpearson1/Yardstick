@@ -20,6 +20,7 @@ $script:ComponentModules = @(
     'YardstickIntune'
     'YardstickSupport'
     'YardstickCredential'
+    'YardstickGitHub'
     'YardstickConfig'
     'YardstickSetup'
 )

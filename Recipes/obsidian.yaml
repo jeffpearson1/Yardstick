@@ -1,7 +1,7 @@
 url: https://api.github.com/repos/obsidianmd/obsidian-releases/releases
 urlRedirects: false
 preDownloadScript: |
-  $releases = Invoke-RestMethod -Uri $url
+  $releases = Invoke-YardstickGitHubApi $url
   foreach ($release in $releases) {
     if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v(?<releaseVersion>[0-9]+(?:\.[0-9]+)+)$') { continue }
     $candidateVersion = $Matches.releaseVersion

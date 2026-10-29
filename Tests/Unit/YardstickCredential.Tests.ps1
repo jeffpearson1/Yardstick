@@ -236,6 +236,41 @@ Describe "SMTP credential storage round-trip" {
     }
 }
 
+Describe "GitHub token storage round-trip" {
+    BeforeAll {
+        $script:GitHubTarget = "Yardstick:PesterGitHub-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    }
+
+    AfterEach {
+        Remove-YardstickGitHubToken -Target $script:GitHubTarget -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    It "Returns null when no token is stored" {
+        Get-YardstickGitHubToken -Target $script:GitHubTarget | Should -BeNullOrEmpty
+    }
+
+    It "Round-trips the token, trimmed" {
+        Set-YardstickGitHubToken -Target $script:GitHubTarget -Token "  github_pat_11ABC  "
+        Get-YardstickGitHubToken -Target $script:GitHubTarget | Should -BeExactly 'github_pat_11ABC'
+    }
+
+    It "Accepts a SecureString token" {
+        $secure = ConvertTo-SecureString 'github_pat_secure' -AsPlainText -Force
+        Set-YardstickGitHubToken -Target $script:GitHubTarget -Token $secure
+        Get-YardstickGitHubToken -Target $script:GitHubTarget | Should -BeExactly 'github_pat_secure'
+    }
+
+    It "Rejects an empty token" {
+        { Set-YardstickGitHubToken -Target $script:GitHubTarget -Token '  ' } | Should -Throw
+    }
+
+    It "Reports whether a token was removed" {
+        Set-YardstickGitHubToken -Target $script:GitHubTarget -Token 'github_pat_x'
+        Remove-YardstickGitHubToken -Target $script:GitHubTarget | Should -BeTrue
+        Remove-YardstickGitHubToken -Target $script:GitHubTarget | Should -BeFalse
+    }
+}
+
 Describe "Send-YardstickCredentialExpiryEmail over SMTP" {
     BeforeAll {
         Import-Module "$PSScriptRoot\..\..\Modules\YardstickSupport.psm1" -Global -Force

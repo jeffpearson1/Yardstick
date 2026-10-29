@@ -2,7 +2,7 @@ url: https://github.com/WinMerge/winmerge/releases
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\VersionPro.psm1
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/WinMerge/winmerge/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/WinMerge/winmerge/releases/latest'
   $asset = $release.assets |
     Where-Object { $_.name -match '^WinMerge-[0-9]+(?:\.[0-9]+)+-x64-Setup\.exe$' -and $_.name -notmatch 'PerUser' } |
     Select-Object -First 1

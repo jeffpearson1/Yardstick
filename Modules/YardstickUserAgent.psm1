@@ -98,8 +98,8 @@ function Get-YardstickChromeUserAgent {
 
     .DESCRIPTION
     Use this wherever a vendor site needs to see a browser. Sites that only
-    want to identify the caller (the GitHub API, for one) are better served by
-    a plain 'Yardstick' agent.
+    want to identify the caller are better served by a plain 'Yardstick'
+    agent; for the GitHub API, use Invoke-YardstickGitHubApi, which sets one.
 
     .PARAMETER Refresh
     Re-read the Chrome version instead of using this session's cached answer.

@@ -7,6 +7,35 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Added
 
+- **Authenticated GitHub API.** Store a read-only fine-grained GitHub token with
+  `.\Set-YardstickCredential.ps1 -GitHub` (kept in Credential Manager as
+  `Yardstick:GitHub`) to raise GitHub's limit from 60 to 5,000 API calls an hour.
+  Every `api.github.com` call, from `GithubDownloader` and from recipes, now goes
+  through the new `Invoke-YardstickGitHubApi`, which:
+  - sends the token to `api.github.com` only, and identifies Yardstick to GitHub;
+  - carries on anonymously if GitHub rejects the token, and warns when the token
+    is within 14 days of expiring.
+
+  Each run logs the calls left, `Test-YardstickSetup.ps1` checks the token, and
+  `Test-RecipeSchema` warns about scripts that call the API directly. The 23 recipes
+  that did are switched over.
+
+- **Yardstick waits as long as GitHub asks.** When GitHub throttles a call, Yardstick
+  makes no more calls to GitHub (the API, `raw.githubusercontent.com` or a release
+  download), from any recipe, until the wait GitHub asked for has passed: the
+  `Retry-After` time, the reset time once the rate limit is used up, or otherwise a
+  minute, doubling each time GitHub throttles again within 15 minutes of the last wait
+  ending. The log records GitHub's explanation and request ID.
+  - A recipe that needs GitHub during the wait is set aside, the run carries on with
+    the others, and the recipe runs again at the end once the wait has passed. A
+    recipe is set aside at most three times, and a run waits for GitHub for at most
+    75 minutes in all. The email report shows each recipe once.
+  - The recipe harness waits in place instead, for up to five minutes at a time.
+  - The new `Invoke-YardstickGitHubRaw` reads `raw.githubusercontent.com` under the
+    same rules, without the token. The capcut, djiterra, kindle and snagit recipes,
+    which read winget-pkgs manifests there, use it, and `Test-RecipeSchema` warns
+    about scripts that read the host directly.
+
 - **Development-only instances.** `.\Install-Yardstick.ps1 -DevelopmentOnly` (or
   answering yes to *Is this a development-only computer?*) sets `developmentOnly: true`
   and sets up a computer for writing and testing recipes with the recipe harness. It

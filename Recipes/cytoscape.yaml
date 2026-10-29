@@ -1,7 +1,7 @@
 url: https://github.com/cytoscape/cytoscape/releases
 urlRedirects: false
 preDownloadScript: |
-  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/cytoscape/cytoscape/releases/latest' -Headers @{ 'User-Agent' = 'YardstickRecipe' } -ErrorAction Stop
+  $release = Invoke-YardstickGitHubApi 'https://api.github.com/repos/cytoscape/cytoscape/releases/latest'
   if ($release.prerelease -or $release.tag_name -match '(?i)(alpha|beta|rc)') { throw 'Latest Cytoscape release is a prerelease.' }
 
   $version = $release.tag_name

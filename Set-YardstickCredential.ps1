@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
     Stores, inspects, or removes the Intune app-registration credentials Yardstick
-    uses to authenticate to Microsoft Graph, the optional SMTP credential, and the
-    secret vaults recipes read with Get-Secrets.
+    uses to authenticate to Microsoft Graph, the optional SMTP credential, the
+    optional GitHub API token, and the secret vaults recipes read with Get-Secrets.
 
 .DESCRIPTION
     Yardstick reads its TenantID, ClientID and ClientSecret from Windows Credential
@@ -28,6 +28,13 @@
     instead of the Intune credential. Combine with -Show or -Remove. Only needed when
     the SMTP server requires authentication; without it Yardstick relays anonymously.
 
+.PARAMETER GitHub
+    Work with the GitHub API token instead of the Intune credential. Combine with
+    -Show (which also asks GitHub how many calls are left) or -Remove. Optional:
+    without a token, GitHub allows 60 API calls an hour, about one full run. Use a
+    fine-grained personal access token with read-only access to public repositories
+    and no permissions. Stored under "Yardstick:GitHub".
+
 .PARAMETER Secret
     Work with the named recipe secret vault (the one a recipe reads with
     Get-Secrets -VaultName) instead of the Intune credential. Prompts for secret
@@ -37,7 +44,7 @@
 .PARAMETER Target
     Override the Credential Manager target name. Defaults to the `credentialTarget`
     preference, or "Yardstick:IntuneGraph" (with -Smtp: the `smtpCredentialTarget`
-    preference, or "Yardstick:Smtp"). Not used with -Secret.
+    preference, or "Yardstick:Smtp"). Not used with -Secret or -GitHub.
 
 .EXAMPLE
     .\Set-YardstickCredential.ps1
@@ -52,6 +59,10 @@
 .EXAMPLE
     .\Set-YardstickCredential.ps1 -Smtp
     Prompts for the SMTP user name and password, and stores them securely.
+
+.EXAMPLE
+    .\Set-YardstickCredential.ps1 -GitHub
+    Prompts for a GitHub API token, stores it securely, and checks it with GitHub.
 
 .EXAMPLE
     .\Set-YardstickCredential.ps1 -Secret crowdstrikefalcon
@@ -78,6 +89,11 @@ param(
     [Parameter(ParameterSetName = 'Set')]
     [Parameter(ParameterSetName = 'Show')]
     [Parameter(ParameterSetName = 'Remove')]
+    [switch]$GitHub,
+
+    [Parameter(ParameterSetName = 'Set')]
+    [Parameter(ParameterSetName = 'Show')]
+    [Parameter(ParameterSetName = 'Remove')]
     [ValidateNotNullOrEmpty()]
     [string]$Secret,
 
@@ -92,9 +108,11 @@ $Global:LogFile = 'YLog.log'
 Import-Module powershell-yaml -ErrorAction Stop
 Import-Module "$PSScriptRoot\Yardstick.psd1" -Force
 
-if ($Secret) {
-    if ($Smtp) { throw "-Secret and -Smtp cannot be used together." }
+if (@($Smtp, $GitHub, [bool]$Secret | Where-Object { $_ }).Count -gt 1) {
+    throw "-Smtp, -GitHub and -Secret cannot be used together."
+}
 
+if ($Secret) {
     switch ($PSCmdlet.ParameterSetName) {
         'Show' {
             $vault = Get-YardstickSecretVault -VaultName $Secret
@@ -115,6 +133,51 @@ if ($Secret) {
         default {
             Register-YardstickSecretVault -VaultName $Secret | Out-Null
             Write-Host "Secret vault '$Secret' stored." -ForegroundColor Green
+        }
+    }
+    return
+}
+
+if ($GitHub) {
+    switch ($PSCmdlet.ParameterSetName) {
+        'Show' {
+            $token = Get-YardstickGitHubToken
+            if (-not $token) {
+                Write-Host "No GitHub API token is stored, so Yardstick calls GitHub anonymously (60 calls an hour)." -ForegroundColor Yellow
+                exit 1
+            }
+            $rateLimit = $null
+            try {
+                $rateLimit = Get-YardstickGitHubRateLimit
+            } catch {
+                Write-Warning "Could not check the token with GitHub: $($_.Exception.Message)"
+            }
+            [PSCustomObject]@{
+                Token         = "********$($token.Substring([math]::Max(0, $token.Length - 4)))"
+                Authenticated = if ($rateLimit) { $rateLimit.Authenticated } else { '(unknown)' }
+                Remaining     = if ($rateLimit) { "$($rateLimit.Remaining) of $($rateLimit.Limit)" } else { '(unknown)' }
+                Resets        = if ($rateLimit -and $rateLimit.Reset) { $rateLimit.Reset.ToString('HH:mm') } else { '(unknown)' }
+            } | Format-List
+        }
+
+        'Remove' {
+            Remove-YardstickGitHubToken | Out-Null
+        }
+
+        default {
+            Register-YardstickGitHubToken | Out-Null
+            Write-Host "GitHub API token stored. Checking it with GitHub..." -ForegroundColor Cyan
+            try {
+                $rateLimit = Get-YardstickGitHubRateLimit
+            } catch {
+                Write-Warning "The token was stored, but GitHub could not be reached to check it: $($_.Exception.Message)"
+                exit 1
+            }
+            if (-not $rateLimit.Authenticated) {
+                Write-Warning "The token was stored, but GitHub rejected it. Check it was copied in full and has not expired."
+                exit 1
+            }
+            Write-Host "GitHub accepted the token: $($rateLimit.Remaining) of $($rateLimit.Limit) calls left this hour." -ForegroundColor Green
         }
     }
     return
