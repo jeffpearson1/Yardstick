@@ -77,6 +77,22 @@ Describe "Test-VersionExcluded" {
     It "Null or empty version returns true (excluded as safety)" {
         Test-VersionExcluded -Version "" -VersionLock "1.x" | Should -BeTrue
     }
+
+    It "Lock does not match a longer minor number" {
+        Test-VersionExcluded -Version "3.12.0" -VersionLock "3.1" | Should -BeTrue
+    }
+
+    It "Lock matches a version with further segments" {
+        Test-VersionExcluded -Version "3.1.4" -VersionLock "3.1" | Should -BeFalse
+    }
+
+    It "Lock does not match a longer major number" {
+        Test-VersionExcluded -Version "80.1" -VersionLock "8" | Should -BeTrue
+    }
+
+    It "Lock does not match a longer final segment" {
+        Test-VersionExcluded -Version "19.42.2.243351" -VersionLock "19.42.2.24335" | Should -BeTrue
+    }
 }
 
 Describe "Compare-AppVersions" {
