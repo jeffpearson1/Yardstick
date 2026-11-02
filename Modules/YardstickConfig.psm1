@@ -481,6 +481,7 @@ Export-ModuleMember -Function @(
     'Test-YardstickPreferences',
     'Get-YardstickPreferenceAllowedValues',
     'ConvertFrom-YardstickQuotedPath',
+    'Get-YardstickFolderProblem',
     'Resolve-YardstickPreferencePath',
     'Get-YardstickProjectLayout',
     'Get-YardstickPreferencesPath',
