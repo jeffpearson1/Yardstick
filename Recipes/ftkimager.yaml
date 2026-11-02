@@ -39,9 +39,9 @@ preDownloadScript: |
     Select-Object -First 1
   if (-not $zipUrl) { throw "Could not find a CloudFront download link on $($best.Slug)." }
 
-  # e.g. .../8.3/Imager/FTK%20Imager%208.3.0.27.zip
+  # e.g. .../8.3/Imager/FTK%20Imager%208.3.0.27.zip or .../8.3/Imager/Exterro_FTK_Imager_8.3.1.6.zip
   $decoded = [System.Uri]::UnescapeDataString($zipUrl)
-  if ($decoded -match 'FTK\s*Imager\s*(\d+(?:\.\d+){1,3})') {
+  if ($decoded -match 'FTK[\s_]*Imager[\s_]*(\d+(?:\.\d+){1,3})') {
     $version = $Matches[1]
   } else {
     throw "Could not parse the FTK Imager version from '$decoded'."
