@@ -85,6 +85,30 @@ Describe "Test-YardstickSetup.ps1" {
         Test-Path (Join-Path $script:root 'Artifacts\Temp') | Should -BeFalse
     }
 
+    It "Lists each missing icon once, inheriting iconFile through base:" {
+        Set-TestPreferences
+        New-Item -ItemType Directory -Path (Join-Path $script:root 'Icons') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:root 'Icons\demo.png') -Value 'png'
+        $extra = @{
+            'zip.yaml'       = "id: zip.x64`ndisplayName: `"Zip`" # quoted`niconFile: zip.png"
+            'zip.arm64.yaml' = "base: zip`nid: zip.arm64`ndisplayName: Zip (ARM64)"
+            'noicon.yaml'    = "id: NoIcon`ndisplayName: No Icon App"
+        }
+        $paths = foreach ($name in $extra.Keys) {
+            $path = Join-Path $script:root "Recipes\$name"
+            Set-Content -LiteralPath $path -Value $extra[$name]
+            $path
+        }
+        try {
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Missing icons'
+            $check.Level | Should -Be 'Warn'
+            # zip.arm64 inherits zip.png, so the two share one entry.
+            $check.Message | Should -Match '^2 recipe icon\(s\) missing \(No Icon App, Zip[ )]'
+        } finally {
+            Remove-Item -LiteralPath $paths
+        }
+    }
+
     Context "Recipe overrides" {
         BeforeAll {
             $script:overridesPath = Join-Path $script:root 'Local\recipeOverrides.yaml'

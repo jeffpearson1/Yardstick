@@ -93,6 +93,12 @@ All notable changes to Yardstick are recorded here. Versions follow
 - FTK Imager: reads the version from Exterro's new download file name
   (`Exterro_FTK_Imager_8.3.1.6.zip`).
 
+### Removed
+
+- `Get-YardstickIcon.ps1`, the icon picker, which no longer worked. Icon tooling is
+  moving to the Yardstick dev studio; until then, add icons to the `Icons` folder by
+  hand. `Test-YardstickSetup.ps1` still lists recipes whose icon is missing.
+
 ## [1.1.0] - 2026-10-26
 
 ### Added

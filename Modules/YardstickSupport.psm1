@@ -6333,7 +6333,7 @@ $summaryRows
                     $backupCell = "`n                    <td data-label=`"Backup`"><span style=`"color: $bkColor;`">$bkStatus</span></td>"
                 }
                 # Uploaded without an icon: flag it so the operator knows to add one
-                # (Get-YardstickIcon.ps1 -RecipeId <id>).
+                # to the Icons folder.
                 $iconNote = ""
                 if ($app.PSObject.Properties['MissingIcon'] -and $app.MissingIcon) {
                     $iconNote = "<br><small style=`"color:#b35c00;`">No icon uploaded: $([System.Net.WebUtility]::HtmlEncode([string]$app.MissingIcon)) is missing from the Icons folder</small>"

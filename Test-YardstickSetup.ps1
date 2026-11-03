@@ -98,13 +98,52 @@ function Test-FolderWritable {
 }
 
 function Get-MissingIconCount {
-    # Dot-sourced here so the icon helpers stay local to this function.
+    # Reads id / displayName / iconFile / base from every recipe, with `base:`
+    # inheritance applied (base names a recipe file, as in Merge-RecipeWithBase).
+    # Only these top-level keys are needed, so a line regex avoids a YAML parse.
+    # Missing is one entry per missing icon file; recipes that share an icon are
+    # grouped, and a recipe with no iconFile counts under its id.
     param([string[]]$RecipeFolder, [string]$IconsFolder)
-    . (Join-Path $PSScriptRoot 'Get-YardstickIcon.ps1') -LoadOnly
-    $recipes = @(Get-RecipeIconInfo -RecipeFolder $RecipeFolder)
+
+    $raw = [ordered]@{}
+    foreach ($folder in $RecipeFolder) {
+        if (-not $folder -or -not (Test-Path -LiteralPath $folder -PathType Container)) { continue }
+        foreach ($file in Get-ChildItem -LiteralPath $folder -File | Where-Object { $_.Extension -in '.yaml', '.yml' }) {
+            if ($raw.Contains($file.BaseName)) { continue }
+            $fields = @{ id = ''; displayName = ''; iconFile = ''; base = '' }
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            foreach ($m in [regex]::Matches($text, '(?m)^(id|displayName|iconFile|base):[ \t]*(.*?)[ \t]*\r?$')) {
+                $value = $m.Groups[2].Value
+                if ($value -match '^"([^"]*)"' -or $value -match "^'([^']*)'") { $value = $Matches[1] }
+                else { $value = ($value -replace '\s+#.*$', '').Trim() }
+                if (-not $fields[$m.Groups[1].Value]) { $fields[$m.Groups[1].Value] = $value }
+            }
+            $raw[$file.BaseName] = $fields
+        }
+    }
+
+    $missing = foreach ($key in $raw.Keys) {
+        $recipe = $raw[$key]
+        $id = if ($recipe.id) { $recipe.id } else { $key }
+        $displayName = $recipe.displayName
+        $iconFile = $recipe.iconFile
+        $parent = $recipe.base
+        $depth = 0
+        while ($parent -and $raw.Contains($parent) -and $depth -lt 10 -and (-not $displayName -or -not $iconFile)) {
+            if (-not $displayName) { $displayName = $raw[$parent].displayName }
+            if (-not $iconFile) { $iconFile = $raw[$parent].iconFile }
+            $parent = $raw[$parent].base
+            $depth++
+        }
+        if ($iconFile -and (Test-Path -LiteralPath (Join-Path $IconsFolder $iconFile) -PathType Leaf)) { continue }
+        [pscustomobject]@{
+            FileName    = if ($iconFile) { $iconFile.ToLowerInvariant() } else { "$($id.ToLowerInvariant()).png" }
+            DisplayName = if ($displayName) { $displayName } else { $id }
+        }
+    }
     [pscustomobject]@{
-        Recipes = $recipes.Count
-        Missing = @(Get-MissingIconRecipe -Recipe $recipes -IconsFolder $IconsFolder)
+        Recipes = $raw.Count
+        Missing = @($missing | Group-Object FileName | ForEach-Object { $_.Group[0] } | Sort-Object DisplayName)
     }
 }
 
@@ -487,7 +526,7 @@ try {
     } else {
         $sample = ($icons.Missing | Select-Object -First 5 | ForEach-Object DisplayName) -join ', '
         $more = if ($icons.Missing.Count -gt 5) { ', ...' } else { '' }
-        Add-Check 'Missing icons' Warn "$($icons.Missing.Count) recipe icon(s) missing ($sample$more). Apps upload without an icon; add them with .\Get-YardstickIcon.ps1."
+        Add-Check 'Missing icons' Warn "$($icons.Missing.Count) recipe icon(s) missing ($sample$more). Apps upload without an icon; add them to $($prefs.Icons)."
     }
 } catch {
     Add-Check 'Missing icons' Skip "Could not check icons: $($_.Exception.Message)"
