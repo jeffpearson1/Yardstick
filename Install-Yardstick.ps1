@@ -1174,7 +1174,7 @@ if (-not $Step -and (Test-SetupDevelopmentOnly)) {
     Write-Host 'Next, try a first run with a single recipe:' -ForegroundColor Cyan
     Write-Host '    .\Yardstick.ps1 -ApplicationId 7zip -NoEmail'
     Write-Host ''
-    Write-Host 'Recipes without an icon upload without one; .\Get-YardstickIcon.ps1 helps find icons.' -ForegroundColor DarkGray
+    Write-Host 'Recipes without an icon upload without one; add icons to the Icons folder.' -ForegroundColor DarkGray
     Write-Host 'Run .\Test-YardstickSetup.ps1 at any time to re-check this installation.' -ForegroundColor DarkGray
 }
 exit 0

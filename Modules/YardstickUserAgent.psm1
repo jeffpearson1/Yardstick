@@ -6,9 +6,8 @@ script: [Microsoft.PowerShell.Commands.PSUserAgent]::Chrome still claims
 read from Google's own release feed rather than written down once and left to
 age.
 
-Callers outside the runner (Get-YardstickIcon.ps1) load this directly, so it
-imports nothing and logs nothing - a failed lookup is not worth a log line, and
-the fallback is good enough to send.
+It imports nothing and logs nothing - a failed lookup is not worth a log line,
+and the fallback is good enough to send.
 #>
 
 # The format Chrome itself sends since its user-agent reduction: only the major

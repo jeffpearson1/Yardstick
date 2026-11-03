@@ -65,7 +65,7 @@ Settings live in `Local\preferences.yaml`, which is excluded from Git. Every set
 
 ### Icons
 
-Icons are not included for licensing reasons. Put the icons your recipes need in the `Icons` folder (.jpg or .png, up to Intune's 512x512 and 750KB), or run `.\Get-YardstickIcon.ps1` to search for, tidy up and save them. The health check lists recipes whose icon is missing.
+Icons are not included for licensing reasons. Put the icons your recipes need in the `Icons` folder (.jpg or .png, up to Intune's 512x512 and 750KB). The health check lists recipes whose icon is missing.
 
 ### Recipe secrets
 

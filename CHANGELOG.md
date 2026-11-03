@@ -85,6 +85,19 @@ All notable changes to Yardstick are recorded here. Versions follow
 - The installer accepts paths in quotes, as Explorer's *Copy as path* produces, for
   every folder and file it asks for, and preferences paths written in quotes resolve
   correctly.
+- A failed Intune upload is now retried properly. The retry used to add a second
+  content version to the same app, which Intune refuses until the first is committed,
+  so it always failed. It now removes the half-made app, waits a minute, and starts
+  again with a new one. The retry also covers Intune failing or timing out the final
+  commit, which happens when Azure storage is busy.
+- FTK Imager: reads the version from Exterro's new download file name
+  (`Exterro_FTK_Imager_8.3.1.6.zip`).
+
+### Removed
+
+- `Get-YardstickIcon.ps1`, the icon picker, which no longer worked. Icon tooling is
+  moving to the Yardstick dev studio; until then, add icons to the `Icons` folder by
+  hand. `Test-YardstickSetup.ps1` still lists recipes whose icon is missing.
 
 ## [1.1.0] - 2026-10-26
 

@@ -443,8 +443,8 @@ It exits with code 1 when anything fails, so it can be used as a pre-flight chec
 `-Offline` skips the checks that sign in to Microsoft Graph, and `-PassThru` returns
 the results as objects.
 
-Icons are not included for licensing reasons. `Get-YardstickIcon.ps1` helps find
-and save the ones your recipes need.
+Icons are not included for licensing reasons. Put the ones your recipes need in the
+`Icons` folder, named as each recipe's `iconFile`.
 
 
 ## Upgrading
