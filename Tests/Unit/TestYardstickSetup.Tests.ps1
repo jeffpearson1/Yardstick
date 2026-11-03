@@ -149,6 +149,46 @@ Describe "Test-YardstickSetup.ps1" {
             $run.ExitCode | Should -Be 1
             ($run.Results | Where-Object Check -eq 'Recipe overrides').Level | Should -Be 'Fail'
         }
+
+        It "Counts a variant as matching its recipe and lists it" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value "demo.labs:`n  variantOf: demo`n  displayName: Demo App (Labs)"
+            $results = (Invoke-HealthCheck -Offline).Results
+            ($results | Where-Object Check -eq 'Recipe overrides').Level | Should -Be 'OK'
+            $variants = $results | Where-Object Check -eq 'Recipe variants'
+            $variants.Level | Should -Be 'OK'
+            $variants.Message | Should -Match 'demo\.labs \(from demo\)'
+        }
+
+        It "Warns about variants that cannot be built" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value @"
+demo.labs:
+  variantOf: demo
+demo.kiosk:
+  variantOf: dmeo
+  displayName: Demo Kiosk
+"@
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Recipe variants'
+            $check.Level | Should -Be 'Warn'
+            $check.Message | Should -Match 'demo\.labs: The variant .* needs a displayName'
+            $check.Message | Should -Match 'demo\.kiosk is built from dmeo, which is not a recipe'
+        }
+
+        It "Warns about two variants with the same displayName" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value @"
+demo.labs:
+  variantOf: demo
+  displayName: Demo App (Shared)
+demo.kiosk:
+  variantOf: demo
+  displayName: Demo App (Shared)
+"@
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Recipe variants'
+            $check.Level | Should -Be 'Warn'
+            $check.Message | Should -Match 'same displayName'
+        }
     }
 
     It "Names a required permission that has no admin consent" {

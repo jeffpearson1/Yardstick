@@ -7,6 +7,17 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Added
 
+- **Recipe variants: more than one app from a recipe.** An entry in
+  `Local\recipeOverrides.yaml` that sets `variantOf: <recipe id>` builds a second app
+  from that recipe, such as a lab Zoom next to the standard one. The variant starts
+  from the recipe with the recipe's own overrides applied, and its entry is layered
+  on top, so it only sets what differs; it needs a `displayName` of its own. `-All`
+  runs each variant straight after its recipe, and `-ApplicationId`, recipe groups
+  and `Migrate-ToSupersedenceModel.ps1` take its id. `Test-YardstickSetup.ps1` lists
+  the variants and warns about any that cannot be built. This replaces the old
+  gitignored `Recipes\<recipe>.common.yaml` copies. See
+  [Variants](Docs/WritingRecipes.md#variants-more-than-one-app-from-a-recipe).
+
 - **Authenticated GitHub API.** Store a read-only fine-grained GitHub token with
   `.\Set-YardstickCredential.ps1 -GitHub` (kept in Credential Manager as
   `Yardstick:GitHub`) to raise GitHub's limit from 60 to 5,000 API calls an hour.

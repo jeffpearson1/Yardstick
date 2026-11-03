@@ -273,24 +273,69 @@ try {
         if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
             $recipeIds = @(Get-ChildItem -LiteralPath $recipeFolder -Recurse -File -Include '*.yaml', '*.yml' | ForEach-Object BaseName)
         }
-        $unmatched = @($overrides.Keys | Where-Object { $_ -notin $recipeIds } | Sort-Object)
+        $variants = @(Get-RecipeVariant -Overrides $overrides)
+        $unmatched = @($overrides.Keys | Where-Object { $_ -notin $recipeIds -and $_ -notin $variants.Id } | Sort-Object)
         if ($unmatched.Count -gt 0) {
             Add-Check 'Recipe overrides' Warn "$($unmatched.Count) override(s) in $overrideSources name no recipe, so they are never applied: $($unmatched -join ', ')"
         } else {
-            Add-Check 'Recipe overrides' OK "$($overrides.Count) recipe override(s) in $overrideSources"
+            $variantNote = if ($variants) { ", including $($variants.Count) variant(s)" } else { '' }
+            Add-Check 'Recipe overrides' OK "$($overrides.Count) recipe override(s) in $overrideSources$variantNote"
+        }
+
+        # A variant is another app built from a recipe. Check each one can be
+        # built, since a broken one fails every run until it is fixed.
+        if ($variants -and $recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
+            $variantNames = @{}
+            $variantProblems = foreach ($variant in $variants) {
+                if ($variant.Id -in $recipeIds) {
+                    "$($variant.Id) is also a recipe, so the variant needs another id"
+                    continue
+                }
+                $parentFile = @(Get-YardstickRecipeFile -RecipesPath $recipeFolder -Id $variant.VariantOf -IncludeDisabled)[0]
+                if (-not $parentFile) {
+                    "$($variant.Id) is built from $($variant.VariantOf), which is not a recipe"
+                    continue
+                }
+                try {
+                    $recipe = Get-Content -LiteralPath $parentFile.FullName -Raw | ConvertFrom-Yaml
+                    $recipe = Merge-RecipeWithBase -Recipe $recipe -RecipesPath $recipeFolder
+                    $resolved = Resolve-RecipeOverride -Recipe $recipe -Id $variant.Id -Overrides $overrides
+                } catch {
+                    "$($variant.Id): $($_.Exception.Message)"
+                    continue
+                }
+                $name = [string]$resolved.displayName
+                if ($variantNames.ContainsKey($name)) {
+                    "$($variant.Id) has the same displayName as $($variantNames[$name]), '$name'"
+                } else {
+                    $variantNames[$name] = $variant.Id
+                }
+            }
+            if ($variantProblems) {
+                Add-Check 'Recipe variants' Warn "$(@($variantProblems).Count) variant(s) in $overrideSources cannot be built: $(@($variantProblems) -join '; ')."
+            } else {
+                Add-Check 'Recipe variants' OK "$($variants.Count) variant(s): $(@($variants | ForEach-Object { "$($_.Id) (from $($_.VariantOf))" }) -join ', ')"
+            }
         }
     }
 
     # Recipes that ship with a <YOUR_...> placeholder fail until this site's
-    # overrides fill it in. Only those files are parsed, so this stays quick.
+    # overrides fill it in. Only those files are parsed, so this stays quick. A
+    # variant is checked along with the recipe it is built from.
     if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
+        $variants = @(Get-RecipeVariant -Overrides $overrides)
         $unfilled = foreach ($file in Get-YardstickRecipeFile -RecipesPath $recipeFolder) {
             if ((Get-Content -LiteralPath $file.FullName -Raw) -cnotmatch '<YOUR_[A-Z0-9_]+>') { continue }
             $recipe = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Yaml
-            if ($overrides.Contains($file.BaseName)) {
-                $recipe = Merge-RecipeWithOverride -Recipe $recipe -Override $overrides[$file.BaseName]
+            foreach ($id in @($file.BaseName) + @($variants | Where-Object VariantOf -eq $file.BaseName | ForEach-Object Id)) {
+                try {
+                    $resolved = Resolve-RecipeOverride -Recipe $recipe -Id $id -Overrides $overrides
+                } catch {
+                    # A variant that cannot be built is already reported under Recipe variants.
+                    continue
+                }
+                if (Get-RecipePlaceholder -Recipe $resolved) { $id }
             }
-            if (Get-RecipePlaceholder -Recipe $recipe) { $file.BaseName }
         }
         if ($unfilled) {
             Add-Check 'Recipe overrides' Warn "$(@($unfilled).Count) recipe(s) need values only your site knows and will fail until you set them in ${overridesPath}: $(@($unfilled) -join ', '). See Site-Specific Overrides in Docs\WritingRecipes.md."
