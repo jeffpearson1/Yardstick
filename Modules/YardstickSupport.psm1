@@ -3857,14 +3857,43 @@ function Import-RecipeOverrides {
         if ($fields -isnot [System.Collections.IDictionary]) {
             throw "The entry for '$id' must list the fields it overrides, such as scopeTags."
         }
-        foreach ($reserved in 'id', 'base') {
-            if ($fields.Keys -contains $reserved) {
-                throw "The entry for '$id' cannot override '$reserved'."
-            }
-        }
+        Assert-RecipeOverrideEntry -Id $id -Fields $fields
         $overrides[[string]$id] = $fields
     }
     return $overrides
+}
+
+
+function Assert-RecipeOverrideEntry {
+    <#
+    .SYNOPSIS
+    Throws if one entry of an overrides file sets a field it may not.
+
+    .DESCRIPTION
+    An entry cannot override a recipe's 'id' or 'base'. An entry that sets
+    'variantOf' defines a variant: another app built from the recipe it names.
+    That must be one recipe id, and not the entry's own.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Fields
+    )
+
+    foreach ($reserved in 'id', 'base') {
+        if ($Fields.Keys -contains $reserved) {
+            throw "The entry for '$Id' cannot override '$reserved'."
+        }
+    }
+    $variantKey = $Fields.Keys | Where-Object { $_ -eq 'variantOf' } | Select-Object -First 1
+    if ($null -ne $variantKey) {
+        $parent = $Fields[$variantKey]
+        if ($parent -isnot [string] -or [string]::IsNullOrWhiteSpace($parent)) {
+            throw "The entry for '$Id' must name one recipe id in variantOf."
+        }
+        if ($parent -eq $Id) {
+            throw "The entry for '$Id' cannot be a variant of itself."
+        }
+    }
 }
 
 
@@ -3894,8 +3923,128 @@ function Merge-RecipeWithOverride {
 
     $merged = $Recipe.Clone()
     foreach ($key in $Override.Keys) {
+        # variantOf says which recipe a variant is built from; it is not a recipe field.
+        if ($key -eq 'variantOf') { continue }
         $merged[$key] = $Override[$key]
     }
+    return $merged
+}
+
+
+function Get-RecipeVariantParent {
+    <#
+    .SYNOPSIS
+    Returns the recipe id a variant is built from, or nothing if Id is not a
+    variant.
+
+    .PARAMETER Id
+    The id to look up: a recipe id, or a variant's id from the overrides file.
+
+    .PARAMETER Overrides
+    The effective overrides, from Import-YardstickEffectiveRecipeOverrides.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Overrides
+    )
+
+    if (-not $Overrides.Contains($Id)) { return }
+    $entry = $Overrides[$Id]
+    foreach ($key in $entry.Keys) {
+        if ($key -eq 'variantOf') { return [string]$entry[$key] }
+    }
+}
+
+
+function Get-RecipeVariant {
+    <#
+    .SYNOPSIS
+    Lists the variants defined in the overrides file.
+
+    .DESCRIPTION
+    A variant is an overrides entry that sets variantOf. It has no recipe file of
+    its own: Yardstick builds it from the recipe it names, as a second app with
+    its own displayName.
+
+    .PARAMETER Overrides
+    The effective overrides, from Import-YardstickEffectiveRecipeOverrides.
+
+    .OUTPUTS
+    PSCustomObject with Id and VariantOf, sorted by Id.
+    #>
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Overrides
+    )
+
+    foreach ($id in @($Overrides.Keys | Sort-Object)) {
+        $parent = Get-RecipeVariantParent -Id $id -Overrides $Overrides
+        if ($parent) { [PSCustomObject]@{ Id = [string]$id; VariantOf = $parent } }
+    }
+}
+
+
+function Resolve-RecipeOverride {
+    <#
+    .SYNOPSIS
+    Applies the overrides for a recipe id, which may be a variant's.
+
+    .DESCRIPTION
+    For a recipe, applies its entry from the overrides file, if it has one. For a
+    variant, Recipe is the recipe the variant is built from, and the recipe's own
+    entry is applied first and then the variant's, so a variant only has to set
+    what differs. The result takes the variant's id, which keeps its build folders
+    and backups apart from the recipe's.
+
+    Throws if the variant cannot be built: it is built from another variant, or
+    it has no displayName of its own. Intune apps are matched by displayName, so a
+    variant sharing its recipe's would replace the recipe's app.
+
+    .PARAMETER Recipe
+    The recipe hashtable, already merged with its base.
+
+    .PARAMETER Id
+    The recipe id, or the variant's id.
+
+    .PARAMETER Overrides
+    The effective overrides, from Import-YardstickEffectiveRecipeOverrides.
+
+    .OUTPUTS
+    A merged hashtable.
+    #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Recipe,
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Overrides
+    )
+
+    $parentId = Get-RecipeVariantParent -Id $Id -Overrides $Overrides
+    if (-not $parentId) {
+        if ($Overrides.Contains($Id)) { return Merge-RecipeWithOverride -Recipe $Recipe -Override $Overrides[$Id] }
+        return $Recipe
+    }
+
+    $grandparentId = Get-RecipeVariantParent -Id $parentId -Overrides $Overrides
+    if ($grandparentId) {
+        throw "'$Id' is a variant of '$parentId', which is itself a variant. Set its variantOf to '$grandparentId'."
+    }
+
+    $merged = $Recipe
+    if ($Overrides.Contains($parentId)) {
+        $merged = Merge-RecipeWithOverride -Recipe $merged -Override $Overrides[$parentId]
+    }
+    $parentName = [string]$merged.displayName
+    # A manual-drop recipe and its variant cannot share a dropbox folder, since each
+    # archives the drop once it has published it. Unless the variant names one, it
+    # gets the default: a folder named after its id.
+    if ($merged.ContainsKey('manualDownloadFolder') -and -not ($Overrides[$Id].Keys -contains 'manualDownloadFolder')) {
+        $merged = $merged.Clone()
+        $merged.Remove('manualDownloadFolder')
+    }
+    $merged = Merge-RecipeWithOverride -Recipe $merged -Override $Overrides[$Id]
+    if ([string]::IsNullOrWhiteSpace([string]$merged.displayName) -or [string]$merged.displayName -eq $parentName) {
+        throw "The variant '$Id' needs a displayName of its own. Intune apps are matched by name, so with '$parentName' it would replace the apps of '$parentId'."
+    }
+    $merged['id'] = $Id
     return $merged
 }
 
@@ -4285,9 +4434,7 @@ function ConvertFrom-YardstickOverrideBytes {
                 }
                 $copy[[string]$field] = $fields[$field]
             }
-            foreach ($reserved in 'id', 'base') {
-                if ($copy.Contains($reserved)) { throw "The entry for '$id' cannot override '$reserved'." }
-            }
+            Assert-RecipeOverrideEntry -Id $id -Fields $copy
             $entries[[string]$id] = $copy
         }
 

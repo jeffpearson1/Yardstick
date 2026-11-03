@@ -747,7 +747,7 @@ replace the recipe's own when Yardstick runs it:
     - Labs
 ```
 
-- Any recipe field can be overridden except `id` and `base`.
+- Any recipe field can be overridden except `id` and `base`. An entry that sets `variantOf` defines a [variant](#variants-more-than-one-app-from-a-recipe) instead.
 - Each field is replaced whole: an overridden `scopeTags` list replaces the recipe's list rather than adding to it.
 - Overrides are applied after [Recipe Inheritance](#recipe-inheritance) and apply only to the recipe they name. A recipe that uses `base` needs its own entry; it does not pick up its base recipe's.
 - The file is optional. If it cannot be read, or an entry is malformed, Yardstick stops before processing any recipe, rather than uploading apps without the overridden values. `.\Test-YardstickSetup.ps1` checks the file and warns about entries that name no recipe.
@@ -792,6 +792,32 @@ sccmclient:
 ```
 
 A recipe that still has a `<YOUR_...>` placeholder after its overrides are applied fails at the Configuration stage, naming the fields to set, and the rest of the run carries on. `.\Test-YardstickSetup.ps1` lists these recipes before you run them. When you write a recipe that needs a site value, use the same form - `<YOUR_` followed by capitals, digits and underscores - so both checks find it.
+
+### Variants: more than one app from a recipe
+
+Sometimes a site needs the same software as two apps configured differently, such as a Zoom for lab machines next to the Zoom for everyone else. Rather than copying the recipe, add an entry for the second app to `Local\recipeOverrides.yaml` that names the recipe in `variantOf`:
+
+```yaml
+zoom:
+  installScript: msiexec /i <filename> /qn /norestart ZConfig="ForceSSOUrl=example"
+zoom.labs:
+  variantOf: zoom
+  displayName: Zoom (Labs)
+  installScript: msiexec /i <filename> /qn /norestart ZConfig="ForceSSOUrl=example;DisableUserSignUp=1"
+  scopeTags:
+    - Labs
+```
+
+Each run then builds `zoom.labs` straight after `zoom`, as an app of its own with its own versions, supersedence and assignments.
+
+- The variant starts from the recipe with the recipe's own entry already applied, and its entry is applied on top, field by field. It only needs the fields that differ: above, `zoom.labs` keeps everything from `zoom` except its name, install command and scope tags.
+- It must set a `displayName` different from the recipe's. Intune apps are matched by name, so a variant with the recipe's name would replace the recipe's apps.
+- Its id is the entry's name. Use it like a recipe id: `-ApplicationId zoom.labs`, or list it in a group in `RecipeGroups.yaml`. `-All` runs every variant. Pick an id no recipe file has; `<recipe>.<variant>` is the convention.
+- A variant of a disabled or interactive recipe is skipped with it. A variant cannot be built from another variant.
+- A variant of a manual-drop recipe has its own folder in the software dropbox, named after the variant's id, even when the recipe sets `manualDownloadFolder`. Stage the media in both folders. The variant can name another folder in its entry, but not the recipe's: each archives the drop once it has published it.
+- Variants sync through [shared overrides](#shared-overrides) like any other entry.
+
+`.\Test-YardstickSetup.ps1` lists the variants and warns about any that cannot be built: one built from a recipe that does not exist, one without a displayName of its own, or two with the same displayName.
 
 ## Dependency Management
 

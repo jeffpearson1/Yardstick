@@ -68,6 +68,98 @@ vlc:
         Set-Content -LiteralPath $script:path -Value "7zip:`n  scopeTags: [Workstations"
         { Import-RecipeOverrides -Path $script:path } | Should -Throw
     }
+
+    It "Reads a variant entry" {
+        Set-Content -LiteralPath $script:path -Value "zoom.labs:`n  variantOf: zoom`n  displayName: Zoom (Labs)"
+        (Import-RecipeOverrides -Path $script:path)['zoom.labs']['variantOf'] | Should -Be 'zoom'
+    }
+
+    It "Throws when variantOf is <Case>" -ForEach @(
+        @{ Case = 'empty'; Value = "''"; Message = '*name one recipe id*' }
+        @{ Case = 'a list'; Value = '[zoom, vlc]'; Message = '*name one recipe id*' }
+        @{ Case = 'the entry itself'; Value = 'ZOOM.labs'; Message = '*variant of itself*' }
+    ) {
+        Set-Content -LiteralPath $script:path -Value "zoom.labs:`n  variantOf: $Value"
+        { Import-RecipeOverrides -Path $script:path } | Should -Throw $Message
+    }
+}
+
+Describe "Recipe variants" {
+    BeforeAll {
+        $script:recipe = @{ id = 'Zoom'; displayName = 'Zoom'; installScript = 'msiexec /i zoom.msi'; owner = 'Recipe owner' }
+        $script:overrides = [hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $script:overrides['zoom'] = @{ scopeTags = @('Staff'); installScript = 'msiexec /i zoom.msi SSO=1' }
+        $script:overrides['zoom.labs'] = @{ variantOf = 'zoom'; displayName = 'Zoom (Labs)'; installScript = 'msiexec /i zoom.msi LABS=1' }
+        $script:overrides['vlc'] = @{ owner = 'Media team' }
+    }
+
+    It "Finds the recipe a variant is built from, matching ids case-insensitively" {
+        Get-RecipeVariantParent -Id 'ZOOM.LABS' -Overrides $script:overrides | Should -Be 'zoom'
+        Get-RecipeVariantParent -Id 'zoom' -Overrides $script:overrides | Should -BeNullOrEmpty
+        Get-RecipeVariantParent -Id 'notthere' -Overrides $script:overrides | Should -BeNullOrEmpty
+    }
+
+    It "Lists only the variants" {
+        $variants = @(Get-RecipeVariant -Overrides $script:overrides)
+        $variants.Count | Should -Be 1
+        $variants[0].Id | Should -Be 'zoom.labs'
+        $variants[0].VariantOf | Should -Be 'zoom'
+    }
+
+    It "Applies only a recipe's own entry to the recipe" {
+        $result = Resolve-RecipeOverride -Recipe $script:recipe -Id 'zoom' -Overrides $script:overrides
+        $result.installScript | Should -Be 'msiexec /i zoom.msi SSO=1'
+        $result.displayName | Should -Be 'Zoom'
+        $result.id | Should -Be 'Zoom'
+    }
+
+    It "Leaves a recipe with no entry as it is" {
+        $result = Resolve-RecipeOverride -Recipe $script:recipe -Id 'other' -Overrides $script:overrides
+        $result.installScript | Should -Be 'msiexec /i zoom.msi'
+    }
+
+    It "Layers the variant's entry over the recipe's and takes the variant's id" {
+        $result = Resolve-RecipeOverride -Recipe $script:recipe -Id 'zoom.labs' -Overrides $script:overrides
+        $result.id | Should -Be 'zoom.labs'
+        $result.displayName | Should -Be 'Zoom (Labs)'
+        $result.installScript | Should -Be 'msiexec /i zoom.msi LABS=1'
+        $result.scopeTags | Should -Be @('Staff')
+        $result.owner | Should -Be 'Recipe owner'
+        $result.ContainsKey('variantOf') | Should -BeFalse
+    }
+
+    It "Does not change the recipe it was given" {
+        Resolve-RecipeOverride -Recipe $script:recipe -Id 'zoom.labs' -Overrides $script:overrides | Out-Null
+        $script:recipe.id | Should -Be 'Zoom'
+        $script:recipe.displayName | Should -Be 'Zoom'
+    }
+
+    It "Gives a variant its own dropbox folder unless its entry names one" {
+        $recipe = @{ id = 'stata'; displayName = 'Stata'; manualDownload = $true; manualDownloadFolder = 'Stata' }
+        $overrides = @{
+            'stata.labs'  = @{ variantOf = 'stata'; displayName = 'Stata (Labs)' }
+            'stata.kiosk' = @{ variantOf = 'stata'; displayName = 'Stata (Kiosk)'; manualDownloadFolder = 'StataKiosk' }
+        }
+        (Resolve-RecipeOverride -Recipe $recipe -Id 'stata.labs' -Overrides $overrides).ContainsKey('manualDownloadFolder') | Should -BeFalse
+        (Resolve-RecipeOverride -Recipe $recipe -Id 'stata.kiosk' -Overrides $overrides).manualDownloadFolder | Should -Be 'StataKiosk'
+        $recipe.manualDownloadFolder | Should -Be 'Stata'
+    }
+
+    It "Throws when a variant keeps <Case>" -ForEach @(
+        @{ Case = "its recipe's displayName"; Fields = @{ variantOf = 'zoom' } }
+        @{ Case = "the same displayName"; Fields = @{ variantOf = 'zoom'; displayName = 'zoom' } }
+    ) {
+        $overrides = @{ 'zoom.kiosk' = $Fields }
+        { Resolve-RecipeOverride -Recipe $script:recipe -Id 'zoom.kiosk' -Overrides $overrides } | Should -Throw '*needs a displayName of its own*'
+    }
+
+    It "Throws for a variant of a variant, naming the recipe to use" {
+        $overrides = @{
+            'zoom.labs'  = @{ variantOf = 'zoom'; displayName = 'Zoom (Labs)' }
+            'zoom.kiosk' = @{ variantOf = 'zoom.labs'; displayName = 'Zoom (Kiosk)' }
+        }
+        { Resolve-RecipeOverride -Recipe $script:recipe -Id 'zoom.kiosk' -Overrides $overrides } | Should -Throw "*Set its variantOf to 'zoom'*"
+    }
 }
 
 Describe "Merge-RecipeWithOverride" {
