@@ -38,7 +38,7 @@ preDownloadScript: |
   # EndNote's marketing year (2025) differs from its file version (22.x), so read
   # the real version from the MSI rather than deriving it from the year.
   $msiTempPath = Join-Path $tempDir $fileName
-  Start-BitsTransfer -Source $url -Destination $msiTempPath
+  Invoke-YardstickBitsDownload -Source $url -Destination $msiTempPath
   $version = ([string](Get-MsiProperty -Path $msiTempPath -PropertyName ProductVersion)).Trim()
   if (-not $version) {
     throw "Could not read ProductVersion from $url"
@@ -50,7 +50,7 @@ preDownloadScript: |
   try {
     Invoke-WebRequest -Uri $updateUrl -Method Head -UseBasicParsing | Out-Null
     $updateTempPath = Join-Path $tempDir $updateFileName
-    Start-BitsTransfer -Source $updateUrl -Destination $updateTempPath
+    Invoke-YardstickBitsDownload -Source $updateUrl -Destination $updateTempPath
 
     $windowsInstaller = New-Object -ComObject WindowsInstaller.Installer
     $patchInfo = $windowsInstaller.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $windowsInstaller, @($updateTempPath, 0))

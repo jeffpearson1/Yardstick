@@ -21,7 +21,7 @@ downloadScript: |
   if (!(Test-Path "$buildspace/$id/$version")) {
     New-Item -ItemType Directory -Path "$buildspace/$id/$version" | Out-Null
   }
-  Start-BitsTransfer -Source $url -Destination $buildspace/$id/$version/$filename
+  Invoke-YardstickBitsDownload -Source $url -Destination $buildspace/$id/$version/$filename
 installScript: <filename> /VERYSILENT /ALLUSERS /NORESTART
 uninstallScript: '"%ProgramFiles(x86)%\WinSCP\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
 iconFile: WinSCP.png

@@ -8,7 +8,7 @@ preDownloadScript: |
   $fileName = 'MarcEdit_7_8_mixed.exe'
   $marcEditStagedInstaller = Join-Path $Temp $fileName
   Remove-Item -LiteralPath $marcEditStagedInstaller -Force -ErrorAction SilentlyContinue
-  Start-BitsTransfer -Source $url -Destination $marcEditStagedInstaller
+  Invoke-YardstickBitsDownload -Source $url -Destination $marcEditStagedInstaller
 
   $version = ([string](Get-Item -LiteralPath $marcEditStagedInstaller).VersionInfo.ProductVersion).Trim()
   if ($version -notmatch '^\d+(?:\.\d+){1,3}$') {
@@ -41,7 +41,7 @@ downloadScript: |
   Copy-Item -LiteralPath $marcEditStagedInstaller -Destination $fileName -Force
 
   foreach ($payload in $dotnetPayloads) {
-    Start-BitsTransfer -Source $payload.Url -Destination $payload.Destination
+    Invoke-YardstickBitsDownload -Source $payload.Url -Destination $payload.Destination
     $actualHash = (Get-FileHash -LiteralPath $payload.Destination -Algorithm SHA512).Hash
     if ($actualHash -ne $payload.Hash) {
       throw "Hash validation failed for $($payload.Destination)."

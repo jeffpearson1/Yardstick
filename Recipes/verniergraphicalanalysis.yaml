@@ -3,7 +3,7 @@ urlRedirects: false
 preDownloadScript: |
   # Start the download
   $filename = ($url -split "/")[-1]
-  Start-BitsTransfer -Source $Script:URL -Destination "$TEMP\$filename"
+  Invoke-YardstickBitsDownload -Source $Script:URL -Destination "$TEMP\$filename"
   # Extract the zip file
   Expand-Archive -Path "$TEMP\$filename" -DestinationPath "$TEMP\VGA_Extracted" -Force
   $filename = Get-ChildItem -Path "$TEMP\VGA_Extracted" -Filter "*.msi" | Select-Object -First 1 | Select-Object -ExpandProperty Name

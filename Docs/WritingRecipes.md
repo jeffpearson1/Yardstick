@@ -115,6 +115,20 @@ $Products = Invoke-RestMethod -Uri https://api.articulate.com/product-artifacts 
 
 APIs that just want to know who is calling are better served by a plain `'Yardstick'` agent.
 
+#### Downloading files
+
+To download a file in a script, use `Invoke-YardstickBitsDownload` rather than `Start-BitsTransfer`. It takes the same `-Source` and `-Destination`, and `-Dynamic` for servers that need it:
+
+```powershell
+Invoke-YardstickBitsDownload -Source $url -Destination (Join-Path $Temp $fileName)
+```
+
+A plain `Start-BitsTransfer` waits as long as the vendor's server takes. The helper gives up on a transfer that moves no data for `bitsStallTimeoutMinutes` and cleans up its BITS job. While data is still moving, it tells the stage watchdog the recipe is making progress, so a large download on a slow link is never abandoned. `Test-RecipeSchema` warns about a script that calls `Start-BitsTransfer` without `-Asynchronous`.
+
+`Invoke-WebRequest` and `Invoke-RestMethod` are bounded already: Yardstick gives every call in a recipe a default timeout for the server to start answering, and for a download that stops receiving data partway (`webRequestTimeoutSeconds`).
+
+If a recipe stage still makes no progress for `recipeStageTimeoutMinutes`, the watchdog abandons the recipe, records it as failed, and moves on to the next one. It does this by interrupting whatever the script is waiting on, so avoid catching every error in a retry loop, which would catch that interrupt too. `Start-Process -Wait` cannot be interrupted, so a recipe stuck there still ends the run.
+
 #### GitHub API
 
 Call `api.github.com` only through `Invoke-YardstickGitHubApi`, never with `Invoke-RestMethod`. It takes a full API URL or a path relative to it and returns what `Invoke-RestMethod` would:

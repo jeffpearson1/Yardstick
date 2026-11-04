@@ -12,7 +12,7 @@ preDownloadScript: |
   $fileName = "MobaXterm_installer_$version.msi"
 downloadScript: |
   $zipFile = "MobaXterm_Installer_v$version.zip"
-  Start-BitsTransfer -Source $url -Destination $zipFile
+  Invoke-YardstickBitsDownload -Source $url -Destination $zipFile
   Expand-Archive -LiteralPath $zipFile -DestinationPath . -Force
   Remove-Item -LiteralPath $zipFile -Force
   if (-not (Test-Path -LiteralPath $fileName)) { throw "Expected $fileName was not found after extracting $zipFile." }

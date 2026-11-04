@@ -272,6 +272,30 @@ Describe "Test-RecipeSchema" {
         }
     }
 
+    Context "Synchronous BITS transfers" {
+        It "Warns on a synchronous Start-BitsTransfer in <Field>" -ForEach @(
+            @{ Field = 'preDownloadScript' }
+            @{ Field = 'downloadScript' }
+            @{ Field = 'postDownloadScript' }
+        ) {
+            $recipe = New-ValidRecipe
+            $recipe[$Field] = "Start-BitsTransfer -Source `$url -Destination `"`$Temp\x.exe`""
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match "Field '$Field' calls Start-BitsTransfer" } | Should -Not -BeNullOrEmpty
+            $result.IsValid | Should -BeTrue
+        }
+
+        It "Does not warn on <Case>" -ForEach @(
+            @{ Case = 'Invoke-YardstickBitsDownload'; Script = "Invoke-YardstickBitsDownload -Source `$url -Destination `"`$Temp\x.exe`"" }
+            @{ Case = 'an -Asynchronous job the recipe manages'; Script = "`$job = Start-BitsTransfer -Source `$url -Destination `"`$Temp\x.exe`" -Asynchronous" }
+        ) {
+            $recipe = New-ValidRecipe
+            $recipe['preDownloadScript'] = $Script
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.Warnings | Where-Object { $_ -match 'Start-BitsTransfer' } | Should -BeNullOrEmpty
+        }
+    }
+
     Context "Direct GitHub calls" {
         It "Warns on <Script>" -ForEach @(
             @{ Script = "`$release = Invoke-RestMethod -Uri 'https://api.github.com/repos/o/r/releases/latest'" }

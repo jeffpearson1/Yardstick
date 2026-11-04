@@ -90,6 +90,22 @@ All notable changes to Yardstick are recorded here. Versions follow
   (`-TaskSchedule Daily|Weekdays|Custom`, `-TaskDays`). `-TaskSchedule MondayToFriday`
   and `MondayToThursday` from 1.1.0 still work. `Register-YardstickScheduledTask` takes
   `-DaysOfWeek` instead of `-Schedule`.
+- **A stuck recipe no longer ends the run.** When a recipe stage makes no progress for
+  `recipeStageTimeoutMinutes`, the watchdog now abandons that recipe and moves on to
+  the next. It interrupts whatever the stage is waiting on (a download, a sleep, a
+  process), the recipe is recorded as failed with "Abandoned after N minutes without
+  progress in stage ...", and the email report lists it with the other failures.
+  Before, the watchdog ended the whole run, so every recipe after the stuck one was
+  skipped. A few calls cannot be interrupted, such as `Start-Process -Wait` or a native
+  call that blocks. If the stage still has not moved five minutes after the
+  interrupt, the watchdog ends the run as before.
+- **Recipes download with `Invoke-YardstickBitsDownload`.** The 13 recipes that called
+  `Start-BitsTransfer` themselves (endnote, grammarly, ltspice, marcedit, mobaxterm,
+  nvivo, postshot, the three Vernier apps, both Visual C++ redistributables and
+  winscp) now use the helper. It gives up on a transfer that moves no data and tells
+  the watchdog when a slow download is still moving. The helper takes `-Dynamic`,
+  uses `bitsStallTimeoutMinutes` when a recipe calls it, and `Test-RecipeSchema` warns
+  about a synchronous `Start-BitsTransfer` in a recipe script.
 
 ### Fixed
 
