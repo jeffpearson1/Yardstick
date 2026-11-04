@@ -1,0 +1,88 @@
+url: https://www.tableau.com/downloads/desktop/pc64
+urlRedirects: false
+preDownloadScript: |
+  # Tableau's "download latest" link redirects to the current Windows x64 installer, e.g.
+  # https://downloads.tableau.com/tssoftware/TableauDesktop-64bit-2026-3-0.exe. (The
+  # TableauAutoUpdate.xml feed is not usable here: product auto-update only offers
+  # maintenance releases, so a new release line such as 2026.3 never appears in it.)
+  # tableau.com sits behind Akamai bot protection that answers 403 to the PowerShell, Chrome
+  # and BITS user agents but serves curl, so resolve the redirect and download the installer
+  # with the curl.exe that ships with Windows (not whichever curl is first on PATH).
+  $curlExe = Join-Path $env:SystemRoot 'System32\curl.exe'
+  $latestUrl = $url
+  $url = (& $curlExe --fail --silent --show-error --output NUL --write-out '%{redirect_url}' $latestUrl) -join ''
+  if ($LASTEXITCODE -ne 0) { throw "curl.exe exited with $LASTEXITCODE resolving $latestUrl." }
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+  if ($fileName -notmatch '^TableauDesktop-64bit-(?<version>\d+-\d+-\d+)\.exe$') {
+    throw "$latestUrl redirected to '$url', which is not a Tableau Desktop x64 installer."
+  }
+  $version = $Matches['version'] -replace '-', '.'
+  # Each release line installs side by side under its own folder ("Tableau 2026.3").
+  $fileDetectionPath = '%ProgramFiles%\Tableau\Tableau {0}\bin' -f ([version]$version).ToString(2)
+downloadScript: |
+  # Abandon the transfer if it averages under 1 KB/s for 15 minutes, matching the BITS
+  # stall timeout the default download path uses.
+  & $curlExe --fail --location --silent --show-error --retry 3 --speed-limit 1024 --speed-time 900 --output $fileName $url
+  if ($LASTEXITCODE -ne 0) { throw "curl.exe exited with $LASTEXITCODE downloading $url." }
+postDownloadScript: |
+  $installerPath = Join-Path $PWD $fileName
+  $signature = Get-AuthenticodeSignature -LiteralPath $installerPath
+  if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '^CN="?Salesforce, Inc\."?,') {
+    throw "$fileName is not validly signed by Salesforce, Inc. (status $($signature.Status), signer '$($signature.SignerCertificate.Subject)')."
+  }
+  # tableau.exe carries the internal build number rather than 2026.3.0; the bundle's product
+  # name holds it, e.g. "Tableau 2026.2 (20262.26.0912.1023)".
+  $productName = (Get-Item -LiteralPath $installerPath).VersionInfo.ProductName
+  if ($productName -notmatch '\((?<build>\d+(?:\.\d+){3})\)') {
+    throw "Could not read the Tableau build number from product name '$productName'."
+  }
+  $fileDetectionVersion = ([version]$Matches['build']).ToString()
+installScript: <filename> /quiet /norestart ACCEPTEULA=1 AUTOUPDATE=0 DESKTOPSHORTCUT=0
+powerShellUninstallScript: |
+  # Tableau is a Burn bundle whose bundle GUID changes with every build, so find the bundle's
+  # ARP entry for this release line by name and run its cached QuietUninstallString.
+  $release = ([version]'<version>').ToString(2)
+  $roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+  foreach ($root in $roots) {
+    foreach ($entry in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
+      $props = Get-ItemProperty -Path $entry.PSPath -ErrorAction SilentlyContinue
+      if ($props.DisplayName -notlike "Tableau $release (*" -or -not $props.BundleCachePath) { continue }
+      $command = [Environment]::ExpandEnvironmentVariables([string]$props.QuietUninstallString)
+      if ($command -match '^"(?<exe>[^"]+)"\s*(?<args>.*)$') {
+        $process = Start-Process -FilePath $Matches.exe -ArgumentList $Matches.args, '/norestart' -Wait -PassThru
+        if ($process.ExitCode -in 0, 1641, 3010) {
+          # The bundle leaves the Drivers and Connectors folders that Desktop, Prep Builder and
+          # Bridge share. Remove them only once nothing else is using them.
+          $tableauRoot = Join-Path $env:ProgramFiles 'Tableau'
+          foreach ($folder in (Join-Path $tableauRoot 'Drivers'), (Join-Path $tableauRoot 'Connectors'), $tableauRoot) {
+            if ((Test-Path -LiteralPath $folder) -and -not (Get-ChildItem -LiteralPath $folder -Force)) {
+              Remove-Item -LiteralPath $folder -Force -ErrorAction SilentlyContinue
+            }
+          }
+        }
+        exit $process.ExitCode
+      }
+    }
+  }
+  Write-Output "Tableau $release is not installed."
+  exit 0
+iconFile: tableaudesktop.png
+id: tableaudesktop
+displayName: DEV Tableau Desktop
+publisher: Salesforce, Inc.
+description: Tableau Desktop is a visual analytics application for connecting to, exploring, and building interactive dashboards from data.
+fileType: exe
+detectionType: file
+fileDetectionName: tableau.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+# Each release line (2026.1, 2026.2, ...) installs side by side rather than upgrading the
+# previous one, so have Intune uninstall superseded versions instead of accumulating them.
+uninstallPreviousVersion: true
+maximumInstallationTimeInMinutes: 60
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W11_24H2
