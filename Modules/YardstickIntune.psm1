@@ -584,10 +584,11 @@ function Resolve-YardstickIntuneWinAppUtil {
     $downloadPath = "$toolPath.download"
     $downloadUri = 'https://raw.githubusercontent.com/microsoft/Microsoft-Win32-Content-Prep-Tool/1d6cfcbdf8c28edc596337031f74df951f38f718/IntuneWinAppUtil.exe'
     try {
-        # -TimeoutSec explicitly: module session state does not inherit the runner's
-        # global PSDefaultParameterValues. It bounds the wait for response headers
-        # only, so it cannot truncate the download itself.
-        Invoke-WebRequest -Uri $downloadUri -OutFile $downloadPath -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+        # Timeouts explicitly: module session state does not inherit the runner's
+        # global PSDefaultParameterValues. -TimeoutSec bounds the wait for response
+        # headers and -OperationTimeoutSeconds the gap between body reads, so neither
+        # can truncate a slow download that is still moving.
+        Invoke-WebRequest -Uri $downloadUri -OutFile $downloadPath -UseBasicParsing -TimeoutSec 120 -OperationTimeoutSeconds 120 -ErrorAction Stop
         $actualHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
         if ($actualHash -ne $expectedHash) { throw "Downloaded IntuneWinAppUtil.exe failed SHA-256 validation." }
         Move-Item -LiteralPath $downloadPath -Destination $toolPath -Force
