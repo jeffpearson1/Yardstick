@@ -103,6 +103,13 @@ All notable changes to Yardstick are recorded here. Versions follow
   commit, which happens when Azure storage is busy.
 - FTK Imager: reads the version from Exterro's new download file name
   (`Exterro_FTK_Imager_8.3.1.6.zip`).
+- A web download in a recipe that stops partway now fails after
+  `webRequestTimeoutSeconds` with nothing received, instead of holding the run until
+  the stage watchdog. `-TimeoutSec` only covered the wait for the server to start
+  answering, so a vendor host that sent half an installer and then went quiet on an
+  open connection blocked the run with no limit. Yardstick now also sets
+  `-OperationTimeoutSeconds`, which bounds the gap between reads, so a slow download
+  that is still moving is never cut off.
 
 ### Removed
 

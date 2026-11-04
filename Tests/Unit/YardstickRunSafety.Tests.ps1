@@ -56,11 +56,18 @@ Describe "Set-YardstickWebRequestTimeout" {
         $Global:PSDefaultParameterValues['Invoke-RestMethod:TimeoutSec'] | Should -Be 120
     }
 
+    It "also bounds a response body that stops arriving" {
+        # -TimeoutSec only covers the headers. The TreeSize host on 2026-11-04 sent
+        # headers and half the installer, then went quiet with the socket open.
+        Set-YardstickWebRequestTimeout -TimeoutSeconds 120
+        $Global:PSDefaultParameterValues['Invoke-WebRequest:OperationTimeoutSeconds'] | Should -Be 120
+        $Global:PSDefaultParameterValues['Invoke-RestMethod:OperationTimeoutSeconds'] | Should -Be 120
+    }
+
     It "removes the defaults when given 0" {
         Set-YardstickWebRequestTimeout -TimeoutSeconds 120
         Set-YardstickWebRequestTimeout -TimeoutSeconds 0
-        $Global:PSDefaultParameterValues.ContainsKey('Invoke-WebRequest:TimeoutSec') | Should -BeFalse
-        $Global:PSDefaultParameterValues.ContainsKey('Invoke-RestMethod:TimeoutSec') | Should -BeFalse
+        $Global:PSDefaultParameterValues.Keys | Where-Object { $_ -like 'Invoke-*' } | Should -BeNullOrEmpty
     }
 
     It "re-asserts after a recipe wipes the table" {

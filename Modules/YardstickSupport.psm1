@@ -1052,11 +1052,21 @@ function Set-YardstickWebRequestTimeout {
     written without it. A recipe that does pass -TimeoutSec still wins, because an
     explicit argument always beats a default.
 
-    This bounds the wait for response *headers*, not the response body - verified
-    against a server that sent headers immediately then dribbled a body for twelve
-    seconds, which -TimeoutSec 4 happily accepted. So this cannot truncate a large
-    but healthy -OutFile download; it only ends the case that actually hangs, where
+    Two parameters are set, because each covers a different way to hang:
+
+    -TimeoutSec bounds the wait for response *headers*, not the response body -
+    verified against a server that sent headers immediately then dribbled a body
+    for twelve seconds, which -TimeoutSec 4 happily accepted. It ends the case where
     the far end never answers at all.
+
+    -OperationTimeoutSeconds (PowerShell 7.4+) bounds the gap *between reads* of the
+    body, not the whole transfer. On 2026-11-04 the TreeSize host stopped sending
+    halfway through a 16 MB installer and kept the connection open; -TimeoutSec
+    could not see that, and the run sat on it until the watchdog. Verified on 7.6:
+    a body that pauses 30 seconds fails at -OperationTimeoutSeconds 4, while one
+    trickling for 13 seconds with no long gap completes. So neither parameter can
+    truncate a large but healthy -OutFile download, however slow the link. Older
+    PowerShell ignores a default for a parameter it does not have.
 
     Module code does NOT see this. Each module has its own session state with its
     own $PSDefaultParameterValues, so YardstickGraph and YardstickIntune pass
@@ -1067,8 +1077,9 @@ function Set-YardstickWebRequestTimeout {
     recipe would un-bound every recipe after it.
 
     .PARAMETER TimeoutSeconds
-    Seconds to wait for response headers. 0 or less removes the defaults, restoring
-    PowerShell's indefinite behaviour.
+    Seconds to wait for response headers, and the longest the body may go without
+    sending anything. 0 or less removes the defaults, restoring PowerShell's
+    indefinite behaviour.
     #>
     [CmdletBinding()]
     [OutputType([void])]
@@ -1081,7 +1092,11 @@ function Set-YardstickWebRequestTimeout {
         $Global:PSDefaultParameterValues = @{}
     }
 
-    foreach ($key in 'Invoke-WebRequest:TimeoutSec', 'Invoke-RestMethod:TimeoutSec') {
+    $keys = foreach ($cmdlet in 'Invoke-WebRequest', 'Invoke-RestMethod') {
+        "${cmdlet}:TimeoutSec"
+        "${cmdlet}:OperationTimeoutSeconds"
+    }
+    foreach ($key in $keys) {
         if ($TimeoutSeconds -le 0) {
             $Global:PSDefaultParameterValues.Remove($key)
         } else {
