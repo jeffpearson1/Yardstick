@@ -18,7 +18,7 @@ preDownloadScript: |
 downloadScript: |
   # Download the MSI
   $filename = "LTspice64.msi"
-  Start-BitsTransfer -Source $Script:URL -Destination "$TEMP\$filename" -Dynamic
+  Invoke-YardstickBitsDownload -Source $Script:URL -Destination "$TEMP\$filename" -Dynamic
   # Extract the cab files 
   Start-Process -FilePath "msiexec.exe" -ArgumentList "/a `"$TEMP\$filename`" /qn TARGETDIR=$TEMP\LTspice_Extracted" -Wait
   # Move the extracted files to the staging area

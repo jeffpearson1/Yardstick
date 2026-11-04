@@ -160,6 +160,8 @@ $Script:PackagingTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.p
 $Script:BitsStallTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.bitsStallTimeoutMinutes -Default 15 -Name 'bitsStallTimeoutMinutes'
 
 Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
+# For recipes that call Invoke-YardstickBitsDownload themselves.
+Set-YardstickBitsStallTimeout -Minutes $Script:BitsStallTimeoutMinutes
 
 # Shared content: with syncSharedContent on, icons and recipe overrides are synced
 # both ways with the share before any recipe is read. The sync never throws: an
@@ -1463,9 +1465,11 @@ Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences
 
 # Last line of defence against a hung run. Everything below reports its stage to
 # this; if one of them stops reporting for recipeStageTimeoutMinutes, the watchdog
-# writes the diagnosis to the log and ends the process. Only when the process is
-# the run's own, though: Invoke-Yardstick at a prompt would take the user's console
-# down with it, so there the watchdog only logs.
+# writes the diagnosis to the log and interrupts the stuck call, which fails that
+# recipe through its stage's catch so the run moves on to the next one. If the
+# stage is blocked somewhere an interrupt cannot reach, the watchdog ends the
+# process instead - but only when the process is the run's own: Invoke-Yardstick
+# at a prompt would take the user's console down with it, so there it only logs.
 Start-YardstickWatchdog -TimeoutMinutes $Script:RecipeStageTimeoutMinutes -NoExit:(-not (Test-YardstickDedicatedProcess))
 
 # Recipes GitHub asks to wait are set aside (Add-YardstickGitHubDeferral) and run
@@ -2053,6 +2057,9 @@ while ($RecipePass.Count -gt 0) {
             # flight and an abrupt exit in the next iteration cannot orphan it. The
             # thread still ran concurrently with all the supersedence and assignment work
             # above, which is where the time actually goes.
+            # A stage of its own: this sits outside any catch, so an interrupt meant
+            # for the stage before must not reach it, and changing stage clears one.
+            Set-YardstickWatchdogStage -Stage 'Waiting for backup'
             Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
             Clear-YardstickLogContext
         }
