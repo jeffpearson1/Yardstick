@@ -1302,16 +1302,20 @@ function Start-YardstickWatchdog {
     second, inside Invoke-Command -NoNewScope as recipes run, and the engine carries
     on normally afterwards.
 
-    An interrupt only lands on a managed wait. Start-Process -Wait, a busy loop and
-    some native calls never reach one, so the interrupt stays pending. If the stage
-    still has not moved -AbandonGraceMinutes after the interrupt, the thread falls
-    back to [Environment]::Exit so the run ends with a nonzero code the scheduler
-    can see. Write-Log closes the file after every line, so the diagnosis lands on
-    disk either way.
+    An interrupt only lands on a managed wait, and one sent to a thread that is not
+    in one stays pending until the next - which could be anywhere, even in
+    PowerShell's own parameter binding after the stage has ended. So the thread is
+    interrupted only while its ThreadState is WaitSleepJoin. Start-Process -Wait, a
+    busy loop and some native calls read as Running and are never interrupted. If
+    the stage still has not moved -AbandonGraceMinutes after it was abandoned, the
+    thread falls back to [Environment]::Exit so the run ends with a nonzero code the
+    scheduler can see. Write-Log closes the file after every line, so the diagnosis
+    lands on disk either way.
 
     The interrupt is sent under the state's lock, and Set-YardstickWatchdogStage
-    changes stage under the same lock and then clears any interrupt the old stage
-    left pending, so an interrupt can never land on the stage after the stuck one.
+    changes stage under the same lock and then clears an interrupt still pending
+    from the old stage (the thread can wake by itself in the instant between the
+    check and the interrupt), so an interrupt can never land on a later stage.
 
     With -NoExit the fallback only logs. That is for runs inside someone's
     interactive session (Invoke-Yardstick at a prompt), where ending the process
@@ -1391,6 +1395,7 @@ function Start-YardstickWatchdog {
         ExpiredFor   = $null
         AbandonedAt  = $null
         Abandoned    = $null
+        InterruptedFor = $null
         GaveUpFor    = $null
         Stop         = $false
     })
@@ -1441,21 +1446,35 @@ function Start-YardstickWatchdog {
                             "  Raise recipeStageTimeoutMinutes in preferences.yaml if this app is legitimately slow."
                         )
                         Write-Log ($banner -join [Environment]::NewLine) -Level Warning -NoContext
-                        $MainThread.Interrupt()
-                    } elseif ($State['ExpiredFor'] -eq $started -and $State['GaveUpFor'] -ne $started -and
-                              ($now - $State['AbandonedAt']).TotalMinutes -ge $AbandonGraceMinutes) {
-                        # Still the same stage: it is blocked somewhere an interrupt
-                        # cannot reach, or it caught the interrupt and carried on.
-                        $State['GaveUpFor'] = $started
-                        $outcome = if ($NoExit) { 'Not ending the run, because it shares this PowerShell session.' } else { 'Ending the run.' }
-                        $banner = @(
-                            "WATCHDOG: '$appId' did not let go of stage '$stage' within $AbandonGraceMinutes minute(s) of being abandoned. $outcome"
-                            "  It is blocked somewhere the watchdog cannot interrupt, such as Start-Process -Wait or a native call, or the recipe caught the interrupt and carried on."
-                        )
-                        if ($NoExit) { $banner += "  Press Ctrl+C to stop the run, or close the window if that does not respond." }
-                        $level = if ($NoExit) { 'Warning' } else { 'Error' }
-                        Write-Log ($banner -join [Environment]::NewLine) -Level $level -NoContext
-                        $endRun = -not $NoExit
+                    }
+
+                    if ($State['ExpiredFor'] -eq $started) {
+                        # Interrupt only a thread that is waiting, so the interrupt is
+                        # delivered at once. Sent to a busy thread, or one in native code
+                        # (Start-Process -Wait reads as Running), it would stay pending
+                        # and go off at whatever managed wait came next - possibly in
+                        # PowerShell's own parameter binding, after this stage is over.
+                        # A thread that starts waiting later in the grace period is
+                        # interrupted then.
+                        $waiting = ($MainThread.ThreadState -band [System.Threading.ThreadState]::WaitSleepJoin) -ne 0
+                        if ($State['InterruptedFor'] -ne $started -and $waiting) {
+                            $State['InterruptedFor'] = $started
+                            $MainThread.Interrupt()
+                        } elseif ($State['GaveUpFor'] -ne $started -and
+                                  ($now - $State['AbandonedAt']).TotalMinutes -ge $AbandonGraceMinutes) {
+                            # Still the same stage: it is blocked somewhere an interrupt
+                            # cannot reach, or it caught the interrupt and carried on.
+                            $State['GaveUpFor'] = $started
+                            $outcome = if ($NoExit) { 'Not ending the run, because it shares this PowerShell session.' } else { 'Ending the run.' }
+                            $banner = @(
+                                "WATCHDOG: '$appId' did not let go of stage '$stage' within $AbandonGraceMinutes minute(s) of being abandoned. $outcome"
+                                "  It is blocked somewhere the watchdog cannot interrupt, such as Start-Process -Wait or a native call, or the recipe caught the interrupt and carried on."
+                            )
+                            if ($NoExit) { $banner += "  Press Ctrl+C to stop the run, or close the window if that does not respond." }
+                            $level = if ($NoExit) { 'Warning' } else { 'Error' }
+                            Write-Log ($banner -join [Environment]::NewLine) -Level $level -NoContext
+                            $endRun = -not $NoExit
+                        }
                     }
 
                     # One warning per stage, halfway through the budget, so a run that is
@@ -1514,10 +1533,11 @@ function Set-YardstickWatchdogStage {
 
     Enter-YardstickWatchdogLock -State $state
     try {
-        # Did the watchdog interrupt the stage being left? If that stage was blocked
-        # somewhere an interrupt cannot reach and then finished by itself, the
-        # interrupt is still pending and would fail the first wait in this one.
-        $leavingAbandoned = $null -ne $state['ExpiredFor'] -and $state['ExpiredFor'] -eq $state['StageStarted']
+        # Did the watchdog interrupt the stage being left? It only interrupts a
+        # waiting thread, so the interrupt is normally thrown at once - but if that
+        # thread woke by itself in the instant before, the interrupt is still
+        # pending and would fail the first wait in this stage.
+        $leavingAbandoned = $null -ne $state['InterruptedFor'] -and $state['InterruptedFor'] -eq $state['StageStarted']
 
         if (-not [string]::IsNullOrWhiteSpace($AppId)) { $state['AppId'] = $AppId }
         $state['Stage'] = $Stage
@@ -1641,7 +1661,7 @@ function Stop-YardstickWatchdog {
         Enter-YardstickWatchdogLock -State $state
         try {
             $state['Stop'] = $true
-            $pending = $null -ne $state['ExpiredFor'] -and $state['ExpiredFor'] -eq $state['StageStarted']
+            $pending = $null -ne $state['InterruptedFor'] -and $state['InterruptedFor'] -eq $state['StageStarted']
         } finally {
             [System.Threading.Monitor]::Exit($state.SyncRoot)
         }

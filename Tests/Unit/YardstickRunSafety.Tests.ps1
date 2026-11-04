@@ -244,7 +244,9 @@ Describe "Start-YardstickWatchdog" {
         $interrupts = 0
         $deadline = (Get-Date).AddSeconds(20)
         while (-not $state['GaveUpFor'] -and (Get-Date) -lt $deadline) {
-            try { Start-Sleep -Milliseconds 200 } catch [System.Threading.ThreadInterruptedException] { $interrupts++ }
+            # Whole seconds, so the thread is almost always waiting when the
+            # watchdog looks; it does not interrupt a thread that is running.
+            try { Start-Sleep -Seconds 1 } catch [System.Threading.ThreadInterruptedException] { $interrupts++ }
         }
         try { Start-Sleep -Seconds 2 } catch [System.Threading.ThreadInterruptedException] { $interrupts++ }
 
@@ -260,41 +262,68 @@ Describe "Start-YardstickWatchdog" {
 
 Describe "Watchdog interrupt hand-off" {
     # Thread.Interrupt on a thread that is not waiting stays pending until its next
-    # wait. These cover the main-thread side, which must stop an interrupt meant for
-    # an abandoned stage from reaching whatever runs after it.
+    # wait, wherever that is. The watchdog only interrupts a waiting thread, and the
+    # main-thread side clears an interrupt that slipped through, so one meant for an
+    # abandoned stage cannot reach whatever runs after it.
     AfterEach {
         Stop-YardstickWatchdog
         # Never let a failed test leave an interrupt pending for the rest of the suite.
         try { [System.Threading.Thread]::Sleep(0) } catch [System.Threading.ThreadInterruptedException] { $null = $_ }
     }
 
+    It "does not interrupt a thread that is busy rather than waiting" {
+        # Start-Process -Wait and native calls read as Running, like this loop. An
+        # interrupt sent there would go off later, somewhere unrelated.
+        $box = [hashtable]::Synchronized(@{})
+        $busy = Start-ThreadJob -ArgumentList $box -ScriptBlock {
+            param($box)
+            $box.Thread = [System.Threading.Thread]::CurrentThread
+            $end = (Get-Date).AddSeconds(5)
+            while ((Get-Date) -lt $end) { }
+            try { Start-Sleep -Milliseconds 100; 'nothing pending' } catch { 'an interrupt was pending' }
+        }
+        while (-not $box.Thread) { Start-Sleep -Milliseconds 20 }
+
+        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 60 -MainThread $box.Thread
+        $state = Get-YardstickWatchdogState
+        $state['StageStarted'] = (Get-Date).AddMinutes(-5)
+        $result = Receive-Job -Job $busy -Wait -AutoRemoveJob
+
+        $state['ExpiredFor'] | Should -Be $state['StageStarted'] -Because 'the stage was abandoned'
+        $state['InterruptedFor'] | Should -BeNullOrEmpty
+        $result | Should -Be 'nothing pending'
+    }
+
     It "Set-YardstickWatchdogStage clears an interrupt the abandoned stage left pending" {
         Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
         $state = Get-YardstickWatchdogState
-        $state['ExpiredFor'] = $state['StageStarted']
-        [System.Threading.Thread]::CurrentThread.Interrupt()
+        $state['InterruptedFor'] = $state['StageStarted']
 
-        Set-YardstickWatchdogStage -AppId 'next' -Stage 'Starting up'
-        { Start-Sleep -Milliseconds 50 } | Should -Not -Throw
-    }
-
-    It "Set-YardstickWatchdogStage leaves the thread alone when nothing was abandoned" {
-        # Proves the test above is not passing by accident: the interrupt really is
-        # pending until something clears it.
-        Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
-        [System.Threading.Thread]::CurrentThread.Interrupt()
-        Set-YardstickWatchdogStage -AppId 'next' -Stage 'Starting up'
-        { Start-Sleep -Milliseconds 50 } | Should -Throw
+        $escaped = $null
+        try {
+            [System.Threading.Thread]::CurrentThread.Interrupt()
+            Set-YardstickWatchdogStage -AppId 'next' -Stage 'Starting up'
+            Start-Sleep -Milliseconds 50
+        } catch {
+            $escaped = $_
+        }
+        $escaped | Should -BeNullOrEmpty -Because 'the next stage must not inherit the old stage''s interrupt'
     }
 
     It "Stop-YardstickWatchdog clears an interrupt the last stage left pending" {
         Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
         $state = Get-YardstickWatchdogState
-        $state['ExpiredFor'] = $state['StageStarted']
-        [System.Threading.Thread]::CurrentThread.Interrupt()
+        $state['InterruptedFor'] = $state['StageStarted']
 
-        { Stop-YardstickWatchdog } | Should -Not -Throw
-        { Start-Sleep -Milliseconds 50 } | Should -Not -Throw
+        $escaped = $null
+        try {
+            [System.Threading.Thread]::CurrentThread.Interrupt()
+            Stop-YardstickWatchdog
+            Start-Sleep -Milliseconds 50
+        } catch {
+            $escaped = $_
+        }
+        $escaped | Should -BeNullOrEmpty -Because 'the email report runs after this'
     }
 
     It "Set-YardstickWatchdogStage forgets an abandonment the recipe recovered from" {
