@@ -588,6 +588,7 @@ Required assignments are not set in a recipe. Add them to the app in Intune, and
 **`versionLock`** (string) - Lock to specific version pattern using wildcards.
 - Set it in the recipe, or for your site only in `Local\recipeOverrides.yaml`. There is no preference for it.
 - Pattern: Use `x` for wildcard positions
+- A lock matches whole numbers: `3.1` matches `3.1.4` but not `3.12.0`
 - Example: `versionLock: 3.11.x` (only deploy Python 3.11.x versions)
 - Example: `versionLock: 2024.x.x` (only deploy 2024.x.x versions)
 
