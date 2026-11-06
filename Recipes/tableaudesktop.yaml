@@ -71,7 +71,7 @@ powerShellUninstallScript: |
   exit 0
 iconFile: tableaudesktop.png
 id: tableaudesktop
-displayName: DEV Tableau Desktop
+displayName: Tableau Desktop
 publisher: Salesforce, Inc.
 description: Tableau Desktop is a visual analytics application for connecting to, exploring, and building interactive dashboards from data.
 fileType: exe
