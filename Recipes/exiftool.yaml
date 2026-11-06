@@ -1,0 +1,58 @@
+url: https://exiftool.org/ver.txt
+urlRedirects: false
+preDownloadScript: |
+  $verText = (Invoke-RestMethod -Uri 'https://exiftool.org/ver.txt' -UseBasicParsing).ToString().Trim()
+  if ($verText -notmatch '^\d+\.\d+$') { throw "Unexpected ExifTool version string '$verText'." }
+  $version = $verText
+  $fileName = "exiftool-${version}_64.zip"
+  $url = "https://sourceforge.net/projects/exiftool/files/$fileName/download"
+postDownloadScript: |
+  $checksums = (Invoke-RestMethod -Uri "https://exiftool.org/checksums-$version.txt" -UseBasicParsing).ToString()
+  if ($checksums -notmatch "SHA2-256\($([regex]::Escape($fileName))\)=\s*([0-9a-fA-F]{64})") { throw "No SHA256 published for $fileName." }
+  $actual = (Get-FileHash -LiteralPath $fileName -Algorithm SHA256).Hash
+  if ($actual -ne $Matches[1]) { throw "SHA256 mismatch for ${fileName}: expected $($Matches[1]), got $actual." }
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'ExifTool'
+  $extractDir = Join-Path (Get-Location) 'exiftool-extract'
+  if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $extractDir -Force
+  $exe = Get-ChildItem -Path $extractDir -Filter 'exiftool*.exe' -Recurse | Select-Object -First 1
+  if (-not $exe) { throw 'Could not locate the ExifTool executable in the downloaded ZIP.' }
+  $sourceRoot = $exe.DirectoryName
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installDir -Recurse -Force
+  # The "(-k)" name pauses for a keypress; ship it as exiftool.exe for command-line and PATH use.
+  Move-Item -LiteralPath (Join-Path $installDir $exe.Name) -Destination (Join-Path $installDir 'exiftool.exe') -Force
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if (($machinePath -split ';') -notcontains $installDir) {
+    [Environment]::SetEnvironmentVariable('Path', (($machinePath.TrimEnd(';'), $installDir) -join ';'), 'Machine')
+  }
+  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'ExifTool'
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $newPath = (($machinePath -split ';') | Where-Object { $_ -and ($_ -ne $installDir) }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+iconFile: exiftool.png
+id: exiftool
+displayName: ExifTool
+publisher: Phil Harvey
+description: ExifTool is a command-line application for reading, writing and editing metadata in a wide variety of image, audio, video and document files.
+detectionType: script
+detectionScript: |
+  $exe = Join-Path $env:ProgramFiles 'ExifTool\exiftool.exe'
+  if (-not (Test-Path -LiteralPath $exe)) { Write-Output 'Not Detected'; exit 1 }
+  $installed = $null
+  if ([version]::TryParse((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion, [ref]$installed) -and $installed -ge [version]'<version>') {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
