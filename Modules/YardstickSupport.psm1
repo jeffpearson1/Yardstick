@@ -1872,7 +1872,8 @@ function Get-YardstickAppAssignment {
 function Test-YardstickAssignmentPresent {
     <#
     .SYNOPSIS
-    Returns $true when the given app already carries an assignment for a target.
+    Returns $true when the given app already carries an assignment for the target,
+    intent, and assignment filter.
 
     .DESCRIPTION
     The Add-YardstickWin32AppAssignment* cmdlets downgrade Graph failures and
@@ -1898,6 +1899,12 @@ function Test-YardstickAssignmentPresent {
     The assignment's '@odata.type'. Distinguishes an include from an exclusion
     for the same group, which CountKey alone cannot. Ignored when either side
     does not report it, so a partial record cannot veto an otherwise clear match.
+
+    .PARAMETER FilterID
+    The assignment filter ID. An empty value matches only an unfiltered assignment.
+
+    .PARAMETER FilterMode
+    The assignment filter mode. Compared case-insensitively when a filter ID is set.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1908,9 +1915,15 @@ function Test-YardstickAssignmentPresent {
 
         [string]$Intent,
 
-        [string]$TargetType
+        [string]$TargetType,
+
+        [string]$FilterID,
+
+        [string]$FilterMode = 'none'
     )
 
+    $expectedFilterID = if ($FilterID) { $FilterID } else { '' }
+    $expectedFilterMode = if ($expectedFilterID) { $FilterMode.ToLowerInvariant() } else { 'none' }
     try {
         $assignments = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments")
     } catch {
@@ -1921,9 +1934,15 @@ function Test-YardstickAssignmentPresent {
     foreach ($assignment in $assignments) {
         $existingType = $assignment.target.'@odata.type'
         $existingKey = if ($assignment.target.groupId) { $assignment.target.groupId } else { $existingType }
+        $existingFilterID = $assignment.target.deviceAndAppManagementAssignmentFilterId
+        $existingFilterMode = $assignment.target.deviceAndAppManagementAssignmentFilterType
+        $existingFilterID = if ($existingFilterID) { $existingFilterID } else { '' }
+        $existingFilterMode = if ($existingFilterID) { ([string]$existingFilterMode).ToLowerInvariant() } else { 'none' }
         if ($existingKey -ne $CountKey) { continue }
         if ($Intent -and ($assignment.intent -ne $Intent)) { continue }
         if ($TargetType -and $existingType -and ($existingType -ne $TargetType)) { continue }
+        if ($existingFilterID -ne $expectedFilterID) { continue }
+        if ($existingFilterMode -ne $expectedFilterMode) { continue }
         return $true
     }
     return $false
@@ -2310,7 +2329,8 @@ function Move-AssignmentsAndDependencies {
                             $true
                         } else {
                             Test-YardstickAssignmentPresent -AppId $To.id -CountKey $countKey `
-                                -Intent $Assignment.Intent -TargetType $Assignment.Type
+                                -Intent $Assignment.Intent -TargetType $Assignment.Type `
+                                -FilterID $Assignment.FilterID -FilterMode $Assignment.FilterType
                         }
 
                         if ($successfullyAdded) {
@@ -2355,13 +2375,13 @@ function Move-AssignmentsAndDependencies {
                         $removeReturned = $false
                         foreach ($breakGuard in 1) {
                             if ($targetType -eq $allDevicesTarget) {
-                                Remove-YardstickWin32AppAssignmentAllDevices -ID $From.id | Out-Null
+                                Remove-YardstickWin32AppAssignmentAllDevices -ID $From.id -AssignmentID $Assignment.ID | Out-Null
                             }
                             elseif ($targetType -eq $allUsersTarget) {
-                                Remove-YardstickWin32AppAssignmentAllUsers -ID $From.id | Out-Null
+                                Remove-YardstickWin32AppAssignmentAllUsers -ID $From.id -AssignmentID $Assignment.ID | Out-Null
                             }
                             else {
-                                Remove-YardstickWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID | Out-Null
+                                Remove-YardstickWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID -AssignmentID $Assignment.ID | Out-Null
                             }
                             $removeReturned = $true
                         }
