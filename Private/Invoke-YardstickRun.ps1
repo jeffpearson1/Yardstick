@@ -160,6 +160,8 @@ $Script:PackagingTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.p
 $Script:BitsStallTimeoutMinutes = Get-YardstickTimeoutPreference -Value $Prefs.bitsStallTimeoutMinutes -Default 15 -Name 'bitsStallTimeoutMinutes'
 
 Set-YardstickWebRequestTimeout -TimeoutSeconds $Script:WebRequestTimeoutSeconds
+# For recipes that call Invoke-YardstickBitsDownload themselves.
+Set-YardstickBitsStallTimeout -Minutes $Script:BitsStallTimeoutMinutes
 
 # Shared content: with syncSharedContent on, icons and recipe overrides are synced
 # both ways with the share before any recipe is read. The sync never throws: an
@@ -1138,12 +1140,16 @@ try {
     Write-Log "Could not check the GitHub API rate limit: $($_.Exception.Message)" -Level Warning
 }
 
-# Validate ApplicationId parameter
+# Validate ApplicationId parameter. A variant's id, from the overrides file, is
+# valid when the recipe it is built from is.
 if ($ApplicationId) {
     foreach ($AppIdToValidate in $ApplicationId) {
-        if (-not (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppIdToValidate)) {
-            $disabledHint = if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppIdToValidate -IncludeDisabled) { ' Its recipe is in a Disabled folder.' } else { '' }
-            Write-Log "No recipe named $AppIdToValidate.$disabledHint" -Level Error
+        $variantOf = Get-RecipeVariantParent -Id $AppIdToValidate -Overrides $RecipeOverrides
+        $recipeId = if ($variantOf) { $variantOf } else { $AppIdToValidate }
+        if (-not (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $recipeId)) {
+            $disabledHint = if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $recipeId -IncludeDisabled) { ' Its recipe is in a Disabled folder.' } else { '' }
+            $variantHint = if ($variantOf) { ", which the variant $AppIdToValidate is built from" } else { '' }
+            Write-Log "No recipe named $recipeId$variantHint.$disabledHint" -Level Error
             exit 1
         }
     }
@@ -1180,8 +1186,24 @@ function Get-ApplicationsToProcess {
     $applications = [System.Collections.Generic.List[PSObject]]::new()
     
     if ($All) {
+        # Variants run straight after the recipe they are built from, and are left
+        # out with it when it is disabled or interactive. A variant whose recipe is
+        # missing altogether is listed anyway, so the run reports it. One that shares
+        # a recipe's id is listed once, as that recipe, and the run reports it.
+        $variants = @(Get-RecipeVariant -Overrides $RecipeOverrides)
+        $recipeIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        if ($variants) {
+            Get-YardstickRecipeFile -RecipesPath $Recipes -IncludeDisabled | ForEach-Object { [void]$recipeIds.Add($_.BaseName) }
+            $variants = @($variants | Where-Object { -not $recipeIds.Contains($_.Id) })
+        }
         foreach ($recipeFile in Get-YardstickRecipeFile -RecipesPath $Recipes -ExcludeInteractive:$NoInteractive) {
             $applications.Add([String]$recipeFile.BaseName) | Out-Null
+            foreach ($variant in $variants | Where-Object VariantOf -eq $recipeFile.BaseName) {
+                $applications.Add($variant.Id) | Out-Null
+            }
+        }
+        foreach ($variant in $variants | Where-Object { -not $recipeIds.Contains($_.VariantOf) }) {
+            $applications.Add($variant.Id) | Out-Null
         }
     } elseif ($Group) {
         $groupsPath = Join-Path $ProjectRoot 'RecipeGroups.yaml'
@@ -1443,9 +1465,11 @@ Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences
 
 # Last line of defence against a hung run. Everything below reports its stage to
 # this; if one of them stops reporting for recipeStageTimeoutMinutes, the watchdog
-# writes the diagnosis to the log and ends the process. Only when the process is
-# the run's own, though: Invoke-Yardstick at a prompt would take the user's console
-# down with it, so there the watchdog only logs.
+# writes the diagnosis to the log and interrupts the stuck call, which fails that
+# recipe through its stage's catch so the run moves on to the next one. If the
+# stage is blocked somewhere an interrupt cannot reach, the watchdog ends the
+# process instead - but only when the process is the run's own: Invoke-Yardstick
+# at a prompt would take the user's console down with it, so there it only logs.
 Start-YardstickWatchdog -TimeoutMinutes $Script:RecipeStageTimeoutMinutes -NoExit:(-not (Test-YardstickDedicatedProcess))
 
 # Recipes GitHub asks to wait are set aside (Add-YardstickGitHubDeferral) and run
@@ -1514,16 +1538,28 @@ while ($RecipePass.Count -gt 0) {
                 Where-Object Name -ne ".gitkeep" |
                 Remove-Item -Recurse -Force
 
-            # Open the YAML file and collect all necessary attributes
-            $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing)[0]
+            # Open the YAML file and collect all necessary attributes. A variant, from
+            # the overrides file, is built from the recipe it names.
+            $VariantOf = Get-RecipeVariantParent -Id $AppId_Processing -Overrides $RecipeOverrides
+            $RecipeId = if ($VariantOf) { $VariantOf } else { $AppId_Processing }
+            if ($VariantOf -and (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing -IncludeDisabled)) {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "$AppId_Processing is a recipe, so its entry in the overrides file cannot also make it a variant of $VariantOf. Give the variant another id." -FailureStage "Configuration"
+                continue
+            }
+            if ($VariantOf -and ($VariantOfVariant = Get-RecipeVariantParent -Id $VariantOf -Overrides $RecipeOverrides)) {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "$AppId_Processing is a variant of $VariantOf, which is itself a variant. Set its variantOf to $VariantOfVariant." -FailureStage "Configuration"
+                continue
+            }
+            $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $Recipes -Id $RecipeId)[0]
             if (-not $recipeFile) {
                 # Only a group can list a disabled recipe: -ApplicationId is checked
                 # before the run and -All never lists one. Disabling is deliberate, so it
                 # is not reported as a failure.
-                if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing -IncludeDisabled) {
-                    Write-Log "Skipping $AppId_Processing because its recipe is in a Disabled folder." -Level Warning
+                $variantHint = if ($VariantOf) { ", which the variant $AppId_Processing is built from" } else { '' }
+                if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $RecipeId -IncludeDisabled) {
+                    Write-Log "Skipping $AppId_Processing because the recipe $RecipeId$variantHint is in a Disabled folder." -Level Warning
                 } else {
-                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "There is no recipe named $AppId_Processing." -FailureStage "Configuration"
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "There is no recipe named $RecipeId$variantHint." -FailureStage "Configuration"
                 }
                 continue
             }
@@ -1544,10 +1580,19 @@ while ($RecipePass.Count -gt 0) {
                 }
             }
 
-            # Apply this site's overrides from Local\recipeOverrides.yaml
-            if ($RecipeOverrides.ContainsKey($AppId_Processing)) {
-                $Parameters = Merge-RecipeWithOverride -Recipe $Parameters -Override $RecipeOverrides[$AppId_Processing]
-                Write-Log "Applied recipe overrides: $(@($RecipeOverrides[$AppId_Processing].Keys) -join ', ')" -Level Detail
+            # Apply this site's overrides from Local\recipeOverrides.yaml: for a
+            # variant, the recipe's entry and then the variant's.
+            try {
+                $Parameters = Resolve-RecipeOverride -Recipe $Parameters -Id $AppId_Processing -Overrides $RecipeOverrides
+            } catch {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "$_" -FailureStage "Configuration"
+                continue
+            }
+            if ($VariantOf) {
+                Write-Log "Building $AppId_Processing as a variant of $VariantOf." -Level Detail
+            }
+            foreach ($OverrideId in @($VariantOf, $AppId_Processing) | Where-Object { $_ -and $RecipeOverrides.ContainsKey($_) }) {
+                Write-Log "Applied recipe overrides from ${OverrideId}: $(@($RecipeOverrides[$OverrideId].Keys | Where-Object { $_ -ne 'variantOf' }) -join ', ')" -Level Detail
             }
 
             # A shared recipe that needs a value only this site knows ships with a
@@ -2012,6 +2057,9 @@ while ($RecipePass.Count -gt 0) {
             # flight and an abrupt exit in the next iteration cannot orphan it. The
             # thread still ran concurrently with all the supersedence and assignment work
             # above, which is where the time actually goes.
+            # A stage of its own: this sits outside any catch, so an interrupt meant
+            # for the stage before must not reach it, and changing stage clears one.
+            Set-YardstickWatchdogStage -Stage 'Waiting for backup'
             Wait-YardstickBackup -TimeoutSeconds 600 | Out-Null
             Clear-YardstickLogContext
         }

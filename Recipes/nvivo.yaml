@@ -3,7 +3,7 @@ urlRedirects: false
 preDownloadScript: |
   $fileName = 'NVivo.x64.exe'
   $stagedInstaller = Join-Path $Temp $fileName
-  Start-BitsTransfer -Source $url -Destination $stagedInstaller
+  Invoke-YardstickBitsDownload -Source $url -Destination $stagedInstaller
   $version = [string](Get-Item -LiteralPath $stagedInstaller).VersionInfo.ProductVersion
   if ([string]::IsNullOrWhiteSpace($version)) {
     throw 'NVivo installer ProductVersion was empty.'

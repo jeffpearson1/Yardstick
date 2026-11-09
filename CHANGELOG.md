@@ -7,6 +7,17 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Added
 
+- **Recipe variants: more than one app from a recipe.** An entry in
+  `Local\recipeOverrides.yaml` that sets `variantOf: <recipe id>` builds a second app
+  from that recipe, such as a lab Zoom next to the standard one. The variant starts
+  from the recipe with the recipe's own overrides applied, and its entry is layered
+  on top, so it only sets what differs; it needs a `displayName` of its own. `-All`
+  runs each variant straight after its recipe, and `-ApplicationId`, recipe groups
+  and `Migrate-ToSupersedenceModel.ps1` take its id. `Test-YardstickSetup.ps1` lists
+  the variants and warns about any that cannot be built. This replaces the old
+  gitignored `Recipes\<recipe>.common.yaml` copies. See
+  [Variants](Docs/WritingRecipes.md#variants-more-than-one-app-from-a-recipe).
+
 - **Authenticated GitHub API.** Store a read-only fine-grained GitHub token with
   `.\Set-YardstickCredential.ps1 -GitHub` (kept in Credential Manager as
   `Yardstick:GitHub`) to raise GitHub's limit from 60 to 5,000 API calls an hour.
@@ -47,6 +58,18 @@ All notable changes to Yardstick are recorded here. Versions follow
   icons and recipe overrides with a shared folder, and for both locations
   (`-SharedIcons`, `-SharedRecipeOverrides`; a folder means the
   `recipeOverrides.yaml` in it).
+- **The installer can be driven by another program.** For the Yardstick Development
+  Studio's setup wizard, which runs it without a console:
+  - `-InstallOptionalModule` installs the named optional modules (Selenium,
+    TUN.CredentialManager, Pester) without asking, and `-SetExecutionPolicy` sets
+    RemoteSigned for the current user when the policy blocks Yardstick's scripts.
+    Both work with `-NonInteractive`, which on its own still answers no.
+  - `-ResultPath` writes the outcome of every step, and every status line, to a JSON
+    file, even when a step fails.
+  - `-Status` reports the state of setup as JSON without changing anything, before
+    or after setup has run.
+
+  See [Running the installer from another program](Docs/Installation.md#running-the-installer-from-another-program).
 
 ### Changed
 
@@ -84,6 +107,22 @@ All notable changes to Yardstick are recorded here. Versions follow
   and `8` no longer matches `80.1`. No committed recipe uses `versionLock`; check any
   lock in `Local\recipeOverrides.yaml` that relied on the old prefix matching.
 - `tableaudesktop` is in the `NoGitHub` recipe group; it does not use GitHub.
+- **A stuck recipe no longer ends the run.** When a recipe stage makes no progress for
+  `recipeStageTimeoutMinutes`, the watchdog now abandons that recipe and moves on to
+  the next. It interrupts whatever the stage is waiting on (a download, a sleep, a
+  process), the recipe is recorded as failed with "Abandoned after N minutes without
+  progress in stage ...", and the email report lists it with the other failures.
+  Before, the watchdog ended the whole run, so every recipe after the stuck one was
+  skipped. A few calls cannot be interrupted, such as `Start-Process -Wait` or a native
+  call that blocks. If the stage still has not moved five minutes after the
+  interrupt, the watchdog ends the run as before.
+- **Recipes download with `Invoke-YardstickBitsDownload`.** The 13 recipes that called
+  `Start-BitsTransfer` themselves (endnote, grammarly, ltspice, marcedit, mobaxterm,
+  nvivo, postshot, the three Vernier apps, both Visual C++ redistributables and
+  winscp) now use the helper. It gives up on a transfer that moves no data and tells
+  the watchdog when a slow download is still moving. The helper takes `-Dynamic`,
+  uses `bitsStallTimeoutMinutes` when a recipe calls it, and `Test-RecipeSchema` warns
+  about a synchronous `Start-BitsTransfer` in a recipe script.
 
 ### Fixed
 
@@ -95,10 +134,34 @@ All notable changes to Yardstick are recorded here. Versions follow
   copied. The filter now goes with them.
 - **Assignments keep their Delivery Optimization priority and restart settings** when
   they move to a new version; they were reset to the defaults.
-
+- The installer's execution policy check no longer passes just because the installer
+  was started with `pwsh -ExecutionPolicy Bypass`. It now checks the policy a normal
+  window gets, so a CurrentUser or LocalMachine policy that blocks Yardstick's
+  scripts is found, and it says when Group Policy sets the policy. Setting
+  RemoteSigned from such a session is no longer reported as failed.
 - The installer accepts paths in quotes, as Explorer's *Copy as path* produces, for
   every folder and file it asks for, and preferences paths written in quotes resolve
   correctly.
+- A failed Intune upload is now retried properly. The retry used to add a second
+  content version to the same app, which Intune refuses until the first is committed,
+  so it always failed. It now removes the half-made app, waits a minute, and starts
+  again with a new one. The retry also covers Intune failing or timing out the final
+  commit, which happens when Azure storage is busy.
+- FTK Imager: reads the version from Exterro's new download file name
+  (`Exterro_FTK_Imager_8.3.1.6.zip`).
+- A web download in a recipe that stops partway now fails after
+  `webRequestTimeoutSeconds` with nothing received, instead of holding the run until
+  the stage watchdog. `-TimeoutSec` only covered the wait for the server to start
+  answering, so a vendor host that sent half an installer and then went quiet on an
+  open connection blocked the run with no limit. Yardstick now also sets
+  `-OperationTimeoutSeconds`, which bounds the gap between reads, so a slow download
+  that is still moving is never cut off.
+
+### Removed
+
+- `Get-YardstickIcon.ps1`, the icon picker, which no longer worked. Icon tooling is
+  moving to the Yardstick dev studio; until then, add icons to the `Icons` folder by
+  hand. `Test-YardstickSetup.ps1` still lists recipes whose icon is missing.
 
 ## [1.1.0] - 2026-10-26
 

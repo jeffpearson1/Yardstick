@@ -117,6 +117,56 @@ $secret = Read-Host -AsSecureString 'Client secret'
 Creating a new app registration always needs an interactive sign-in, so scripted
 installs use `-UseExistingApp`.
 
+The `Prerequisites` step asks before it installs an optional module or changes the
+execution policy, and `-NonInteractive` answers no. To say yes without a prompt:
+
+- `-InstallOptionalModule Selenium, TUN.CredentialManager, Pester` installs the named
+  modules, or updates them when they are too old. Modules you don't name are left
+  alone. An unknown name fails the step; an install that fails is only a warning.
+- `-SetExecutionPolicy` sets the policy to RemoteSigned for your account when it
+  blocks Yardstick's scripts. A policy set by Group Policy is reported and left alone.
+
+The execution policy check ignores the policy of the installer's own session, so a
+blocking policy is found even when you start the installer with
+`pwsh -ExecutionPolicy Bypass`.
+
+### Running the installer from another program
+
+A program that runs the installer without a console, such as the Yardstick
+Development Studio, can read the outcome from a JSON file instead of the console
+output:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\Install-Yardstick.ps1 -DevelopmentOnly -NonInteractive `
+    -InstallOptionalModule Pester,Selenium -SetExecutionPolicy -ResultPath $env:TEMP\setup-result.json
+```
+
+With `pwsh -File`, pass several module names as one comma-separated argument
+(`Pester,Selenium`, without spaces); `-File` does not split a list on its own.
+
+`-ResultPath` is written when setup ends, including when a step fails. It is UTF-8
+without a byte order mark, and its folder is created if needed. It holds
+`schemaVersion` (1), `succeeded` (no step failed, so the exit code is 0),
+`developmentOnly`, `steps` (`step`, `result`, `level`, `detail` for each step, as the
+summary shows them) and `messages` (`step`, `level`, `message` for each `[ OK ]`,
+`[WARN]`, `[FAIL]`, `[ .. ]` and `[SKIP]` line). The checks made before any step
+runs - PowerShell 7, Windows, not *Run as administrator* - exit with code 1 and
+write no file; the console output says why.
+
+`-Status` reports the state of setup without changing anything: no prompts,
+installs, files, log or administrator rights. It works before setup has run, and can
+only be combined with `-ResultPath`; without it the JSON goes to standard output:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\Install-Yardstick.ps1 -Status -ResultPath $env:TEMP\setup-status.json
+```
+
+It reports the PowerShell version, `powershell-yaml`, each optional module and its
+installed version, the execution policy (and whether Group Policy sets it), the
+preferences file (whether it exists, `developmentOnly` and the shared locations),
+the files you cannot change and whether `IntuneWinAppUtil.exe` is present.
+`Get-Help .\Install-Yardstick.ps1 -Full` lists every field of both files.
+
 ### Development-only instances
 
 A development-only instance is for writing and testing recipes with the
@@ -137,6 +187,10 @@ This sets `developmentOnly: true` in `Local\preferences.yaml`. `Yardstick.ps1` r
 to run on such a computer, and `Test-YardstickSetup.ps1` skips its Intune, email and
 scheduled task checks. To turn it into a full instance later, run
 `.\Install-Yardstick.ps1 -DevelopmentOnly:$false`.
+
+An empty location clears it, and when neither is left, `syncSharedContent` is turned
+off: `.\Install-Yardstick.ps1 -Step Preferences -SharedIcons '' -SharedRecipeOverrides ''`
+stops syncing.
 
 
 ## Microsoft Graph permissions
@@ -443,8 +497,8 @@ It exits with code 1 when anything fails, so it can be used as a pre-flight chec
 `-Offline` skips the checks that sign in to Microsoft Graph, and `-PassThru` returns
 the results as objects.
 
-Icons are not included for licensing reasons. `Get-YardstickIcon.ps1` helps find
-and save the ones your recipes need.
+Icons are not included for licensing reasons. Put the ones your recipes need in the
+`Icons` folder, named as each recipe's `iconFile`.
 
 
 ## Upgrading

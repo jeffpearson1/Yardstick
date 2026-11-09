@@ -108,7 +108,6 @@ if ($Runtime) {
         'Templates/**',
         'Tools/**',
         'LICENSE.md',
-        'Get-YardstickIcon.ps1',
         'Install-Yardstick.ps1',
         'Migrate-ToSupersedenceModel.ps1',
         'ProjectLayout.ps1',

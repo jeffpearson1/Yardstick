@@ -115,6 +115,20 @@ $Products = Invoke-RestMethod -Uri https://api.articulate.com/product-artifacts 
 
 APIs that just want to know who is calling are better served by a plain `'Yardstick'` agent.
 
+#### Downloading files
+
+To download a file in a script, use `Invoke-YardstickBitsDownload` rather than `Start-BitsTransfer`. It takes the same `-Source` and `-Destination`, and `-Dynamic` for servers that need it:
+
+```powershell
+Invoke-YardstickBitsDownload -Source $url -Destination (Join-Path $Temp $fileName)
+```
+
+A plain `Start-BitsTransfer` waits as long as the vendor's server takes. The helper gives up on a transfer that moves no data for `bitsStallTimeoutMinutes` and cleans up its BITS job. While data is still moving, it tells the stage watchdog the recipe is making progress, so a large download on a slow link is never abandoned. `Test-RecipeSchema` warns about a script that calls `Start-BitsTransfer` without `-Asynchronous`.
+
+`Invoke-WebRequest` and `Invoke-RestMethod` are bounded already: Yardstick gives every call in a recipe a default timeout for the server to start answering, and for a download that stops receiving data partway (`webRequestTimeoutSeconds`).
+
+If a recipe stage still makes no progress for `recipeStageTimeoutMinutes`, the watchdog abandons the recipe, records it as failed, and moves on to the next one. It does this by interrupting whatever the script is waiting on, so avoid catching every error in a retry loop, which would catch that interrupt too. `Start-Process -Wait` cannot be interrupted, so a recipe stuck there still ends the run.
+
 #### GitHub API
 
 Call `api.github.com` only through `Invoke-YardstickGitHubApi`, never with `Invoke-RestMethod`. It takes a full API URL or a path relative to it and returns what `Invoke-RestMethod` would:
@@ -748,7 +762,7 @@ replace the recipe's own when Yardstick runs it:
     - Labs
 ```
 
-- Any recipe field can be overridden except `id` and `base`.
+- Any recipe field can be overridden except `id` and `base`. An entry that sets `variantOf` defines a [variant](#variants-more-than-one-app-from-a-recipe) instead.
 - Each field is replaced whole: an overridden `scopeTags` list replaces the recipe's list rather than adding to it.
 - Overrides are applied after [Recipe Inheritance](#recipe-inheritance) and apply only to the recipe they name. A recipe that uses `base` needs its own entry; it does not pick up its base recipe's.
 - The file is optional. If it cannot be read, or an entry is malformed, Yardstick stops before processing any recipe, rather than uploading apps without the overridden values. `.\Test-YardstickSetup.ps1` checks the file and warns about entries that name no recipe.
@@ -793,6 +807,32 @@ sccmclient:
 ```
 
 A recipe that still has a `<YOUR_...>` placeholder after its overrides are applied fails at the Configuration stage, naming the fields to set, and the rest of the run carries on. `.\Test-YardstickSetup.ps1` lists these recipes before you run them. When you write a recipe that needs a site value, use the same form - `<YOUR_` followed by capitals, digits and underscores - so both checks find it.
+
+### Variants: more than one app from a recipe
+
+Sometimes a site needs the same software as two apps configured differently, such as a Zoom for lab machines next to the Zoom for everyone else. Rather than copying the recipe, add an entry for the second app to `Local\recipeOverrides.yaml` that names the recipe in `variantOf`:
+
+```yaml
+zoom:
+  installScript: msiexec /i <filename> /qn /norestart ZConfig="ForceSSOUrl=example"
+zoom.labs:
+  variantOf: zoom
+  displayName: Zoom (Labs)
+  installScript: msiexec /i <filename> /qn /norestart ZConfig="ForceSSOUrl=example;DisableUserSignUp=1"
+  scopeTags:
+    - Labs
+```
+
+Each run then builds `zoom.labs` straight after `zoom`, as an app of its own with its own versions, supersedence and assignments.
+
+- The variant starts from the recipe with the recipe's own entry already applied, and its entry is applied on top, field by field. It only needs the fields that differ: above, `zoom.labs` keeps everything from `zoom` except its name, install command and scope tags.
+- It must set a `displayName` different from the recipe's. Intune apps are matched by name, so a variant with the recipe's name would replace the recipe's apps.
+- Its id is the entry's name. Use it like a recipe id: `-ApplicationId zoom.labs`, or list it in a group in `RecipeGroups.yaml`. `-All` runs every variant. Pick an id no recipe file has; `<recipe>.<variant>` is the convention.
+- A variant of a disabled or interactive recipe is skipped with it. A variant cannot be built from another variant.
+- A variant of a manual-drop recipe has its own folder in the software dropbox, named after the variant's id, even when the recipe sets `manualDownloadFolder`. Stage the media in both folders. The variant can name another folder in its entry, but not the recipe's: each archives the drop once it has published it.
+- Variants sync through [shared overrides](#shared-overrides) like any other entry.
+
+`.\Test-YardstickSetup.ps1` lists the variants and warns about any that cannot be built: one built from a recipe that does not exist, one without a displayName of its own, or two with the same displayName.
 
 ## Dependency Management
 
@@ -1049,7 +1089,7 @@ Once the harness passes, run it through Yardstick. These runs upload to your ten
 
 1. **Setting `$version` in `downloadScript`** - Version validation runs *before* `downloadScript`. Always set `$version` in `preDownloadScript` or the YAML `version` field.
 2. **Incorrect file detection version format** - Ensure it matches the actual file properties. Use `[VersionPro]::new($version).ToString(4)` to pad to 4-part format when needed.
-3. **Missing icon files** - Icons must exist in `Icons/` folder with the exact name referenced in `iconFile`. A missing icon no longer fails the run (the app is uploaded without one, a warning is logged and the admin email flags it), but you should still add it. `.\Get-YardstickIcon.ps1 -RecipeId <id>` opens a small picker that searches the web for the recipe's `displayName`, lets you crop, resize, remove or add a background, and saves a PNG (max 512x512) into `Icons/` under the recipe's `iconFile` name. Run it without parameters and use the "Missing icons" list to work through every recipe whose icon is absent, or use From EXE... to take the icon from an installed program.
+3. **Missing icon files** - Icons must exist in `Icons/` folder with the exact name referenced in `iconFile`. A missing icon no longer fails the run (the app is uploaded without one, a warning is logged and the admin email flags it), but you should still add it: a .png or .jpg of up to 512x512 and 750KB. `.\Test-YardstickSetup.ps1` lists every recipe whose icon is absent.
 4. **Hardcoded paths** - Use `<filename>`, `<version>`, and `<productcode>` placeholders instead of hardcoding values in install/uninstall scripts.
 5. **Inconsistent casing in YAML keys** - Use the exact casing from this guide (e.g., `urlRedirects` not `urlredirects`, `fileDetectionMethod` not `filedetectionmethod`). Yardstick reads recipe fields out of a PowerShell hashtable, so a miscased key usually still resolves - but the schema validator warns about every casing mismatch, and the warning is there because the next reader cannot tell a typo from a working field.
 6. **Assuming `$fileDetectionVersion` is required** - It defaults to `$version` when not set. Only set it explicitly when the file version format differs from the application version.

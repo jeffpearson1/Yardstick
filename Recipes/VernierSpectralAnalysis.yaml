@@ -7,7 +7,7 @@ preDownloadScript: |
   $Version = $matches[0]
 downloadScript: |
   $filename = $url.split("/")[-1]
-  Start-BitsTransfer -Source $url -Destination $temp\$filename
+  Invoke-YardstickBitsDownload -Source $url -Destination $temp\$filename
   New-Item -Path $temp\VSAExtracted -ItemType Directory
   Expand-Archive -Path $temp\$filename -DestinationPath $temp\VSAExtracted
   $filename = ((Get-ChildItem $temp\VSAExtracted) | Where-Object Name -match "Vernier").Name

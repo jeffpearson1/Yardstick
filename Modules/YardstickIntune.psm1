@@ -590,10 +590,11 @@ function Resolve-YardstickIntuneWinAppUtil {
     $downloadPath = "$toolPath.download"
     $downloadUri = 'https://raw.githubusercontent.com/microsoft/Microsoft-Win32-Content-Prep-Tool/1d6cfcbdf8c28edc596337031f74df951f38f718/IntuneWinAppUtil.exe'
     try {
-        # -TimeoutSec explicitly: module session state does not inherit the runner's
-        # global PSDefaultParameterValues. It bounds the wait for response headers
-        # only, so it cannot truncate the download itself.
-        Invoke-WebRequest -Uri $downloadUri -OutFile $downloadPath -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+        # Timeouts explicitly: module session state does not inherit the runner's
+        # global PSDefaultParameterValues. -TimeoutSec bounds the wait for response
+        # headers and -OperationTimeoutSeconds the gap between body reads, so neither
+        # can truncate a slow download that is still moving.
+        Invoke-WebRequest -Uri $downloadUri -OutFile $downloadPath -UseBasicParsing -TimeoutSec 120 -OperationTimeoutSeconds 120 -ErrorAction Stop
         $actualHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
         if ($actualHash -ne $expectedHash) { throw "Downloaded IntuneWinAppUtil.exe failed SHA-256 validation." }
         Move-Item -LiteralPath $downloadPath -Destination $toolPath -Force
@@ -1128,19 +1129,18 @@ function Add-YardstickWin32App {
         [string]$Owner,
         [int]$MaximumInstallationTimeInMinutes = 60,
         [switch]$AllowAvailableUninstall,
-        [string[]]$ScopeTagName
+        [string[]]$ScopeTagName,
+        [int]$UploadRetryDelaySeconds = 60
     )
     $metadata = Get-YardstickWin32AppMetadata -FilePath $FilePath
     $applicationInfo = $metadata.ApplicationInfo
-    $app = $null
     $expandedContent = $null
     try {
         $bodyParameters = @{}
         foreach ($key in $PSBoundParameters.Keys) {
-            if ($key -ne 'FilePath') { $bodyParameters[$key] = $PSBoundParameters[$key] }
+            if ($key -notin 'FilePath', 'UploadRetryDelaySeconds') { $bodyParameters[$key] = $PSBoundParameters[$key] }
         }
         $body = New-YardstickWin32AppBody @bodyParameters -Metadata $metadata
-        $app = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource 'deviceAppManagement/mobileApps' -Body $body
         $expandedContent = Expand-YardstickWin32AppContent -FilePath $FilePath -FileName ([string]$applicationInfo.FileName)
         $encryptedSize = (Get-Item -LiteralPath $expandedContent).Length
         $fileBody = [ordered]@{
@@ -1150,31 +1150,6 @@ function Add-YardstickWin32App {
             sizeEncrypted = [int64]$encryptedSize
             manifest      = $null
             isDependency  = $false
-        }
-        # A content file whose signature reaches a terminal non-Success state can
-        # never be renewed, so there is nothing left to rescue at the block
-        # level - the only way forward is a fresh upload location. Content
-        # versions are independent and only the one named by
-        # committedContentVersion is ever referenced, so starting a new one is
-        # cheaper and less ambiguous than leaving a half-dead file entry beside a
-        # live one. The re-upload costs bandwidth; the alternative is discarding a
-        # package that already survived download, packaging and encryption.
-        $contentVersion = $null
-        $contentFileResource = $null
-        $uploadAttempts = 2
-        for ($uploadAttempt = 1; ; $uploadAttempt++) {
-            try {
-                $contentVersion = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions" -Body @{}
-                $fileResource = "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions/$($contentVersion.id)/files"
-                $contentFile = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource $fileResource -Body $fileBody
-                $contentFileResource = "$fileResource/$($contentFile.id)"
-                $contentFile = Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'azureStorageUriRequest'
-                Send-YardstickIntuneContentBlob -FilePath $expandedContent -UploadUri (ConvertTo-YardstickUploadUri -File $contentFile) -FileResource $contentFileResource
-                break
-            } catch {
-                if ($uploadAttempt -ge $uploadAttempts) { throw }
-                Write-YardstickIntuneLog "Content upload failed (attempt $uploadAttempt/$uploadAttempts): $_. Starting over against a fresh content version." -Level Warning
-            }
         }
         $encryptionInfo = $applicationInfo.EncryptionInfo
         $commitBody = [ordered]@{
@@ -1188,15 +1163,40 @@ function Add-YardstickWin32App {
                 fileDigestAlgorithm  = [string]$encryptionInfo.FileDigestAlgorithm
             }
         }
-        Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "$contentFileResource/commit" -Body $commitBody | Out-Null
-        Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'commitFile' | Out-Null
-        Invoke-YardstickGraphRequest -Method Patch -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)" -Body ([ordered]@{ '@odata.type' = '#microsoft.graph.win32LobApp'; committedContentVersion = [string]$contentVersion.id }) | Out-Null
-        return Get-YardstickWin32App -ID $app.id
-    } catch {
-        if ($app -and $app.id) {
-            try { Remove-YardstickWin32App -ID $app.id -ErrorAction Stop } catch { Write-YardstickIntuneLog "Could not remove the incomplete Intune app $($app.id): $($_.Exception.Message)" -Level Warning }
+        # A content file whose signature dies, or whose commit Intune fails or
+        # times out (both seen while Azure storage is answering ServerBusy), can
+        # never be rescued in place. Nor can a new content version be added
+        # beside it: Intune refuses "before the first content version is
+        # committed". So a retry removes the half-made app and starts again from
+        # a fresh one. The re-upload costs bandwidth; the alternative is
+        # discarding a package that already survived download, packaging and
+        # encryption.
+        $uploadAttempts = 2
+        for ($uploadAttempt = 1; ; $uploadAttempt++) {
+            $app = $null
+            try {
+                $app = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource 'deviceAppManagement/mobileApps' -Body $body
+                $contentVersion = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions" -Body @{}
+                $fileResource = "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions/$($contentVersion.id)/files"
+                $contentFile = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource $fileResource -Body $fileBody
+                $contentFileResource = "$fileResource/$($contentFile.id)"
+                $contentFile = Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'azureStorageUriRequest'
+                Send-YardstickIntuneContentBlob -FilePath $expandedContent -UploadUri (ConvertTo-YardstickUploadUri -File $contentFile) -FileResource $contentFileResource
+                Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "$contentFileResource/commit" -Body $commitBody | Out-Null
+                Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'commitFile' | Out-Null
+                Invoke-YardstickGraphRequest -Method Patch -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)" -Body ([ordered]@{ '@odata.type' = '#microsoft.graph.win32LobApp'; committedContentVersion = [string]$contentVersion.id }) | Out-Null
+                return Get-YardstickWin32App -ID $app.id
+            } catch {
+                $failure = $_
+                if ($app -and $app.id) {
+                    try { Remove-YardstickWin32App -ID $app.id -ErrorAction Stop } catch { Write-YardstickIntuneLog "Could not remove the incomplete Intune app $($app.id): $($_.Exception.Message)" -Level Warning }
+                }
+                if ($uploadAttempt -ge $uploadAttempts) { throw $failure }
+                Write-YardstickIntuneLog "Intune upload failed (attempt $uploadAttempt/$uploadAttempts): $failure. Starting over with a fresh app in $UploadRetryDelaySeconds seconds." -Level Warning
+                # Give a busy storage account a moment before asking it for more.
+                Start-Sleep -Seconds $UploadRetryDelaySeconds
+            }
         }
-        throw
     } finally {
         if ($expandedContent) {
             $extractRoot = Split-Path -Parent $expandedContent

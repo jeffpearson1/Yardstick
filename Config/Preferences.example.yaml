@@ -159,7 +159,9 @@ defaultDeploymentGroups: []
 #####################################
 # TIMEOUTS
 #####################################
-# Per-request timeout for downloads and web scraping. 0 disables the timeout.
+# Per-request timeout for downloads and web scraping: how long to wait for a server
+# to start answering, and how long a download may go without receiving anything.
+# A slow but moving download is never cut off. 0 disables the timeout.
 webRequestTimeoutSeconds: 120
 # A recipe that makes no progress for this long is abandoned so the rest of the run
 # can continue. 0 disables the watchdog.

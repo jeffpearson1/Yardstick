@@ -56,11 +56,18 @@ Describe "Set-YardstickWebRequestTimeout" {
         $Global:PSDefaultParameterValues['Invoke-RestMethod:TimeoutSec'] | Should -Be 120
     }
 
+    It "also bounds a response body that stops arriving" {
+        # -TimeoutSec only covers the headers. The TreeSize host on 2026-11-04 sent
+        # headers and half the installer, then went quiet with the socket open.
+        Set-YardstickWebRequestTimeout -TimeoutSeconds 120
+        $Global:PSDefaultParameterValues['Invoke-WebRequest:OperationTimeoutSeconds'] | Should -Be 120
+        $Global:PSDefaultParameterValues['Invoke-RestMethod:OperationTimeoutSeconds'] | Should -Be 120
+    }
+
     It "removes the defaults when given 0" {
         Set-YardstickWebRequestTimeout -TimeoutSeconds 120
         Set-YardstickWebRequestTimeout -TimeoutSeconds 0
-        $Global:PSDefaultParameterValues.ContainsKey('Invoke-WebRequest:TimeoutSec') | Should -BeFalse
-        $Global:PSDefaultParameterValues.ContainsKey('Invoke-RestMethod:TimeoutSec') | Should -BeFalse
+        $Global:PSDefaultParameterValues.Keys | Where-Object { $_ -like 'Invoke-*' } | Should -BeNullOrEmpty
     }
 
     It "re-asserts after a recipe wipes the table" {
@@ -199,23 +206,165 @@ Describe "Start-YardstickWatchdog" {
         @(Get-Job -Name 'YardstickWatchdog').Count | Should -Be 1
     }
 
-    It "with -NoExit, logs a stuck stage once and leaves the process running" {
-        # Without -NoExit this would end the Pester process itself - which is the
-        # point: in an interactive session the watchdog must not close the console.
-        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit
+    It "abandons a stuck stage by interrupting the main thread, and logs it once" {
+        # The interrupt lands on this thread - Pester's - exactly as it would land on
+        # the runner's, and surfaces as an error the stage's catch can handle.
+        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 60
         $state = Get-YardstickWatchdogState
         $state['StageStarted'] = (Get-Date).AddMinutes(-5)
 
-        $deadline = (Get-Date).AddSeconds(20)
-        while (-not $state['ExpiredFor'] -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
-        Start-Sleep -Seconds 3   # more polls on the same stuck stage
+        $caught = $null
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            Start-Sleep -Seconds 20
+        } catch [System.Threading.ThreadInterruptedException] {
+            $caught = $_
+        }
+        $timer.Stop()
+        Start-Sleep -Seconds 2   # more polls on the same stuck stage
 
+        $caught | Should -Not -BeNullOrEmpty -Because 'the blocked call must let go rather than wait out its 20 seconds'
+        $timer.Elapsed.TotalSeconds | Should -BeLessThan 15
         $state['ExpiredFor'] | Should -Be $state['StageStarted']
         $logged = @(Get-Content -LiteralPath (Join-Path $Global:LogLocation $Global:LogFile) |
             Where-Object { $_ -match 'WATCHDOG: no progress' })
-        $logged.Count | Should -Be 1 -Because 'one stuck stage is reported once, not on every poll'
-        $logged[0] | Should -Match 'Not ending the run'
+        $logged.Count | Should -Be 1 -Because 'one stuck stage is abandoned once, not on every poll'
+        $logged[-1] | Should -Match 'Abandoning'
         (Get-Job -Name 'YardstickWatchdog').State | Should -Be 'Running'
+    }
+
+    It "with -NoExit, only logs when an abandoned stage does not let go within the grace period" {
+        # The stage here catches the interrupt and carries on, as a recipe with its
+        # own catch-all might. Without -NoExit this would end the Pester process
+        # itself, which is the point: at a prompt the console must survive.
+        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 0
+        $state = Get-YardstickWatchdogState
+        $state['StageStarted'] = (Get-Date).AddMinutes(-5)
+
+        $interrupts = 0
+        $deadline = (Get-Date).AddSeconds(20)
+        while (-not $state['GaveUpFor'] -and (Get-Date) -lt $deadline) {
+            # Whole seconds, so the thread is almost always waiting when the
+            # watchdog looks; it does not interrupt a thread that is running.
+            try { Start-Sleep -Seconds 1 } catch [System.Threading.ThreadInterruptedException] { $interrupts++ }
+        }
+        try { Start-Sleep -Seconds 2 } catch [System.Threading.ThreadInterruptedException] { $interrupts++ }
+
+        $state['GaveUpFor'] | Should -Be $state['StageStarted']
+        $interrupts | Should -Be 1 -Because 'a stage is interrupted once; after that the only recourse is ending the run'
+        $logged = @(Get-Content -LiteralPath (Join-Path $Global:LogLocation $Global:LogFile) |
+            Where-Object { $_ -match 'did not let go' })
+        $logged.Count | Should -Be 1
+        $logged[-1] | Should -Match 'Not ending the run'
+        (Get-Job -Name 'YardstickWatchdog').State | Should -Be 'Running'
+    }
+}
+
+Describe "Watchdog interrupt hand-off" {
+    # Thread.Interrupt on a thread that is not waiting stays pending until its next
+    # wait, wherever that is. The watchdog only interrupts a waiting thread, and the
+    # main-thread side clears an interrupt that slipped through, so one meant for an
+    # abandoned stage cannot reach whatever runs after it.
+    AfterEach {
+        Stop-YardstickWatchdog
+        # Never let a failed test leave an interrupt pending for the rest of the suite.
+        try { [System.Threading.Thread]::Sleep(0) } catch [System.Threading.ThreadInterruptedException] { $null = $_ }
+    }
+
+    It "does not interrupt a thread that is busy rather than waiting" {
+        # Start-Process -Wait and native calls read as Running, like this loop. An
+        # interrupt sent there would go off later, somewhere unrelated.
+        $box = [hashtable]::Synchronized(@{})
+        $busy = Start-ThreadJob -ArgumentList $box -ScriptBlock {
+            param($box)
+            $box.Thread = [System.Threading.Thread]::CurrentThread
+            $end = (Get-Date).AddSeconds(5)
+            while ((Get-Date) -lt $end) { }
+            try { Start-Sleep -Milliseconds 100; 'nothing pending' } catch { 'an interrupt was pending' }
+        }
+        while (-not $box.Thread) { Start-Sleep -Milliseconds 20 }
+
+        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 60 -MainThread $box.Thread
+        $state = Get-YardstickWatchdogState
+        $state['StageStarted'] = (Get-Date).AddMinutes(-5)
+        $result = Receive-Job -Job $busy -Wait -AutoRemoveJob
+
+        $state['ExpiredFor'] | Should -Be $state['StageStarted'] -Because 'the stage was abandoned'
+        $state['InterruptedFor'] | Should -BeNullOrEmpty
+        $result | Should -Be 'nothing pending'
+    }
+
+    It "Set-YardstickWatchdogStage clears an interrupt the abandoned stage left pending" {
+        Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
+        $state = Get-YardstickWatchdogState
+        $state['InterruptedFor'] = $state['StageStarted']
+
+        $escaped = $null
+        try {
+            [System.Threading.Thread]::CurrentThread.Interrupt()
+            Set-YardstickWatchdogStage -AppId 'next' -Stage 'Starting up'
+            Start-Sleep -Milliseconds 50
+        } catch {
+            $escaped = $_
+        }
+        $escaped | Should -BeNullOrEmpty -Because 'the next stage must not inherit the old stage''s interrupt'
+    }
+
+    It "Stop-YardstickWatchdog clears an interrupt the last stage left pending" {
+        Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
+        $state = Get-YardstickWatchdogState
+        $state['InterruptedFor'] = $state['StageStarted']
+
+        $escaped = $null
+        try {
+            [System.Threading.Thread]::CurrentThread.Interrupt()
+            Stop-YardstickWatchdog
+            Start-Sleep -Milliseconds 50
+        } catch {
+            $escaped = $_
+        }
+        $escaped | Should -BeNullOrEmpty -Because 'the email report runs after this'
+    }
+
+    It "Set-YardstickWatchdogStage forgets an abandonment the recipe recovered from" {
+        Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
+        $state = Get-YardstickWatchdogState
+        $state['Abandoned'] = @{ AppId = 'treesize'; Stage = 'Pre-Download Script'; Minutes = 60.2; TimeoutMinutes = 60 }
+        Set-YardstickWatchdogStage -Stage 'Download'
+        $state['Abandoned'] | Should -BeNullOrEmpty
+    }
+}
+
+Describe "Add-FailedApplication after the watchdog abandons a recipe" {
+    BeforeEach {
+        Initialize-ApplicationTracker
+        Start-YardstickWatchdog -TimeoutMinutes 60 -PollSeconds 3600
+        (Get-YardstickWatchdogState)['Abandoned'] = @{ AppId = 'treesize'; Stage = 'Pre-Download Script'; Minutes = 60.2; TimeoutMinutes = 60 }
+    }
+
+    AfterEach {
+        Stop-YardstickWatchdog
+    }
+
+    It "replaces the interrupt's message with what happened" {
+        Add-FailedApplication -ApplicationId 'treesize' -ErrorMessage 'Thread was interrupted from a waiting state.' -FailureStage 'Pre-Download Script'
+        $failure = InModuleScope YardstickSupport { $Script:FailedApplications[0] }
+        $failure.ErrorMessage | Should -Match "Abandoned after 60.2 minutes without progress in stage 'Pre-Download Script'"
+        $failure.ErrorMessage | Should -Match 'moved on to the next recipe'
+    }
+
+    It "does it once, so a later failure of the same app keeps its own message" {
+        Add-FailedApplication -ApplicationId 'treesize' -ErrorMessage 'Thread was interrupted from a waiting state.' -FailureStage 'Pre-Download Script'
+        (Get-YardstickWatchdogState)['Abandoned'] | Should -BeNullOrEmpty
+        Add-FailedApplication -ApplicationId 'treesize' -ErrorMessage 'token revoke failed' -FailureStage 'Post-Run Script'
+        Get-Content -LiteralPath (Join-Path $Global:LogLocation $Global:LogFile) -Tail 1 | Should -Match 'Post-Run Script failed: token revoke failed'
+    }
+
+    It "leaves other apps' failures alone" {
+        Add-FailedApplication -ApplicationId 'firefox' -ErrorMessage 'HTTP 404' -FailureStage 'Download'
+        $failure = InModuleScope YardstickSupport { $Script:FailedApplications[0] }
+        $failure.ErrorMessage | Should -Be 'HTTP 404'
+        (Get-YardstickWatchdogState)['Abandoned'] | Should -Not -BeNullOrEmpty
     }
 }
 
@@ -422,6 +571,40 @@ Describe "Invoke-YardstickBitsDownload" {
         { Invoke-YardstickBitsDownload -Source 'https://x/y' -Destination 'C:\y' } |
             Should -Throw -ExpectedMessage '*404*'
     }
+
+    It "passes -Dynamic through to BITS" {
+        # ltspice's server needs it.
+        Mock -ModuleName YardstickSupport Start-BitsTransfer {
+            New-FakeBitsJob -StateSequence { 'Transferred' } -ByteSequence { 1000 }
+        }
+        Mock -ModuleName YardstickSupport Complete-BitsTransfer {} -RemoveParameterType 'BitsJob'
+
+        Invoke-YardstickBitsDownload -Source 'https://x/y' -Destination 'C:\y' -PollSeconds 1 -Dynamic
+        Should -Invoke Start-BitsTransfer -ModuleName YardstickSupport -Times 1 -ParameterFilter { $Dynamic -and $Asynchronous }
+    }
+
+    It "uses the run's stall bound when the caller gives none" {
+        # Recipes call it without -StallTimeoutMinutes; bitsStallTimeoutMinutes
+        # has to reach them through Set-YardstickBitsStallTimeout.
+        Mock -ModuleName YardstickSupport Start-BitsTransfer {
+            New-FakeBitsJob -StateSequence { 'Transferring' } -ByteSequence { 0 }
+        }
+        Mock -ModuleName YardstickSupport Remove-BitsTransfer {} -RemoveParameterType 'BitsJob'
+        Mock -ModuleName YardstickSupport Start-Sleep {}
+        $Global:FakeClock = [datetime]'2026-11-04T09:00:00'
+        Mock -ModuleName YardstickSupport Get-Date {
+            $Global:FakeClock = $Global:FakeClock.AddMinutes(2)
+            $Global:FakeClock
+        }
+
+        try {
+            Set-YardstickBitsStallTimeout -Minutes 3
+            { Invoke-YardstickBitsDownload -Source 'https://x/y' -Destination 'C:\y' -PollSeconds 1 } |
+                Should -Throw -ExpectedMessage '*moved no data for 3 minute(s)*'
+        } finally {
+            Set-YardstickBitsStallTimeout -Minutes 15
+        }
+    }
 }
 
 Describe "Module web calls are bounded" {
@@ -582,6 +765,17 @@ Describe "Main processing loop control flow" {
         $finallyText = $tryStatement.Finally.Extent.Text
         $finallyText | Should -Match 'PostRunScript'
         $finallyText | Should -Match 'Wait-YardstickBackup'
+    }
+
+    It "gives the backup drain a watchdog stage of its own" {
+        # The drain is outside every catch. Changing stage first is what clears an
+        # interrupt the watchdog sent to an abandoned stage before it, which would
+        # otherwise throw out of the finally and end the run.
+        $tryStatement = $script:MainLoop.Body.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.TryStatementAst]
+        }, $false)
+        $tryStatement.Finally.Extent.Text | Should -Match "Set-YardstickWatchdogStage -Stage 'Waiting for backup'\s+Wait-YardstickBackup"
     }
 
     It "clears PostRunScript each iteration so an early skip cannot run the previous recipe's hook" {

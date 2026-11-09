@@ -6,7 +6,7 @@ preDownloadScript: |
   if (Test-Path -Path $Script:TEMP\vc_redist.x86.exe) {
     Remove-Item -Path $Script:TEMP\vc_redist.x86.exe -Force
   }
-  Start-BitsTransfer -Source $url -Destination $Script:TEMP\vc_redist.x86.exe
+  Invoke-YardstickBitsDownload -Source $url -Destination $Script:TEMP\vc_redist.x86.exe
   # Get the version from the downloaded file
   $fileVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$Script:TEMP\vc_redist.x86.exe")
   $Script:version = ([VersionPro]$fileVersionInfo.FileVersion).ToString(3)

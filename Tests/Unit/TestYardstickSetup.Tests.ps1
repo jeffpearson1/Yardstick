@@ -85,6 +85,30 @@ Describe "Test-YardstickSetup.ps1" {
         Test-Path (Join-Path $script:root 'Artifacts\Temp') | Should -BeFalse
     }
 
+    It "Lists each missing icon once, inheriting iconFile through base:" {
+        Set-TestPreferences
+        New-Item -ItemType Directory -Path (Join-Path $script:root 'Icons') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:root 'Icons\demo.png') -Value 'png'
+        $extra = @{
+            'zip.yaml'       = "id: zip.x64`ndisplayName: `"Zip`" # quoted`niconFile: zip.png"
+            'zip.arm64.yaml' = "base: zip`nid: zip.arm64`ndisplayName: Zip (ARM64)"
+            'noicon.yaml'    = "id: NoIcon`ndisplayName: No Icon App"
+        }
+        $paths = foreach ($name in $extra.Keys) {
+            $path = Join-Path $script:root "Recipes\$name"
+            Set-Content -LiteralPath $path -Value $extra[$name]
+            $path
+        }
+        try {
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Missing icons'
+            $check.Level | Should -Be 'Warn'
+            # zip.arm64 inherits zip.png, so the two share one entry.
+            $check.Message | Should -Match '^2 recipe icon\(s\) missing \(No Icon App, Zip[ )]'
+        } finally {
+            Remove-Item -LiteralPath $paths
+        }
+    }
+
     Context "Recipe overrides" {
         BeforeAll {
             $script:overridesPath = Join-Path $script:root 'Local\recipeOverrides.yaml'
@@ -124,6 +148,46 @@ Describe "Test-YardstickSetup.ps1" {
             $run = Invoke-HealthCheck -Offline
             $run.ExitCode | Should -Be 1
             ($run.Results | Where-Object Check -eq 'Recipe overrides').Level | Should -Be 'Fail'
+        }
+
+        It "Counts a variant as matching its recipe and lists it" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value "demo.labs:`n  variantOf: demo`n  displayName: Demo App (Labs)"
+            $results = (Invoke-HealthCheck -Offline).Results
+            ($results | Where-Object Check -eq 'Recipe overrides').Level | Should -Be 'OK'
+            $variants = $results | Where-Object Check -eq 'Recipe variants'
+            $variants.Level | Should -Be 'OK'
+            $variants.Message | Should -Match 'demo\.labs \(from demo\)'
+        }
+
+        It "Warns about variants that cannot be built" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value @"
+demo.labs:
+  variantOf: demo
+demo.kiosk:
+  variantOf: dmeo
+  displayName: Demo Kiosk
+"@
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Recipe variants'
+            $check.Level | Should -Be 'Warn'
+            $check.Message | Should -Match 'demo\.labs: The variant .* needs a displayName'
+            $check.Message | Should -Match 'demo\.kiosk is built from dmeo, which is not a recipe'
+        }
+
+        It "Warns about two variants with the same displayName" {
+            Set-TestPreferences
+            Set-Content -LiteralPath $script:overridesPath -Value @"
+demo.labs:
+  variantOf: demo
+  displayName: Demo App (Shared)
+demo.kiosk:
+  variantOf: demo
+  displayName: Demo App (Shared)
+"@
+            $check = (Invoke-HealthCheck -Offline).Results | Where-Object Check -eq 'Recipe variants'
+            $check.Level | Should -Be 'Warn'
+            $check.Message | Should -Match 'same displayName'
         }
     }
 

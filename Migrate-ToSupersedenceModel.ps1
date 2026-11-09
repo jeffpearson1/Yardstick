@@ -79,31 +79,41 @@ Initialize-YardstickIntuneCredential -Preferences $Prefs | Out-Null
 # Auth
 Connect-YardstickGraph -Force
 
-# Enumerate recipes
-$recipeFiles = @(Get-YardstickRecipeFile -RecipesPath $Recipes)
+# Enumerate recipes, each followed by its variants from the overrides file
+$variants = @(Get-RecipeVariant -Overrides $RecipeOverrides)
+$targets = foreach ($file in Get-YardstickRecipeFile -RecipesPath $Recipes) {
+    [pscustomobject]@{ Id = $file.BaseName; File = $file }
+    foreach ($variant in $variants | Where-Object VariantOf -eq $file.BaseName) {
+        [pscustomobject]@{ Id = $variant.Id; File = $file }
+    }
+}
+$targets = @($targets)
 
 if ($ApplicationId) {
-    $recipeFiles = $recipeFiles | Where-Object BaseName -eq $ApplicationId
-    if (-not $recipeFiles) {
+    $targets = @($targets | Where-Object Id -eq $ApplicationId)
+    if (-not $targets) {
         Write-Error "No recipe found with id '$ApplicationId'"
         exit 1
     }
 }
 
-foreach ($file in $recipeFiles) {
-    $recipe = Get-Content $file.FullName | ConvertFrom-Yaml
+foreach ($target in $targets) {
+    $recipe = Get-Content $target.File.FullName | ConvertFrom-Yaml
     $recipe = Merge-RecipeWithBase -Recipe $recipe -RecipesPath $Recipes
-    if ($RecipeOverrides.ContainsKey($file.BaseName)) {
-        $recipe = Merge-RecipeWithOverride -Recipe $recipe -Override $RecipeOverrides[$file.BaseName]
+    try {
+        $recipe = Resolve-RecipeOverride -Recipe $recipe -Id $target.Id -Overrides $RecipeOverrides
+    } catch {
+        Write-Warning "Skipping $($target.Id) - $($_.Exception.Message)"
+        continue
     }
 
     $displayName = $recipe.displayName
     if (-not $displayName) {
-        Write-Warning "Skipping $($file.Name) - missing displayName"
+        Write-Warning "Skipping $($target.File.Name) - missing displayName"
         continue
     }
 
-    Write-Host "`n=== $displayName ($($file.BaseName)) ===" -ForegroundColor Cyan
+    Write-Host "`n=== $displayName ($($target.Id)) ===" -ForegroundColor Cyan
 
     $useAnchor              = if ($null -ne $Prefs.useDetectAnchor) { [bool]$Prefs.useDetectAnchor } else { $true }
     $supersedence           = if ($null -ne $recipe.supersedence) { [bool]$recipe.supersedence } elseif ($null -ne $Prefs.defaultSupersedence) { [bool]$Prefs.defaultSupersedence } else { $true }

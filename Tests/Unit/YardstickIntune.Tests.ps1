@@ -493,10 +493,11 @@ Describe 'Yardstick Intune content upload' {
     }
 
     Context 'recovering a dead upload location' {
-        # The point of the retry: an upload signature that can never be renewed
-        # used to take the whole app down with it, discarding a package that had
-        # already been downloaded, repackaged and encrypted. A content version is
-        # cheap, and only the committed one is ever referenced.
+        # The point of the retry: an upload signature that can never be renewed,
+        # or a commit Intune fails, used to take the whole app down with it,
+        # discarding a package that had already been downloaded, repackaged and
+        # encrypted. Intune will not take a second content version until the
+        # first is committed, so the retry starts over from a fresh app.
         BeforeEach {
             # Written out here rather than inside InModuleScope: $TestDrive only
             # resolves in the test's own scope, and Add-YardstickWin32App does a
@@ -541,18 +542,20 @@ Describe 'Yardstick Intune content upload' {
                 Mock Get-YardstickWin32App { [pscustomobject]@{ id = 'app-1' } }
                 Mock Remove-YardstickWin32App {}
                 Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
             }
         }
 
-        It 'starts over on a fresh content version when the signature dies' {
+        It 'starts over on a fresh app when the signature dies' {
             InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
                 param($Payload)
-                $Script:versions = 0
+                $Script:apps = 0
                 Mock Invoke-YardstickGraphRequest {
-                    if ($Resource -like '*contentVersions') {
-                        $Script:versions++
-                        return [pscustomobject]@{ id = "v$Script:versions" }
+                    if ($Resource -eq 'deviceAppManagement/mobileApps') {
+                        $Script:apps++
+                        return [pscustomobject]@{ id = "new-$Script:apps" }
                     }
+                    if ($Resource -like '*contentVersions') { return [pscustomobject]@{ id = 'v1' } }
                     [pscustomobject]@{ id = 'file-1' }
                 }
                 $Script:sends = 0
@@ -570,9 +573,43 @@ Describe 'Yardstick Intune content upload' {
 
                 $app.id | Should -Be 'app-1'
                 $Script:sends | Should -Be 2
-                # A second content version, not a second file under the dead one.
-                $Script:versions | Should -Be 2
-                Should -Invoke Remove-YardstickWin32App -Times 0 -Exactly
+                # A second app, not a second content version Intune would refuse.
+                $Script:apps | Should -Be 2
+                Should -Invoke Remove-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $ID -eq 'new-1' }
+                Should -Invoke Get-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $ID -eq 'new-2' }
+                Should -Invoke Start-Sleep -Times 1 -Exactly
+            }
+        }
+
+        It 'starts over on a fresh app when Intune fails the commit' {
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                $Script:apps = 0
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -eq 'deviceAppManagement/mobileApps') {
+                        $Script:apps++
+                        return [pscustomobject]@{ id = "new-$Script:apps" }
+                    }
+                    if ($Resource -like '*contentVersions') { return [pscustomobject]@{ id = 'v1' } }
+                    [pscustomobject]@{ id = 'file-1' }
+                }
+                Mock Send-YardstickIntuneContentBlob {}
+                $Script:commits = 0
+                Mock Wait-YardstickIntuneFileProcessing -ParameterFilter { $Stage -eq 'commitFile' } {
+                    $Script:commits++
+                    if ($Script:commits -eq 1) { throw "Intune file operation 'commitFile' timed out in the service." }
+                    [pscustomobject]@{}
+                }
+
+                $app = Add-YardstickWin32App -FilePath $Payload `
+                    -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                    -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                    -DetectionRule @{} -RequirementRule @{}
+
+                $app.id | Should -Be 'app-1'
+                $Script:commits | Should -Be 2
+                $Script:apps | Should -Be 2
+                Should -Invoke Remove-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $ID -eq 'new-1' }
             }
         }
 
@@ -596,7 +633,8 @@ Describe 'Yardstick Intune content upload' {
                     Should -Throw '*can no longer be renewed*'
 
                 $Script:sends | Should -Be 2
-                Should -Invoke Remove-YardstickWin32App -Times 1 -Exactly
+                # Each attempt's half-made app is removed.
+                Should -Invoke Remove-YardstickWin32App -Times 2 -Exactly
             }
         }
     }

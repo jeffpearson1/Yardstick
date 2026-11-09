@@ -124,7 +124,9 @@ between runs, for vendor sites that throttle repeated requests; `-Force` ignores
 
 Do not put `scopeTags` in a shared recipe. They are tenant-specific, so they go in
 the gitignored `Local\recipeOverrides.yaml`, keyed by recipe id; see "Site-Specific
-Overrides" in `Docs/WritingRecipes.md`.
+Overrides" in `Docs/WritingRecipes.md`. Do not copy a recipe to make a second,
+differently configured app from it either: add a variant (an overrides entry with
+`variantOf: <recipe id>` and its own `displayName`) instead.
 
 `fileType` (`msi`/`exe`/`zip`) and `softwareName` pass schema validation and appear
 throughout the existing recipes, but nothing in `Yardstick.ps1` or the modules
