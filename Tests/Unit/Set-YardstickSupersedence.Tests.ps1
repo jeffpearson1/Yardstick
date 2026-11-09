@@ -29,6 +29,7 @@ Describe "Test-IsVersionDetection" {
     }
 }
 
+
 Describe "Get-DetectAnchorName" {
     It "prefixes the reserved marker" {
         Get-DetectAnchorName -DisplayName 'Google Chrome' | Should -Be 'Ω DETECT - Google Chrome'
@@ -1125,7 +1126,7 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         Should -Invoke Remove-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'from' }
     }
 
-    It "leaves a filtered All Devices assignment alone rather than widening it to every device" {
+    It "carries an All Devices assignment's filter across" {
         Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
             @([PSCustomObject]@{
                 Type = '#microsoft.graph.allDevicesAssignmentTarget'
@@ -1136,14 +1137,59 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
         $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
-        Should -Invoke Add-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
-        Should -Invoke Remove-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
+        Should -Invoke Add-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'to' -and $FilterID -eq 'filter-1' -and $FilterMode -eq 'include' }
+        Should -Invoke Remove-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'from' }
     }
 
-    It "protects the source from deletion when it holds an assignment that cannot be migrated" {
-        # The filter is only readable by id and only settable by name, so this
-        # assignment cannot be recreated on $to. Pruning $from would destroy
-        # targeting nobody can put back, so retention has to leave it alone.
+    It "carries an All Users assignment's filter across" {
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.allLicensedUsersAssignmentTarget'
+                GroupID = $null; GroupMode = $null; Intent = 'available'
+                FilterType = 'exclude'; FilterID = 'filter-2'; Notifications = 'showAll'
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
+        Should -Invoke Add-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'to' -and $FilterID -eq 'filter-2' -and $FilterMode -eq 'exclude' }
+        Should -Invoke Remove-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter { $ID -eq 'from' }
+    }
+
+    It "removes only the migrated All Users intent when required and available coexist" {
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @(
+                [PSCustomObject]@{
+                    ID = 'required-assignment'
+                    Type = '#microsoft.graph.allLicensedUsersAssignmentTarget'
+                    GroupID = $null; GroupMode = $null; Intent = 'required'
+                    FilterType = 'include'; FilterID = 'filter-required'
+                },
+                [PSCustomObject]@{
+                    ID = 'available-assignment'
+                    Type = '#microsoft.graph.allLicensedUsersAssignmentTarget'
+                    GroupID = $null; GroupMode = $null; Intent = 'available'
+                    FilterType = 'exclude'; FilterID = 'filter-available'
+                }
+            )
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -IntentFilter 'required'
+        Should -Invoke Remove-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            $ID -eq 'from' -and $AssignmentID -eq 'required-assignment'
+        }
+
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -IntentFilter 'available'
+        Should -Invoke Remove-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            $ID -eq 'from' -and $AssignmentID -eq 'available-assignment'
+        }
+    }
+
+    It "does not protect the source once a filtered All Devices assignment has been migrated" {
+        # The filter now travels with the assignment, so nothing is left behind
+        # on the source and retention is free to prune it.
         Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
             @([PSCustomObject]@{
                 Type = '#microsoft.graph.allDevicesAssignmentTarget'
@@ -1155,7 +1201,25 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
         $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
         Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -ProtectedSourceIds $protected
-        $protected.Contains('from') | Should -BeTrue
+        $protected.Count | Should -Be 0
+    }
+
+    It "carries Delivery Optimization priority and restart settings across" {
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.groupAssignmentTarget'
+                GroupID = 'g-incl'; GroupMode = 'Include'; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+                DeliveryOptimizationPriority = 'foreground'
+                RestartSettings = [PSCustomObject]@{ gracePeriodInMinutes = 1440; countdownDisplayBeforeRestartInMinutes = 15; restartNotificationSnoozeDurationInMinutes = 240 }
+            })
+        }
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies
+        Should -Invoke Add-YardstickWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 1 -ParameterFilter {
+            $DeliveryOptimizationPriority -eq 'foreground' -and $RestartSettings.gracePeriodInMinutes -eq 1440
+        }
     }
 
     It "does not protect the source when the assignment simply belongs to the other intent pass" {
@@ -1287,6 +1351,21 @@ Describe "Move-AssignmentsAndDependencies assignment targets" {
         Should -Invoke Add-YardstickWin32AppAssignmentGroup -ModuleName YardstickSupport -Exactly -Times 0
         Should -Invoke Add-YardstickWin32AppAssignmentAllDevices -ModuleName YardstickSupport -Exactly -Times 0
         Should -Invoke Add-YardstickWin32AppAssignmentAllUsers -ModuleName YardstickSupport -Exactly -Times 0
+    }
+
+    It "protects the source from deletion when it holds a target it cannot migrate" {
+        Mock Get-YardstickWin32AppAssignment -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                Type = '#microsoft.graph.configurationManagerCollectionAssignmentTarget'
+                GroupID = $null; GroupMode = $null; Intent = 'required'
+                FilterType = 'none'; FilterID = $null; Notifications = 'showAll'
+            })
+        }
+        $protected = [System.Collections.Generic.HashSet[string]]::new()
+        $from = [PSCustomObject]@{ id = 'from'; DisplayName = 'App (N-1)' }
+        $to   = [PSCustomObject]@{ id = 'to';   DisplayName = 'App' }
+        Move-AssignmentsAndDependencies -From $from -To $to -SkipDependencies -ProtectedSourceIds $protected
+        $protected.Contains('from') | Should -BeTrue
     }
 
     It "leaves the source untouched under CopyOnly" {
@@ -1492,6 +1571,38 @@ Describe "Test-YardstickAssignmentPresent" {
 
     It "falls back to the target type for virtual targets that carry no group id" {
         Test-YardstickAssignmentPresent -AppId 'to' -CountKey '#microsoft.graph.allDevicesAssignmentTarget' -Intent 'available' | Should -BeTrue
+    }
+
+    It "does not match an assignment with a different filter ID" {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                id = 'x1'; intent = 'required'
+                target = [PSCustomObject]@{
+                    '@odata.type' = '#microsoft.graph.allLicensedUsersAssignmentTarget'
+                    deviceAndAppManagementAssignmentFilterId = 'other-filter'
+                    deviceAndAppManagementAssignmentFilterType = 'include'
+                }
+            })
+        }
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey '#microsoft.graph.allLicensedUsersAssignmentTarget' `
+            -Intent 'required' -TargetType '#microsoft.graph.allLicensedUsersAssignmentTarget' `
+            -FilterID 'requested-filter' -FilterMode 'include' | Should -BeFalse
+    }
+
+    It "does not match an assignment with a different filter mode" {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickSupport {
+            @([PSCustomObject]@{
+                id = 'x1'; intent = 'required'
+                target = [PSCustomObject]@{
+                    '@odata.type' = '#microsoft.graph.allLicensedUsersAssignmentTarget'
+                    deviceAndAppManagementAssignmentFilterId = 'filter-1'
+                    deviceAndAppManagementAssignmentFilterType = 'exclude'
+                }
+            })
+        }
+        Test-YardstickAssignmentPresent -AppId 'to' -CountKey '#microsoft.graph.allLicensedUsersAssignmentTarget' `
+            -Intent 'required' -TargetType '#microsoft.graph.allLicensedUsersAssignmentTarget' `
+            -FilterID 'filter-1' -FilterMode 'include' | Should -BeFalse
     }
 
     It "does not mistake an exclusion for the include it was asked about" {
@@ -1764,4 +1875,3 @@ Describe "Move-AssignmentsAndDependencies break containment" {
         Remove-Variable -Name MockBreakAdds -Scope Global -ErrorAction SilentlyContinue
     }
 }
-

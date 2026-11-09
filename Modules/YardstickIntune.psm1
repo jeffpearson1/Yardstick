@@ -327,6 +327,7 @@ function New-YardstickAssignmentBody {
         [datetime]$DeadlineTime,
         [bool]$UseLocalTime = $false,
         [string]$DeliveryOptimizationPriority = 'notConfigured',
+        [object]$RestartSettings,
         [string]$FilterID,
         [string]$FilterMode = 'Include'
     )
@@ -346,7 +347,7 @@ function New-YardstickAssignmentBody {
         $body.settings = [ordered]@{
             '@odata.type'                 = '#microsoft.graph.win32LobAppAssignmentSettings'
             notifications                 = $Notification
-            restartSettings               = $null
+            restartSettings               = $RestartSettings
             deliveryOptimizationPriority  = $DeliveryOptimizationPriority
             installTimeSettings           = $null
         }
@@ -374,13 +375,14 @@ function Add-YardstickWin32AppAssignment {
         [datetime]$DeadlineTime,
         [bool]$UseLocalTime = $false,
         [string]$DeliveryOptimizationPriority = 'notConfigured',
+        [object]$RestartSettings,
         [string]$FilterID,
         [string]$FilterMode = 'Include'
     )
     $bodyParams = @{
         TargetType = $TargetType; GroupID = $GroupID; Intent = $Intent; Notification = $Notification
         UseLocalTime = $UseLocalTime; DeliveryOptimizationPriority = $DeliveryOptimizationPriority
-        FilterID = $FilterID; FilterMode = $FilterMode
+        RestartSettings = $RestartSettings; FilterID = $FilterID; FilterMode = $FilterMode
     }
     if ($PSBoundParameters.ContainsKey('AvailableTime')) { $bodyParams.AvailableTime = $AvailableTime }
     if ($PSBoundParameters.ContainsKey('DeadlineTime')) { $bodyParams.DeadlineTime = $DeadlineTime }
@@ -393,7 +395,7 @@ function Add-YardstickWin32AppAssignment {
         # The service text lives in ErrorDetails, which is what the error record stringifies to.
         $errorText = @("$_", $_.Exception.Message) -join ' '
         if ($errorText -notmatch 'MobileApp Assignment already exists') { throw }
-        $existing = @(Get-YardstickWin32AppAssignmentMatch -ID $ID -TargetType $TargetType -GroupID $GroupID -Intent $Intent)
+        $existing = @(Get-YardstickWin32AppAssignmentMatch -ID $ID -TargetType $TargetType -GroupID $GroupID -Intent $Intent -FilterID $FilterID -FilterMode $FilterMode)
         if ($existing.Count -eq 0) { throw }
         return $existing[0]
     }
@@ -404,13 +406,23 @@ function Get-YardstickWin32AppAssignmentMatch {
         [Parameter(Mandatory)][string]$ID,
         [Parameter(Mandatory)][string]$TargetType,
         [string]$GroupID,
-        [Parameter(Mandatory)][string]$Intent
+        [Parameter(Mandatory)][string]$Intent,
+        [string]$FilterID,
+        [string]$FilterMode = 'Include'
     )
+    $expectedFilterID = if ($FilterID) { $FilterID } else { '' }
+    $expectedFilterMode = if ($expectedFilterID) { $FilterMode.ToLowerInvariant() } else { 'none' }
     return @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$ID/assignments" | Where-Object {
         $target = Get-YardstickPropertyValue $_ 'target'
+        $existingFilterID = Get-YardstickPropertyValue $target 'deviceAndAppManagementAssignmentFilterId'
+        $existingFilterMode = Get-YardstickPropertyValue $target 'deviceAndAppManagementAssignmentFilterType'
+        $existingFilterID = if ($existingFilterID) { $existingFilterID } else { '' }
+        $existingFilterMode = if ($existingFilterID) { ([string]$existingFilterMode).ToLowerInvariant() } else { 'none' }
         ((Get-YardstickPropertyValue $_ 'intent') -eq $Intent) -and
         ((Get-YardstickPropertyValue $target '@odata.type') -eq $TargetType) -and
-        ((-not $GroupID) -or ((Get-YardstickPropertyValue $target 'groupId') -eq $GroupID))
+        ((-not $GroupID) -or ((Get-YardstickPropertyValue $target 'groupId') -eq $GroupID)) -and
+        ($existingFilterID -eq $expectedFilterID) -and
+        ($existingFilterMode -eq $expectedFilterMode)
     })
 }
 
@@ -427,6 +439,7 @@ function Add-YardstickWin32AppAssignmentGroup {
         [datetime]$DeadlineTime,
         [bool]$UseLocalTime = $false,
         [string]$DeliveryOptimizationPriority = 'notConfigured',
+        [object]$RestartSettings,
         [string]$FilterName,
         [string]$FilterID,
         [ValidateSet('Include', 'Exclude', 'include', 'exclude')][string]$FilterMode = 'Include'
@@ -438,7 +451,7 @@ function Add-YardstickWin32AppAssignmentGroup {
     }
     $params = @{
         ID = $ID; GroupID = $GroupID; Intent = $Intent; Notification = $Notification; UseLocalTime = $UseLocalTime
-        DeliveryOptimizationPriority = $DeliveryOptimizationPriority; FilterID = $FilterID; FilterMode = $FilterMode
+        DeliveryOptimizationPriority = $DeliveryOptimizationPriority; RestartSettings = $RestartSettings; FilterID = $FilterID; FilterMode = $FilterMode
         TargetType = if ($Exclude) { '#microsoft.graph.exclusionGroupAssignmentTarget' } else { '#microsoft.graph.groupAssignmentTarget' }
     }
     if ($PSBoundParameters.ContainsKey('AvailableTime')) { $params.AvailableTime = $AvailableTime }
@@ -452,14 +465,14 @@ function Add-YardstickWin32AppAssignmentAllDevices {
         [Parameter(Mandatory)][string]$ID,
         [Parameter(Mandatory)][ValidateSet('required', 'available', 'uninstall')][string]$Intent,
         [string]$Notification = 'showAll', [datetime]$AvailableTime, [datetime]$DeadlineTime,
-        [bool]$UseLocalTime = $false, [string]$DeliveryOptimizationPriority = 'notConfigured',
+        [bool]$UseLocalTime = $false, [string]$DeliveryOptimizationPriority = 'notConfigured', [object]$RestartSettings,
         [string]$FilterName, [string]$FilterID, [string]$FilterMode = 'Include'
     )
     if ($FilterName -and -not $FilterID) {
         $FilterID = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource 'deviceManagement/assignmentFilters' | Where-Object displayName -eq $FilterName | Select-Object -ExpandProperty id) | Select-Object -First 1
         if (-not $FilterID) { throw "Assignment filter '$FilterName' was not found." }
     }
-    $params = @{ ID = $ID; TargetType = '#microsoft.graph.allDevicesAssignmentTarget'; Intent = $Intent; Notification = $Notification; UseLocalTime = $UseLocalTime; DeliveryOptimizationPriority = $DeliveryOptimizationPriority; FilterID = $FilterID; FilterMode = $FilterMode }
+    $params = @{ ID = $ID; TargetType = '#microsoft.graph.allDevicesAssignmentTarget'; Intent = $Intent; Notification = $Notification; UseLocalTime = $UseLocalTime; DeliveryOptimizationPriority = $DeliveryOptimizationPriority; RestartSettings = $RestartSettings; FilterID = $FilterID; FilterMode = $FilterMode }
     if ($PSBoundParameters.ContainsKey('AvailableTime')) { $params.AvailableTime = $AvailableTime }
     if ($PSBoundParameters.ContainsKey('DeadlineTime')) { $params.DeadlineTime = $DeadlineTime }
     return Add-YardstickWin32AppAssignment @params
@@ -471,32 +484,51 @@ function Add-YardstickWin32AppAssignmentAllUsers {
         [Parameter(Mandatory)][string]$ID,
         [Parameter(Mandatory)][ValidateSet('required', 'available', 'uninstall')][string]$Intent,
         [string]$Notification = 'showAll', [datetime]$AvailableTime, [datetime]$DeadlineTime,
-        [bool]$UseLocalTime = $false, [string]$DeliveryOptimizationPriority = 'notConfigured',
+        [bool]$UseLocalTime = $false, [string]$DeliveryOptimizationPriority = 'notConfigured', [object]$RestartSettings,
         [string]$FilterName, [string]$FilterID, [string]$FilterMode = 'Include'
     )
     if ($FilterName -and -not $FilterID) {
         $FilterID = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource 'deviceManagement/assignmentFilters' | Where-Object displayName -eq $FilterName | Select-Object -ExpandProperty id) | Select-Object -First 1
         if (-not $FilterID) { throw "Assignment filter '$FilterName' was not found." }
     }
-    $params = @{ ID = $ID; TargetType = '#microsoft.graph.allLicensedUsersAssignmentTarget'; Intent = $Intent; Notification = $Notification; UseLocalTime = $UseLocalTime; DeliveryOptimizationPriority = $DeliveryOptimizationPriority; FilterID = $FilterID; FilterMode = $FilterMode }
+    $params = @{ ID = $ID; TargetType = '#microsoft.graph.allLicensedUsersAssignmentTarget'; Intent = $Intent; Notification = $Notification; UseLocalTime = $UseLocalTime; DeliveryOptimizationPriority = $DeliveryOptimizationPriority; RestartSettings = $RestartSettings; FilterID = $FilterID; FilterMode = $FilterMode }
     if ($PSBoundParameters.ContainsKey('AvailableTime')) { $params.AvailableTime = $AvailableTime }
     if ($PSBoundParameters.ContainsKey('DeadlineTime')) { $params.DeadlineTime = $DeadlineTime }
     return Add-YardstickWin32AppAssignment @params
 }
 
 function Remove-YardstickAssignmentsByTarget {
-    param([string]$ID, [string]$TargetType, [string]$GroupID)
+    param([string]$ID, [string]$TargetType, [string]$GroupID, [string]$AssignmentID)
+    if ($AssignmentID) {
+        Invoke-YardstickGraphRequest -ApiVersion beta -Method Delete -Resource "deviceAppManagement/mobileApps/$ID/assignments/$AssignmentID" | Out-Null
+        return
+    }
     foreach ($assignment in @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$ID/assignments")) {
+        # All Devices and All Users targets have no groupId, and reading a missing
+        # property throws under StrictMode, so go through Get-YardstickPropertyValue.
+        $target = Get-YardstickPropertyValue $assignment 'target'
         if ($GroupID) {
-            if ($assignment.target.groupId -ne $GroupID) { continue }
-        } elseif ($assignment.target.'@odata.type' -ne $TargetType) { continue }
+            if ((Get-YardstickPropertyValue $target 'groupId') -ne $GroupID) { continue }
+        } elseif ((Get-YardstickPropertyValue $target '@odata.type') -ne $TargetType) { continue }
         Invoke-YardstickGraphRequest -ApiVersion beta -Method Delete -Resource "deviceAppManagement/mobileApps/$ID/assignments/$($assignment.id)" | Out-Null
     }
 }
 
-function Remove-YardstickWin32AppAssignmentGroup { [CmdletBinding()] param([Parameter(Mandatory)][string]$ID, [Parameter(Mandatory)][string]$GroupID) Remove-YardstickAssignmentsByTarget -ID $ID -GroupID $GroupID }
-function Remove-YardstickWin32AppAssignmentAllDevices { [CmdletBinding()] param([Parameter(Mandatory)][string]$ID) Remove-YardstickAssignmentsByTarget -ID $ID -TargetType '#microsoft.graph.allDevicesAssignmentTarget' }
-function Remove-YardstickWin32AppAssignmentAllUsers { [CmdletBinding()] param([Parameter(Mandatory)][string]$ID) Remove-YardstickAssignmentsByTarget -ID $ID -TargetType '#microsoft.graph.allLicensedUsersAssignmentTarget' }
+function Remove-YardstickWin32AppAssignmentGroup {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ID, [Parameter(Mandatory)][string]$GroupID, [string]$AssignmentID)
+    Remove-YardstickAssignmentsByTarget -ID $ID -GroupID $GroupID -AssignmentID $AssignmentID
+}
+function Remove-YardstickWin32AppAssignmentAllDevices {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ID, [string]$AssignmentID)
+    Remove-YardstickAssignmentsByTarget -ID $ID -TargetType '#microsoft.graph.allDevicesAssignmentTarget' -AssignmentID $AssignmentID
+}
+function Remove-YardstickWin32AppAssignmentAllUsers {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ID, [string]$AssignmentID)
+    Remove-YardstickAssignmentsByTarget -ID $ID -TargetType '#microsoft.graph.allLicensedUsersAssignmentTarget' -AssignmentID $AssignmentID
+}
 
 function Remove-YardstickWin32AppAssignment {
     [CmdletBinding(DefaultParameterSetName = 'ID')]

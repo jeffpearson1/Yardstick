@@ -102,6 +102,11 @@ All notable changes to Yardstick are recorded here. Versions follow
   (`-TaskSchedule Daily|Weekdays|Custom`, `-TaskDays`). `-TaskSchedule MondayToFriday`
   and `MondayToThursday` from 1.1.0 still work. `Register-YardstickScheduledTask` takes
   `-DaysOfWeek` instead of `-Schedule`.
+- **`versionLock` matches whole numbers.** A lock no longer matches a version whose
+  number merely starts with the locked one: `3.1` now matches `3.1.4` but not `3.12.0`,
+  and `8` no longer matches `80.1`. No committed recipe uses `versionLock`; check any
+  lock in `Local\recipeOverrides.yaml` that relied on the old prefix matching.
+- `tableaudesktop` is in the `NoGitHub` recipe group; it does not use GitHub.
 - **A stuck recipe no longer ends the run.** When a recipe stage makes no progress for
   `recipeStageTimeoutMinutes`, the watchdog now abandons that recipe and moves on to
   the next. It interrupts whatever the stage is waiting on (a download, a sleep, a
@@ -121,6 +126,14 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Fixed
 
+- **Moved group assignments are removed from the old version again.** Removing a migrated group
+  assignment from the previous version failed whenever that app also had an All
+  Devices or All Users assignment, leaving the group assigned to both versions.
+- **Filtered All Devices and All Users assignments move to the new version.** They were
+  left on the old version, which was then kept, because filters once could not be
+  copied. The filter now goes with them.
+- **Assignments keep their Delivery Optimization priority and restart settings** when
+  they move to a new version; they were reset to the defaults.
 - The installer's execution policy check no longer passes just because the installer
   was started with `pwsh -ExecutionPolicy Bypass`. It now checks the policy a normal
   window gets, so a CurrentUser or LocalMachine policy that blocks Yardstick's

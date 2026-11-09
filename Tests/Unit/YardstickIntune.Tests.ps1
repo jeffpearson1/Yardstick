@@ -83,6 +83,70 @@ Describe 'Yardstick Intune assignments' {
         }
     }
 
+    It 'removes a group assignment when the app also has an All Devices assignment' {
+        # All Devices targets carry no groupId; reading it under StrictMode used to
+        # throw before the group assignment was reached.
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
+            if ($Resource -eq 'deviceAppManagement/mobileApps/app/assignments') {
+                return @(
+                    [pscustomobject]@{ id = 'virtual'; target = [pscustomobject]@{ '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget' } },
+                    [pscustomobject]@{ id = 'grouped'; target = [pscustomobject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'group-1' } }
+                )
+            }
+        }
+        { Remove-YardstickWin32AppAssignmentGroup -ID app -GroupID group-1 } | Should -Not -Throw
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter { $Method -eq 'Delete' }
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Delete' -and $Resource -eq 'deviceAppManagement/mobileApps/app/assignments/grouped'
+        }
+    }
+
+    It 'removes an All Devices assignment alongside a group assignment' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
+            if ($Resource -eq 'deviceAppManagement/mobileApps/app/assignments') {
+                return @(
+                    [pscustomobject]@{ id = 'grouped'; target = [pscustomobject]@{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'group-1' } },
+                    [pscustomobject]@{ id = 'virtual'; target = [pscustomobject]@{ '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget' } }
+                )
+            }
+        }
+        Remove-YardstickWin32AppAssignmentAllDevices -ID app
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter { $Method -eq 'Delete' }
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Delete' -and $Resource -eq 'deviceAppManagement/mobileApps/app/assignments/virtual'
+        }
+    }
+
+    It 'removes only the requested assignment when its target has duplicates' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {}
+        Remove-YardstickWin32AppAssignmentAllUsers -ID app -AssignmentID selected
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Delete' -and $Resource -eq 'deviceAppManagement/mobileApps/app/assignments/selected'
+        }
+    }
+
+    It 'sends the supplied Delivery Optimization priority and restart settings' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune { [pscustomobject]@{ id = 'new' } } -ParameterFilter { $Method -eq 'Post' }
+        $restart = [pscustomobject]@{ gracePeriodInMinutes = 1440; countdownDisplayBeforeRestartInMinutes = 15 }
+        Add-YardstickWin32AppAssignmentAllDevices -ID app -Intent required -DeliveryOptimizationPriority foreground -RestartSettings $restart -FilterID filter-1 | Out-Null
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Post' -and
+            $Body.settings.deliveryOptimizationPriority -eq 'foreground' -and
+            $Body.settings.restartSettings.gracePeriodInMinutes -eq 1440 -and
+            $Body.target.deviceAndAppManagementAssignmentFilterId -eq 'filter-1'
+        }
+    }
+
+    It 'keeps the default Delivery Optimization priority and no restart settings when none are supplied' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune { [pscustomobject]@{ id = 'new' } } -ParameterFilter { $Method -eq 'Post' }
+        Add-YardstickWin32AppAssignmentGroup -Include -ID app -GroupID group-1 -Intent required | Out-Null
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'Post' -and
+            $Body.settings.deliveryOptimizationPriority -eq 'notConfigured' -and
+            $null -eq $Body.settings.restartSettings
+        }
+    }
+
     It 'returns the existing assignment when Intune reports a duplicate' {
         Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
             if ($Method -eq 'Post') {
@@ -96,6 +160,46 @@ Describe 'Yardstick Intune assignments' {
         }
         $result = Add-YardstickWin32AppAssignmentGroup -Include -ID app -GroupID group-9 -Intent available
         $result.id | Should -Be 'existing-1'
+    }
+
+    It 'does not resolve a duplicate to an assignment with a different filter' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
+            if ($Method -eq 'Post') {
+                throw 'The MobileApp Assignment already exists, for AppId: app, AssignmentId: group-9_0_0.'
+            }
+            return @([pscustomobject]@{
+                id     = 'existing-1'
+                intent = 'available'
+                target = [pscustomobject]@{
+                    '@odata.type' = '#microsoft.graph.groupAssignmentTarget'
+                    groupId = 'group-9'
+                    deviceAndAppManagementAssignmentFilterId = 'other-filter'
+                    deviceAndAppManagementAssignmentFilterType = 'include'
+                }
+            })
+        }
+        { Add-YardstickWin32AppAssignmentGroup -Include -ID app -GroupID group-9 -Intent available -FilterID requested-filter } |
+            Should -Throw '*already exists*'
+    }
+
+    It 'does not resolve a duplicate to an assignment with a different filter mode' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
+            if ($Method -eq 'Post') {
+                throw 'The MobileApp Assignment already exists, for AppId: app, AssignmentId: group-9_0_0.'
+            }
+            return @([pscustomobject]@{
+                id     = 'existing-1'
+                intent = 'available'
+                target = [pscustomobject]@{
+                    '@odata.type' = '#microsoft.graph.groupAssignmentTarget'
+                    groupId = 'group-9'
+                    deviceAndAppManagementAssignmentFilterId = 'requested-filter'
+                    deviceAndAppManagementAssignmentFilterType = 'exclude'
+                }
+            })
+        }
+        { Add-YardstickWin32AppAssignmentGroup -Include -ID app -GroupID group-9 -Intent available -FilterID requested-filter -FilterMode Include } |
+            Should -Throw '*already exists*'
     }
 
     It 'rethrows a duplicate error when no matching assignment can be found' {

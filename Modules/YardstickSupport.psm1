@@ -1872,7 +1872,8 @@ function Get-YardstickAppAssignment {
 function Test-YardstickAssignmentPresent {
     <#
     .SYNOPSIS
-    Returns $true when the given app already carries an assignment for a target.
+    Returns $true when the given app already carries an assignment for the target,
+    intent, and assignment filter.
 
     .DESCRIPTION
     The Add-YardstickWin32AppAssignment* cmdlets downgrade Graph failures and
@@ -1898,6 +1899,12 @@ function Test-YardstickAssignmentPresent {
     The assignment's '@odata.type'. Distinguishes an include from an exclusion
     for the same group, which CountKey alone cannot. Ignored when either side
     does not report it, so a partial record cannot veto an otherwise clear match.
+
+    .PARAMETER FilterID
+    The assignment filter ID. An empty value matches only an unfiltered assignment.
+
+    .PARAMETER FilterMode
+    The assignment filter mode. Compared case-insensitively when a filter ID is set.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1908,9 +1915,15 @@ function Test-YardstickAssignmentPresent {
 
         [string]$Intent,
 
-        [string]$TargetType
+        [string]$TargetType,
+
+        [string]$FilterID,
+
+        [string]$FilterMode = 'none'
     )
 
+    $expectedFilterID = if ($FilterID) { $FilterID } else { '' }
+    $expectedFilterMode = if ($expectedFilterID) { $FilterMode.ToLowerInvariant() } else { 'none' }
     try {
         $assignments = @(Invoke-YardstickGraphRequest -Resource "deviceAppManagement/mobileApps/$AppId/assignments")
     } catch {
@@ -1921,9 +1934,15 @@ function Test-YardstickAssignmentPresent {
     foreach ($assignment in $assignments) {
         $existingType = $assignment.target.'@odata.type'
         $existingKey = if ($assignment.target.groupId) { $assignment.target.groupId } else { $existingType }
+        $existingFilterID = $assignment.target.deviceAndAppManagementAssignmentFilterId
+        $existingFilterMode = $assignment.target.deviceAndAppManagementAssignmentFilterType
+        $existingFilterID = if ($existingFilterID) { $existingFilterID } else { '' }
+        $existingFilterMode = if ($existingFilterID) { ([string]$existingFilterMode).ToLowerInvariant() } else { 'none' }
         if ($existingKey -ne $CountKey) { continue }
         if ($Intent -and ($assignment.intent -ne $Intent)) { continue }
         if ($TargetType -and $existingType -and ($existingType -ne $TargetType)) { continue }
+        if ($existingFilterID -ne $expectedFilterID) { continue }
+        if ($existingFilterMode -ne $expectedFilterMode) { continue }
         return $true
     }
     return $false
@@ -1986,16 +2005,14 @@ function Move-AssignmentsAndDependencies {
     so tests can drive the retry paths without sleeping.
 
     .NOTES
-    All Devices and All Users assignments that use an assignment filter are not
-    migrated. Add-YardstickWin32AppAssignmentAllDevices/AllUsers accept a filter by
-    name only, while Get-YardstickWin32AppAssignment reports the filter id, so the
-    filter cannot be carried across - and migrating without it would widen the
-    assignment to every device or user. Those assignments are logged and left on
-    $From, and $From is added to $ProtectedSourceIds so retention will not delete
-    it: deleting the app would destroy targeting nobody can recreate. The same
-    protection applies when an assignment could not be added to $To at all. Such an
-    app is superseded instead of pruned, and an admin can migrate the assignment by
-    hand.
+    Assignment filters, Delivery Optimization priority and restart settings are
+    copied to $To, on group targets and on All Devices and All Users alike.
+
+    When an assignment cannot be migrated (an unsupported target type, or one that
+    could not be added to $To at all), it is logged and left on $From, and $From is
+    added to $ProtectedSourceIds so retention will not delete it: deleting the app
+    would destroy targeting nobody can recreate. Such an app is superseded instead
+    of pruned, and an admin can migrate the assignment by hand.
 
     Removal matches on the target alone (a group id, or the virtual target type)
     because the Yardstick Intune module cannot delete an individual assignment. If
@@ -2162,18 +2179,6 @@ function Move-AssignmentsAndDependencies {
                 Write-Log "Skipping the $assignmentLabel assignment: intent $($Assignment.Intent) does not match filter $IntentFilter." -Level Detail
                 continue
             }
-            # Add-YardstickWin32AppAssignmentAllDevices/AllUsers take a filter by
-            # name only, and Get-YardstickWin32AppAssignment reports the filter id,
-            # so the filter cannot be carried across. Dropping it would widen the
-            # assignment to every device or user, so refuse to migrate instead -
-            # and protect $From from deletion, because pruning it would destroy
-            # targeting that cannot be recreated from what Intune reports.
-            if ($isVirtualTarget -and $hasFilter) {
-                Write-Log -Level Warning "Skipping $assignmentLabel assignment because filter $($Assignment.FilterID) ($($Assignment.FilterType)) cannot be reapplied by ID. Migrate this assignment manually; $($From.id) will not be deleted while it is there."
-                & $addProtectedSourceId $From.id
-                continue
-            }
-
             $maxRetries = 3
             $try = 0
             $successfullyAdded = $false
@@ -2257,7 +2262,13 @@ function Move-AssignmentsAndDependencies {
                 if ($startDateTime -or $deadlineDateTime) {
                     $assignmentParams["UseLocalTime"] = $useLocalTime
                 }
-                if ($hasFilter -and (-not $isVirtualTarget)) {
+                if ($Assignment.DeliveryOptimizationPriority) {
+                    $assignmentParams["DeliveryOptimizationPriority"] = $Assignment.DeliveryOptimizationPriority
+                }
+                if ($Assignment.RestartSettings) {
+                    $assignmentParams["RestartSettings"] = $Assignment.RestartSettings
+                }
+                if ($hasFilter) {
                     $assignmentParams["FilterMode"] = $Assignment.FilterType
                     $assignmentParams["FilterID"] = $Assignment.FilterID
                 }
@@ -2318,7 +2329,8 @@ function Move-AssignmentsAndDependencies {
                             $true
                         } else {
                             Test-YardstickAssignmentPresent -AppId $To.id -CountKey $countKey `
-                                -Intent $Assignment.Intent -TargetType $Assignment.Type
+                                -Intent $Assignment.Intent -TargetType $Assignment.Type `
+                                -FilterID $Assignment.FilterID -FilterMode $Assignment.FilterType
                         }
 
                         if ($successfullyAdded) {
@@ -2363,13 +2375,13 @@ function Move-AssignmentsAndDependencies {
                         $removeReturned = $false
                         foreach ($breakGuard in 1) {
                             if ($targetType -eq $allDevicesTarget) {
-                                Remove-YardstickWin32AppAssignmentAllDevices -ID $From.id | Out-Null
+                                Remove-YardstickWin32AppAssignmentAllDevices -ID $From.id -AssignmentID $Assignment.ID | Out-Null
                             }
                             elseif ($targetType -eq $allUsersTarget) {
-                                Remove-YardstickWin32AppAssignmentAllUsers -ID $From.id | Out-Null
+                                Remove-YardstickWin32AppAssignmentAllUsers -ID $From.id -AssignmentID $Assignment.ID | Out-Null
                             }
                             else {
-                                Remove-YardstickWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID | Out-Null
+                                Remove-YardstickWin32AppAssignmentGroup -ID $From.id -GroupID $Assignment.GroupID -AssignmentID $Assignment.ID | Out-Null
                             }
                             $removeReturned = $true
                         }
@@ -5689,7 +5701,9 @@ function Test-VersionExcluded {
     # Compare the version and versionLock
     $versionPattern = $VersionLock -replace "[Xx]{1,}", "[0-9]{1,}"
     $versionPattern = $versionPattern -replace "\.", "\."
-    return $Version -notmatch "^$versionPattern"
+    # The lookahead stops a literal segment matching a longer number: 3.1 must not
+    # let 3.12 through, nor 8 let 80.1 through.
+    return $Version -notmatch "^$versionPattern(?![0-9])"
 }
 
 
