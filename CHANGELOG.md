@@ -58,6 +58,18 @@ All notable changes to Yardstick are recorded here. Versions follow
   icons and recipe overrides with a shared folder, and for both locations
   (`-SharedIcons`, `-SharedRecipeOverrides`; a folder means the
   `recipeOverrides.yaml` in it).
+- **The installer can be driven by another program.** For the Yardstick Development
+  Studio's setup wizard, which runs it without a console:
+  - `-InstallOptionalModule` installs the named optional modules (Selenium,
+    TUN.CredentialManager, Pester) without asking, and `-SetExecutionPolicy` sets
+    RemoteSigned for the current user when the policy blocks Yardstick's scripts.
+    Both work with `-NonInteractive`, which on its own still answers no.
+  - `-ResultPath` writes the outcome of every step, and every status line, to a JSON
+    file, even when a step fails.
+  - `-Status` reports the state of setup as JSON without changing anything, before
+    or after setup has run.
+
+  See [Running the installer from another program](Docs/Installation.md#running-the-installer-from-another-program).
 
 ### Changed
 
@@ -109,6 +121,11 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Fixed
 
+- The installer's execution policy check no longer passes just because the installer
+  was started with `pwsh -ExecutionPolicy Bypass`. It now checks the policy a normal
+  window gets, so a CurrentUser or LocalMachine policy that blocks Yardstick's
+  scripts is found, and it says when Group Policy sets the policy. Setting
+  RemoteSigned from such a session is no longer reported as failed.
 - The installer accepts paths in quotes, as Explorer's *Copy as path* produces, for
   every folder and file it asks for, and preferences paths written in quotes resolve
   correctly.

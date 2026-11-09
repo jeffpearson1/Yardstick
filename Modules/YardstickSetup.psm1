@@ -69,6 +69,11 @@ function Write-YardstickSetupStatus {
     }
     Write-Host "$tag " -ForegroundColor $color -NoNewline
     Write-Host $Message
+    # Install-Yardstick.ps1 -ResultPath collects these for its result file. A global
+    # list, because the Verify step's Test-YardstickSetup.ps1 reloads this module.
+    if ($Global:YardstickSetupMessages -is [System.Collections.Generic.List[object]]) {
+        $Global:YardstickSetupMessages.Add([pscustomobject]@{ Step = $null; Level = $Level; Message = $Message })
+    }
 }
 
 
@@ -334,14 +339,68 @@ function Unblock-YardstickFiles {
 }
 
 
+function Test-YardstickWindowsServer {
+    <#
+    .SYNOPSIS
+    Whether this is a Windows Server edition, where the default execution policy is
+    RemoteSigned rather than Restricted.
+    #>
+    $productType = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\ProductOptions' -Name ProductType -ErrorAction SilentlyContinue).ProductType
+    [bool]($productType -and $productType -ne 'WinNT')
+}
+
+
+function Get-YardstickExecutionPolicy {
+    <#
+    .SYNOPSIS
+    The execution policy a normal PowerShell window has, and where it comes from.
+
+    .DESCRIPTION
+    Get-ExecutionPolicy on its own returns this session's policy, Process scope
+    included, so a script started with -ExecutionPolicy Bypass always sees Bypass.
+    This leaves the Process scope out and takes the first scope that sets a policy,
+    in PowerShell's order of precedence: MachinePolicy, UserPolicy, CurrentUser,
+    LocalMachine. When none does, the platform default applies: RemoteSigned on
+    Windows Server, Restricted on other editions.
+
+    .OUTPUTS
+    Policy, Scope (the scope that set it, or Default), GroupPolicy (set by
+    MachinePolicy or UserPolicy, so it cannot be changed here) and AllowsScripts
+    (Yardstick's unsigned scripts can run).
+    #>
+    [CmdletBinding()]
+    param()
+
+    $policy = $null
+    $scope = 'Default'
+    $list = @(Get-ExecutionPolicy -List)
+    foreach ($name in 'MachinePolicy', 'UserPolicy', 'CurrentUser', 'LocalMachine') {
+        $entry = @($list | Where-Object { "$($_.Scope)" -eq $name })[0]
+        if ($entry -and "$($entry.ExecutionPolicy)" -ne 'Undefined') {
+            $policy = "$($entry.ExecutionPolicy)"
+            $scope = $name
+            break
+        }
+    }
+    if (-not $policy) {
+        $policy = if (Test-YardstickWindowsServer) { 'RemoteSigned' } else { 'Restricted' }
+    }
+    [pscustomobject]@{
+        Policy        = $policy
+        Scope         = $scope
+        GroupPolicy   = $scope -in @('MachinePolicy', 'UserPolicy')
+        AllowsScripts = $policy -in @('Unrestricted', 'RemoteSigned', 'Bypass')
+    }
+}
+
+
 function Test-YardstickExecutionPolicy {
     <#
     .SYNOPSIS
-    Returns $true when the effective execution policy lets Yardstick's unsigned
-    scripts run.
+    Returns $true when the execution policy of a normal PowerShell window lets
+    Yardstick's unsigned scripts run. See Get-YardstickExecutionPolicy.
     #>
-    $policy = Get-ExecutionPolicy
-    $policy -in @('Unrestricted', 'RemoteSigned', 'Bypass')
+    (Get-YardstickExecutionPolicy).AllowsScripts
 }
 
 #endregion
@@ -1555,6 +1614,89 @@ function Test-YardstickCredentialGuard {
 #endregion
 
 
+#region Status
+
+function Get-YardstickSetupStatus {
+    <#
+    .SYNOPSIS
+    Reports the state of setup without changing anything, for
+    Install-Yardstick.ps1 -Status.
+
+    .DESCRIPTION
+    Read-only: nothing is installed, created or downloaded, and nothing is logged.
+    Works before setup has run. With no preferences file the built-in defaults are
+    reported, with exists = false. Install-Yardstick.ps1 documents the fields.
+
+    .OUTPUTS
+    An ordered dictionary with camelCase keys, ready for ConvertTo-Json.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ProjectRoot)
+
+    $root = (Get-Item -LiteralPath $ProjectRoot).FullName
+    $yaml = @(Get-Module -ListAvailable -Name 'powershell-yaml' | Sort-Object Version -Descending)[0]
+    $policy = Get-YardstickExecutionPolicy
+
+    $prefsPath = Get-YardstickPreferencesPath -ProjectRoot $root
+    $readError = $null
+    try {
+        $prefs = Import-YardstickPreferences -ProjectRoot $root -AllowMissing
+    } catch {
+        # Usually powershell-yaml is not installed yet.
+        $readError = $_.Exception.Message
+        $prefs = Get-YardstickDefaultPreferences -ProjectRoot $root
+    }
+
+    $unwritable = @(Get-YardstickUnwritablePath -ProjectRoot $root)
+    $toolPath = Join-Path $prefs.Tools 'IntuneWinAppUtil.exe'
+
+    [ordered]@{
+        schemaVersion     = 1
+        projectRoot       = $root
+        powerShellVersion = $PSVersionTable.PSVersion.ToString()
+        powershellYaml    = [ordered]@{
+            installed = [bool]$yaml
+            version   = if ($yaml) { $yaml.Version.ToString() } else { $null }
+        }
+        optionalModules   = @(Get-YardstickOptionalModule | ForEach-Object {
+                [ordered]@{
+                    name             = $_.Name
+                    purpose          = $_.Purpose
+                    usedByRecipes    = [bool]$_.UsedByRecipes
+                    minimumVersion   = $_.MinimumVersion
+                    installedVersion = $_.InstalledVersion
+                    isCurrent        = [bool]$_.IsCurrent
+                }
+            })
+        executionPolicy   = [ordered]@{
+            policy        = $policy.Policy
+            scope         = $policy.Scope
+            groupPolicy   = [bool]$policy.GroupPolicy
+            allowsScripts = [bool]$policy.AllowsScripts
+        }
+        preferences       = [ordered]@{
+            exists                = Test-Path -LiteralPath $prefsPath -PathType Leaf
+            path                  = $prefsPath
+            readError             = $readError
+            developmentOnly       = $prefs.developmentOnly -eq $true
+            sharedIcons           = [string]$prefs.SharedIcons
+            sharedRecipeOverrides = [string]$prefs.SharedRecipeOverrides
+            syncSharedContent     = $prefs.syncSharedContent -eq $true
+        }
+        unwritablePaths   = [ordered]@{
+            count    = $unwritable.Count
+            examples = @($unwritable | Select-Object -First 5)
+        }
+        intuneWinAppUtil  = [ordered]@{
+            present = Test-Path -LiteralPath $toolPath -PathType Leaf
+            path    = $toolPath
+        }
+    }
+}
+
+#endregion
+
+
 Export-ModuleMember -Function @(
     'Set-YardstickSetupMode'
     'Write-YardstickSetupStep'
@@ -1567,6 +1709,7 @@ Export-ModuleMember -Function @(
     'ConvertFrom-YardstickJwt'
     'Install-YardstickModule'
     'Unblock-YardstickFiles'
+    'Get-YardstickExecutionPolicy'
     'Test-YardstickExecutionPolicy'
     'New-YardstickPreferencesFile'
     'ConvertTo-YardstickYamlValue'
@@ -1601,4 +1744,5 @@ Export-ModuleMember -Function @(
     'Get-YardstickScheduledTaskDefinition'
     'Register-YardstickScheduledTask'
     'Test-YardstickCredentialGuard'
+    'Get-YardstickSetupStatus'
 )

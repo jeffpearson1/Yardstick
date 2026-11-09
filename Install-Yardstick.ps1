@@ -38,6 +38,30 @@ Never prompt. Values come from parameters, the existing preferences file, or the
 built-in defaults; steps that need missing information are skipped. Windows
 still asks for administrator rights if a step needs them.
 
+.PARAMETER Status
+Report the state of setup as JSON and change nothing: no prompts, installs,
+files, log or administrator rights. Works before setup has run. Combine only
+with -ResultPath; without it the JSON goes to standard output. Exits 0 unless
+the status could not be read. See NOTES for the fields.
+
+.PARAMETER ResultPath
+Write the outcome to this JSON file (UTF-8, no byte order mark) when setup
+ends, including when a step fails; its folder is created if needed. With
+-Status, write the status there instead of to standard output. See NOTES.
+
+.PARAMETER InstallOptionalModule
+Optional modules to install, or update when too old, without asking:
+Selenium, TUN.CredentialManager and/or Pester. Several names can also be one
+comma-separated argument (Pester,Selenium), which is the form that works with
+pwsh -File. Modules not named are asked about as usual, or left alone with
+-NonInteractive. An unknown name fails the Prerequisites step; a failed
+install is only a warning.
+
+.PARAMETER SetExecutionPolicy
+When the execution policy blocks Yardstick's scripts, set it to RemoteSigned
+for the current user without asking. A policy set by Group Policy is reported
+and left alone.
+
 .PARAMETER UseExistingApp
 Store the details of an existing app registration instead of creating one.
 Combine with -TenantId, -ClientId and -ClientSecret to avoid the prompts.
@@ -171,6 +195,52 @@ Scripted install for an existing app registration.
 
 Sets up a computer for recipe development only, syncing icons and recipe
 overrides with the team share.
+
+.EXAMPLE
+.\Install-Yardstick.ps1 -DevelopmentOnly -NonInteractive -InstallOptionalModule Pester -SetExecutionPolicy -ResultPath $env:TEMP\setup.json
+
+Unattended development-only setup that reports its outcome in a JSON file.
+
+.EXAMPLE
+.\Install-Yardstick.ps1 -Status
+
+Prints the state of setup as JSON without changing anything.
+
+.NOTES
+Exit codes: 0 when no step failed, 1 when one did. The checks made before any
+step runs (PowerShell 7, Windows, not elevated, -Status combined with other
+parameters) exit 1 without writing -ResultPath; the console says why.
+
+-ResultPath file (schemaVersion 1):
+  schemaVersion    1
+  succeeded        true when no step failed (exit code 0)
+  developmentOnly  whether this is a development-only instance after setup
+  steps            one entry per step that was selected, in order:
+                     step    Prerequisites, Preferences, AppRegistration,
+                             IntuneDefaults, Email, ScheduledTask or Verify
+                     result  Done, Already configured, Off, Skipped, Not run,
+                             Failed, or another phrase that needs attention
+                             (such as Problems found)
+                     level   OK, Skip, Warn or Fail, as the summary shows it
+                     detail  why it failed or was skipped, or empty
+  messages         the [ OK ]/[WARN]/... lines, in order:
+                     step     the step that wrote it
+                     level    OK, Warn, Fail, Info or Skip
+                     message  the text
+
+-Status output (schemaVersion 1):
+  schemaVersion, projectRoot, powerShellVersion
+  powershellYaml    installed, version
+  optionalModules   name, purpose, usedByRecipes, minimumVersion,
+                    installedVersion, isCurrent (one per optional module)
+  executionPolicy   policy (what a normal window gets; the Process scope is
+                    ignored), scope (MachinePolicy, UserPolicy, CurrentUser,
+                    LocalMachine or Default), groupPolicy, allowsScripts
+  preferences       exists, path, readError (null unless the file could not be
+                    read), developmentOnly, sharedIcons, sharedRecipeOverrides,
+                    syncSharedContent (the built-in defaults when exists is false)
+  unwritablePaths   count, examples (up to 5)
+  intuneWinAppUtil  present, path
 #>
 
 # Deliberately no "#Requires -Version 7.0": Windows PowerShell 5.1 has to be able
@@ -217,7 +287,13 @@ param(
     [string]$TaskSchedule = 'Daily',
     [DayOfWeek[]]$TaskDays,
     [string]$TaskTime = '03:00',
-    [string]$TaskGroup
+    [string]$TaskGroup,
+
+    # Last, so the positions of the parameters above do not change.
+    [string[]]$InstallOptionalModule,
+    [switch]$SetExecutionPolicy,
+    [switch]$Status,
+    [string]$ResultPath
 )
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
@@ -242,6 +318,16 @@ $Root = (Get-Item -LiteralPath $PSScriptRoot).FullName
 # inside a function $PSBoundParameters is that function's own.
 $ScriptBound = $PSBoundParameters
 
+if ($Status) {
+    $others = @($ScriptBound.Keys | Where-Object {
+            $_ -notin @('Status', 'ResultPath') -and $_ -notin [System.Management.Automation.PSCmdlet]::CommonParameters
+        })
+    if ($others.Count -gt 0) {
+        Write-Host "-Status can only be combined with -ResultPath, not -$($others -join ', -')." -ForegroundColor Yellow
+        exit 1
+    }
+}
+
 $Global:LogLocation = $Root
 $Global:LogFile = 'YInstall.log'
 
@@ -263,6 +349,27 @@ if (Test-YardstickUacElevated) {
     exit 1
 }
 
+function Save-ResultFile {
+    # UTF-8 without a byte order mark, which not every JSON reader accepts.
+    param([Parameter(Mandatory)]$Data)
+    $path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ResultPath)
+    $folder = Split-Path -Parent $path
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+    [IO.File]::WriteAllText($path, ($Data | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+}
+
+if ($Status) {
+    # Read-only: no log, no prompts and no administrator rights.
+    try {
+        $statusData = Get-YardstickSetupStatus -ProjectRoot $Root
+        if ($ResultPath) { Save-ResultFile $statusData } else { $statusData | ConvertTo-Json -Depth 6 }
+    } catch {
+        Write-Host "Could not read the setup status: $($_.Exception.Message)" -ForegroundColor Yellow
+        exit 1
+    }
+    exit 0
+}
+
 Write-Log -Init
 Set-YardstickSetupMode -NonInteractive:$NonInteractive
 
@@ -274,6 +381,12 @@ $Summary = [System.Collections.Generic.List[object]]::new()
 $ElevatedActions = [System.Collections.Generic.List[object]]::new()
 # What a step returns when its change is waiting in $ElevatedActions.
 $PendingResult = 'Waiting for administrator rights'
+# The status lines for -ResultPath. Write-YardstickSetupStatus adds to it; the
+# main loop tags each line with its step.
+$SetupMessages = $null
+if ($ResultPath) { $SetupMessages = [System.Collections.Generic.List[object]]::new() }
+# Also clears the list an earlier run in this session may have left behind.
+$Global:YardstickSetupMessages = $SetupMessages
 
 
 #region Helpers
@@ -345,6 +458,44 @@ function Add-Summary {
     $Summary.Add([pscustomobject]@{ Step = $Name; Result = $Result; Detail = $Detail })
 }
 
+function Get-SummaryLevel {
+    param([string]$Result)
+    switch -Wildcard ($Result) {
+        'Done' { 'OK' }
+        'Already configured' { 'OK' }
+        'Off' { 'OK' }
+        'Skipped' { 'Skip' }
+        'Not run' { 'Skip' }
+        'Failed' { 'Fail' }
+        default { 'Warn' }
+    }
+}
+
+function Set-MessageStep {
+    # Tags the status lines written since the last call with the step they belong to.
+    param([Parameter(Mandatory)][string]$Name)
+    if (-not $SetupMessages) { return }
+    foreach ($message in $SetupMessages) {
+        if (-not $message.Step) { $message.Step = $Name }
+    }
+}
+
+function Save-SetupResult {
+    $developmentOnly = $false
+    try { $developmentOnly = Test-SetupDevelopmentOnly } catch { $developmentOnly = $false }
+    Save-ResultFile ([ordered]@{
+            schemaVersion   = 1
+            succeeded       = @($Summary | Where-Object { $_.Result -eq 'Failed' }).Count -eq 0
+            developmentOnly = $developmentOnly
+            steps           = @($Summary | ForEach-Object {
+                    [ordered]@{ step = $_.Step; result = $_.Result; level = Get-SummaryLevel $_.Result; detail = [string]$_.Detail }
+                })
+            messages        = @($SetupMessages | ForEach-Object {
+                    [ordered]@{ step = $_.Step; level = $_.Level; message = $_.Message }
+                })
+        })
+}
+
 function Add-ElevatedAction {
     <#
     Queues a change that needs administrator rights. Invoke-ElevatedActions makes
@@ -380,6 +531,7 @@ function Invoke-ElevatedActions {
             Write-YardstickSetupStatus "$($entry.Description) failed: $($result.Message)" -Level Fail
             Write-Log "Install step $($entry.Step) failed with administrator rights: $($result.Message)"
         }
+        Set-MessageStep $entry.Step
         foreach ($row in @($Summary | Where-Object { $_.Step -eq $entry.Step -and $_.Result -eq $PendingResult })) {
             $row.Result = if ($result.Success) { 'Done' } else { 'Failed' }
             $row.Detail = $result.Message
@@ -398,6 +550,14 @@ function Invoke-PrerequisitesStep {
 
     Write-YardstickSetupStatus "PowerShell $($PSVersionTable.PSVersion)" -Level OK
 
+    $optionalModules = @(Get-YardstickOptionalModule)
+    # pwsh -File passes "Pester,Selenium" as one string, so split on commas too.
+    $requested = @($InstallOptionalModule | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $unknown = @($requested | Where-Object { $optionalModules.Name -notcontains $_ })
+    if ($unknown.Count -gt 0) {
+        throw "-InstallOptionalModule: unknown module(s) $($unknown -join ', '). Use one or more of: $($optionalModules.Name -join ', ')."
+    }
+
     if (Install-YardstickModule -Name 'powershell-yaml') {
         Write-YardstickSetupStatus 'powershell-yaml module is installed.' -Level OK
     } else {
@@ -406,20 +566,28 @@ function Invoke-PrerequisitesStep {
 
     # Asked one at a time: they serve different purposes (Pester is only for
     # running the unit tests), so a yes to one shouldn't install the others.
-    foreach ($module in @(Get-YardstickOptionalModule | Where-Object { -not $_.IsCurrent })) {
+    foreach ($module in $optionalModules) {
+        $named = $requested -contains $module.Name
+        if ($module.IsCurrent) {
+            if ($named) { Write-YardstickSetupStatus "$($module.Name) $($module.InstalledVersion) is installed." -Level OK }
+            continue
+        }
         if ($module.InstalledVersion) {
             $state = "$($module.InstalledVersion) is installed, but $($module.MinimumVersion) or later is needed"
         } else {
             $state = 'not installed'
         }
         Write-YardstickSetupStatus "Optional module $($module.Name) ($state) is used for $($module.Purpose)." -Level Info
-        if (Read-YardstickSetupYesNo -Prompt "Install $($module.Name) now?" -Default $false) {
+        if ($named -or (Read-YardstickSetupYesNo -Prompt "Install $($module.Name) now?" -Default $false)) {
             $installed = Install-YardstickModule -Name $module.Name -Prerelease:$module.Prerelease -Update:([bool]$module.InstalledVersion) -SkipPublisherCheck:$module.SkipPublisherCheck
             $now = Get-YardstickOptionalModule | Where-Object Name -eq $module.Name
             if ($installed -and $now.IsCurrent) {
                 Write-YardstickSetupStatus "$($module.Name) $($now.InstalledVersion) installed." -Level OK
             } elseif ($installed) {
                 Write-YardstickSetupStatus "$($module.Name) is still $($now.InstalledVersion); $($module.MinimumVersion) or later is needed." -Level Warn
+            } elseif ($named) {
+                # Optional, so the step carries on.
+                Write-YardstickSetupStatus "$($module.Name) was not installed. Yardstick works without it, except for $($module.Purpose)." -Level Warn
             }
         }
     }
@@ -461,16 +629,35 @@ function Invoke-PrerequisitesStep {
         }
     }
 
-    if (Test-YardstickExecutionPolicy) {
-        Write-YardstickSetupStatus "Execution policy ($(Get-ExecutionPolicy)) allows Yardstick's scripts." -Level OK
+    # The policy a normal window gets: this session's own may be Bypass.
+    $policy = Get-YardstickExecutionPolicy
+    if ($policy.AllowsScripts) {
+        Write-YardstickSetupStatus "Execution policy ($($policy.Policy)) allows Yardstick's scripts." -Level OK
     } else {
-        Write-YardstickSetupStatus "Execution policy '$(Get-ExecutionPolicy)' blocks Yardstick's unsigned scripts." -Level Warn
-        if (-not $NonInteractive -and (Read-YardstickSetupYesNo -Prompt 'Set it to RemoteSigned for your account?' -Default $true)) {
+        $source = ''
+        if ($policy.GroupPolicy) { $source = " (set by Group Policy, $($policy.Scope))" }
+        Write-YardstickSetupStatus "Execution policy '$($policy.Policy)'$source blocks Yardstick's unsigned scripts." -Level Warn
+        $change = $false
+        if ($SetExecutionPolicy -and $policy.GroupPolicy) {
+            Write-YardstickSetupStatus 'Group Policy overrides any policy set here, so it was left alone. Ask an administrator to allow RemoteSigned.' -Level Warn
+        } elseif ($SetExecutionPolicy) {
+            $change = $true
+        } elseif (-not $NonInteractive) {
+            $change = Read-YardstickSetupYesNo -Prompt 'Set it to RemoteSigned for your account?' -Default $true
+        }
+        if ($change) {
+            $problem = $null
             try {
                 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
-                Write-YardstickSetupStatus 'Execution policy set to RemoteSigned for the current user.' -Level OK
             } catch {
-                Write-YardstickSetupStatus "Could not change it (it may be set by Group Policy): $($_.Exception.Message)" -Level Warn
+                $problem = $_.Exception.Message
+            }
+            # Set-ExecutionPolicy also throws when it worked but this session's
+            # Process scope (pwsh -ExecutionPolicy Bypass) overrides it.
+            if ((Get-YardstickExecutionPolicy).AllowsScripts) {
+                Write-YardstickSetupStatus 'Execution policy set to RemoteSigned for the current user.' -Level OK
+            } else {
+                Write-YardstickSetupStatus "Could not change it (it may be set by Group Policy): $problem" -Level Warn
             }
         }
     }
@@ -1141,21 +1328,24 @@ foreach ($name in $Selected) {
         # Nothing later works without the YAML module or a valid preferences file.
         if ($name -in @('Prerequisites', 'Preferences')) { $stopped = $true }
     }
+    Set-MessageStep $name
 }
 Invoke-ElevatedActions
+# The summary repeats the steps' results, so it is not captured.
+Remove-Variable -Name YardstickSetupMessages -Scope Global -ErrorAction SilentlyContinue
 
 Write-YardstickSetupStep 'Summary'
 foreach ($row in $Summary) {
-    $level = switch -Wildcard ($row.Result) {
-        'Done' { 'OK' }
-        'Already configured' { 'OK' }
-        'Off' { 'OK' }
-        'Skipped' { 'Skip' }
-        'Not run' { 'Skip' }
-        'Failed' { 'Fail' }
-        default { 'Warn' }
+    Write-YardstickSetupStatus ("{0,-16} {1}" -f $row.Step, $row.Result) -Level (Get-SummaryLevel $row.Result)
+}
+
+if ($ResultPath) {
+    try {
+        Save-SetupResult
+    } catch {
+        Write-YardstickSetupStatus "Could not write $ResultPath`: $($_.Exception.Message)" -Level Fail
+        exit 1
     }
-    Write-YardstickSetupStatus ("{0,-16} {1}" -f $row.Step, $row.Result) -Level $level
 }
 
 $failed = @($Summary | Where-Object { $_.Result -eq 'Failed' })

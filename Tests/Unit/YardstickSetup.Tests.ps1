@@ -1124,3 +1124,257 @@ Describe "Private\Invoke-YardstickElevatedSetup.ps1" {
         Get-YardstickUnwritablePath -ProjectRoot "$work\Target" -Sid $sid | Should -BeNullOrEmpty
     }
 }
+
+
+Describe "Get-YardstickExecutionPolicy" {
+    BeforeAll {
+        # Get-ExecutionPolicy -List, with Undefined for every scope not given.
+        function Set-TestExecutionPolicy {
+            param([hashtable]$Policy, [bool]$Server)
+            $Global:YardstickTestServer = $Server
+            $Global:YardstickTestPolicyList = foreach ($scope in 'MachinePolicy', 'UserPolicy', 'Process', 'CurrentUser', 'LocalMachine') {
+                $value = 'Undefined'
+                if ($Policy.ContainsKey($scope)) { $value = $Policy[$scope] }
+                [pscustomobject]@{ Scope = $scope; ExecutionPolicy = $value }
+            }
+        }
+    }
+    BeforeEach {
+        Mock Get-ExecutionPolicy { $Global:YardstickTestPolicyList } -ModuleName YardstickSetup -ParameterFilter { $List }
+        Mock Test-YardstickWindowsServer { $Global:YardstickTestServer } -ModuleName YardstickSetup
+    }
+    AfterAll { Remove-Variable -Name YardstickTestPolicyList, YardstickTestServer -Scope Global -ErrorAction SilentlyContinue }
+
+    It "<Case>" -ForEach @(
+        @{ Case = 'ignores the Process scope, as pwsh -ExecutionPolicy Bypass sets it'; Policy = @{ Process = 'Bypass'; CurrentUser = 'Restricted'; LocalMachine = 'RemoteSigned' }; Server = $false; Expected = 'Restricted'; Scope = 'CurrentUser'; GroupPolicy = $false; Allows = $false }
+        @{ Case = 'allows RemoteSigned for the current user'; Policy = @{ CurrentUser = 'RemoteSigned'; LocalMachine = 'Restricted' }; Server = $false; Expected = 'RemoteSigned'; Scope = 'CurrentUser'; GroupPolicy = $false; Allows = $true }
+        @{ Case = 'reports AllSigned from MachinePolicy as blocking and set by Group Policy'; Policy = @{ MachinePolicy = 'AllSigned'; CurrentUser = 'Bypass' }; Server = $false; Expected = 'AllSigned'; Scope = 'MachinePolicy'; GroupPolicy = $true; Allows = $false }
+        @{ Case = 'puts UserPolicy ahead of CurrentUser'; Policy = @{ UserPolicy = 'Unrestricted'; CurrentUser = 'Restricted' }; Server = $false; Expected = 'Unrestricted'; Scope = 'UserPolicy'; GroupPolicy = $true; Allows = $true }
+        @{ Case = 'falls back to LocalMachine'; Policy = @{ Process = 'Restricted'; LocalMachine = 'Bypass' }; Server = $false; Expected = 'Bypass'; Scope = 'LocalMachine'; GroupPolicy = $false; Allows = $true }
+        @{ Case = 'defaults to Restricted on a Windows client when no scope sets one'; Policy = @{ Process = 'Bypass' }; Server = $false; Expected = 'Restricted'; Scope = 'Default'; GroupPolicy = $false; Allows = $false }
+        @{ Case = 'defaults to RemoteSigned on Windows Server when no scope sets one'; Policy = @{}; Server = $true; Expected = 'RemoteSigned'; Scope = 'Default'; GroupPolicy = $false; Allows = $true }
+    ) {
+        Set-TestExecutionPolicy -Policy $Policy -Server $Server
+        $result = Get-YardstickExecutionPolicy
+        $result.Policy | Should -Be $Expected
+        $result.Scope | Should -Be $Scope
+        $result.GroupPolicy | Should -Be $GroupPolicy
+        $result.AllowsScripts | Should -Be $Allows
+        Test-YardstickExecutionPolicy | Should -Be $Allows
+    }
+}
+
+
+Describe "Write-YardstickSetupStatus" {
+    AfterEach { Remove-Variable -Name YardstickSetupMessages -Scope Global -ErrorAction SilentlyContinue }
+
+    It "Adds each line to the list Install-Yardstick.ps1 -ResultPath collects" {
+        $Global:YardstickSetupMessages = [System.Collections.Generic.List[object]]::new()
+        Write-YardstickSetupStatus 'First' -Level OK 6>$null
+        Write-YardstickSetupStatus 'Second' -Level Warn 6>$null
+        $Global:YardstickSetupMessages.Message | Should -Be @('First', 'Second')
+        $Global:YardstickSetupMessages.Level | Should -Be @('OK', 'Warn')
+    }
+
+    It "Collects nothing when there is no list" {
+        { Write-YardstickSetupStatus 'Quiet' -Level OK 6>$null } | Should -Not -Throw
+        Get-Variable -Name YardstickSetupMessages -Scope Global -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+    }
+}
+
+
+Describe "Get-YardstickSetupStatus" {
+    BeforeAll {
+        # Get-YardstickOptionalModule is in YardstickSupport, which the installer loads.
+        Import-Module "$script:repoRoot\Modules\YardstickSupport.psm1" -Global
+
+        function Get-TestStatus {
+            # Through JSON, as Install-Yardstick.ps1 -Status hands it over.
+            Get-YardstickSetupStatus -ProjectRoot $script:root | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        }
+    }
+    BeforeEach {
+        $script:root = New-TestProjectRoot
+        Mock Get-YardstickOptionalModule {
+            [pscustomobject]@{ Name = 'Pester'; Purpose = 'running the unit tests'; UsedByRecipes = $false; MinimumVersion = '5.0.0'; Prerelease = $false; SkipPublisherCheck = $true; InstalledVersion = '3.4.0'; IsCurrent = $false }
+        } -ModuleName YardstickSetup
+        Mock Get-YardstickExecutionPolicy {
+            [pscustomobject]@{ Policy = 'AllSigned'; Scope = 'MachinePolicy'; GroupPolicy = $true; AllowsScripts = $false }
+        } -ModuleName YardstickSetup
+    }
+
+    It "Reports a first run, with no preferences file, without creating anything" {
+        $before = @(Get-ChildItem -LiteralPath $script:root -Recurse -Force).FullName
+        $status = Get-TestStatus
+        @(Get-ChildItem -LiteralPath $script:root -Recurse -Force).FullName | Should -Be $before
+
+        $status.schemaVersion | Should -Be 1
+        $status.projectRoot | Should -Be $script:root
+        $status.preferences.exists | Should -BeFalse
+        $status.preferences.path | Should -Be (Join-Path $script:root 'Local\preferences.yaml')
+        $status.preferences.readError | Should -BeNullOrEmpty
+        $status.preferences.developmentOnly | Should -BeFalse
+        $status.preferences.sharedIcons | Should -Be ''
+        $status.preferences.syncSharedContent | Should -BeFalse
+        $status.unwritablePaths.count | Should -Be 0
+        $status.intuneWinAppUtil.present | Should -BeFalse
+    }
+
+    It "Reports each optional module and the execution policy" {
+        Get-YardstickSetupStatus -ProjectRoot $script:root | ConvertTo-Json -Depth 6 | Should -Match '"optionalModules":\s*\['
+        $status = Get-TestStatus
+        $status.optionalModules[0].name | Should -Be 'Pester'
+        $status.optionalModules[0].purpose | Should -Be 'running the unit tests'
+        $status.optionalModules[0].usedByRecipes | Should -BeFalse
+        $status.optionalModules[0].minimumVersion | Should -Be '5.0.0'
+        $status.optionalModules[0].installedVersion | Should -Be '3.4.0'
+        $status.optionalModules[0].isCurrent | Should -BeFalse
+        $status.executionPolicy.policy | Should -Be 'AllSigned'
+        $status.executionPolicy.scope | Should -Be 'MachinePolicy'
+        $status.executionPolicy.groupPolicy | Should -BeTrue
+        $status.executionPolicy.allowsScripts | Should -BeFalse
+    }
+
+    It "Reads the preferences and packaging tool of a set-up instance" {
+        $path = (New-YardstickPreferencesFile -ProjectRoot $script:root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value '\\server\share\Icons'
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value '\\server\share\recipeOverrides.yaml'
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $true
+        $tools = (Import-YardstickPreferences -ProjectRoot $script:root).Tools
+        New-Item -ItemType Directory -Path $tools -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $tools 'IntuneWinAppUtil.exe') -Value 'tool'
+
+        $status = Get-TestStatus
+        $status.preferences.exists | Should -BeTrue
+        $status.preferences.developmentOnly | Should -BeTrue
+        $status.preferences.sharedIcons | Should -Be '\\server\share\Icons'
+        $status.preferences.sharedRecipeOverrides | Should -Be '\\server\share\recipeOverrides.yaml'
+        $status.preferences.syncSharedContent | Should -BeTrue
+        $status.intuneWinAppUtil.present | Should -BeTrue
+        $status.intuneWinAppUtil.path | Should -Be (Join-Path $tools 'IntuneWinAppUtil.exe')
+    }
+
+    It "Reports the defaults, and why, when the preferences file cannot be read" {
+        New-YardstickPreferencesFile -ProjectRoot $script:root | Out-Null
+        Mock Import-YardstickPreferences { throw "The PowerShell module 'powershell-yaml' is required." } -ModuleName YardstickSetup
+        $status = Get-TestStatus
+        $status.preferences.exists | Should -BeTrue
+        $status.preferences.readError | Should -Match 'powershell-yaml'
+        $status.preferences.developmentOnly | Should -BeFalse
+    }
+
+    It "Counts every path this account cannot change but lists only five" {
+        Mock Get-YardstickUnwritablePath { 1..7 | ForEach-Object { "C:\Yardstick\file$_" } } -ModuleName YardstickSetup
+        $status = Get-TestStatus
+        $status.unwritablePaths.count | Should -Be 7
+        $status.unwritablePaths.examples | Should -Be @(1..5 | ForEach-Object { "C:\Yardstick\file$_" })
+    }
+}
+
+
+Describe "Install-Yardstick.ps1 run by another program" {
+    # The Yardstick Development Studio runs the installer without a console and
+    # reads the JSON it writes, so these run the real script in its own process.
+    BeforeDiscovery {
+        # The installer refuses to run elevated.
+        Import-Module "$PSScriptRoot\..\..\Modules\YardstickSetup.psm1"
+        $script:elevated = Test-YardstickUacElevated
+    }
+    BeforeAll {
+        function New-TestInstallerRoot {
+            # What the installer loads, so nothing touches this checkout's Local folder.
+            $root = New-TestProjectRoot
+            foreach ($item in 'Install-Yardstick.ps1', 'ProjectLayout.ps1', 'Yardstick.psd1', 'Yardstick.psm1', 'Modules', 'Private') {
+                Copy-Item -LiteralPath (Join-Path $script:repoRoot $item) -Destination $root -Recurse
+            }
+            $root
+        }
+
+        function Invoke-TestInstaller {
+            # Started as the Studio starts it: an argument list, output captured, no console.
+            param([string]$Root, [string[]]$Arguments)
+            $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
+            foreach ($argument in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'Install-Yardstick.ps1')) + $Arguments) {
+                $start.ArgumentList.Add($argument)
+            }
+            $start.WorkingDirectory = $Root
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $process = [Diagnostics.Process]::Start($start)
+            $errors = $process.StandardError.ReadToEndAsync()
+            $output = $process.StandardOutput.ReadToEnd()
+            $process.WaitForExit()
+            [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output + $errors.Result }
+        }
+    }
+
+    It "-Status writes the status as JSON without a byte order mark, and creates nothing" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $resultPath = Join-Path $TestDrive "$(New-Guid)\status.json"
+        $before = @(Get-ChildItem -LiteralPath $root -Recurse -Force).FullName
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Status', '-ResultPath', $resultPath
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        @(Get-ChildItem -LiteralPath $root -Recurse -Force).FullName | Should -Be $before
+        [IO.File]::ReadAllBytes($resultPath)[0] | Should -Be ([byte][char]'{')
+        $status = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        $status.schemaVersion | Should -Be 1
+        $status.preferences.exists | Should -BeFalse
+        @($status.optionalModules).Count | Should -BeGreaterThan 0
+    }
+
+    It "-Status refuses parameters other than -ResultPath" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $resultPath = Join-Path $TestDrive "$(New-Guid)\status.json"
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Status', '-NonInteractive', '-ResultPath', $resultPath
+        $run.ExitCode | Should -Be 1
+        $run.Output | Should -Match 'only be combined with -ResultPath'
+        Test-Path -LiteralPath $resultPath | Should -BeFalse
+    }
+
+    It "An unknown -InstallOptionalModule name fails Prerequisites, and the result file says why" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $resultPath = Join-Path $TestDrive "$(New-Guid)\result.json"
+        # One comma-separated argument, as pwsh -File passes a list; names ignore case.
+        $run = Invoke-TestInstaller -Root $root -Arguments '-DevelopmentOnly', '-NonInteractive', '-InstallOptionalModule', 'pester,Nope', '-ResultPath', $resultPath
+
+        $run.ExitCode | Should -Be 1
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        $result.succeeded | Should -BeFalse
+        $result.steps[0].step | Should -Be 'Prerequisites'
+        $result.steps[0].result | Should -Be 'Failed'
+        $result.steps[0].level | Should -Be 'Fail'
+        $result.steps[0].detail | Should -Match 'unknown module\(s\) Nope\. Use one or more of: Selenium, TUN\.CredentialManager, Pester'
+        @($result.steps | Select-Object -Skip 1 | Where-Object result -ne 'Not run') | Should -BeNullOrEmpty
+        $failure = @($result.messages | Where-Object level -eq 'Fail')
+        $failure.step | Should -Be 'Prerequisites'
+        $failure.message | Should -Match 'Nope'
+        Test-Path -LiteralPath (Join-Path $root 'Local\preferences.yaml') | Should -BeFalse
+    }
+
+    It "Empty -SharedIcons and -SharedRecipeOverrides clear the shared paths and turn sync off" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value '\\server\share\Icons'
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value '\\server\share\recipeOverrides.yaml'
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $true
+        $resultPath = Join-Path $TestDrive "$(New-Guid)\result.json"
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive', '-SharedIcons', '', '-SharedRecipeOverrides', '', '-ResultPath', $resultPath
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $prefs = Import-YardstickPreferences -ProjectRoot $root
+        $prefs.syncSharedContent | Should -BeFalse
+        $prefs.SharedIcons | Should -BeNullOrEmpty
+        $prefs.SharedRecipeOverrides | Should -BeNullOrEmpty
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        $result.succeeded | Should -BeTrue
+        $result.developmentOnly | Should -BeTrue
+        $result.steps.step | Should -Be 'Preferences'
+        $result.messages.message | Should -Contain 'Shared icon and recipe override sync is off.'
+    }
+}
