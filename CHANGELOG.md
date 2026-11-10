@@ -7,6 +7,19 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Added
 
+- **Recipe evidence check.** A recipe can only be merged into `main` with proof that
+  it passed a live install test with exactly the contents being merged. Yardstick
+  Development Studio commits that proof as `Tests/RecipeEvidence/<id>.json`, and
+  the new **Recipe evidence** pull request check
+  (`Tests/RecipeHarness/Test-RecipeEvidence.ps1`) requires it for every added,
+  changed or renamed recipe, along with a passing `Test-RecipeSchema.ps1`.
+  - The `evidence-waived` label turns evidence failures into warnings for recipes
+    that can't be live-tested on a build machine. Schema failures still fail.
+  - `Test-RecipeSchema.ps1` has a new `-SkipIconCheck` switch for checkouts
+    without icons.
+
+  See [Recipe evidence](Docs/RecipeEvidence.md).
+
 - **Recipe variants: more than one app from a recipe.** An entry in
   `Local\recipeOverrides.yaml` that sets `variantOf: <recipe id>` builds a second app
   from that recipe, such as a lab Zoom next to the standard one. The variant starts

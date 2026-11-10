@@ -1085,6 +1085,10 @@ Once the harness passes, run it through Yardstick. These runs upload to your ten
 
 4. **Verify detection rules work correctly in Intune after deployment**
 
+A recipe can only be merged into `main` with evidence that it passed a live install
+test in Yardstick Development Studio with exactly the contents being merged. See
+[Recipe evidence](RecipeEvidence.md).
+
 ## Common Pitfalls
 
 1. **Setting `$version` in `downloadScript`** - Version validation runs *before* `downloadScript`. Always set `$version` in `preDownloadScript` or the YAML `version` field.

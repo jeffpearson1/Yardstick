@@ -15,7 +15,11 @@ param(
 
     # Skip the shared icon and recipe override sync. The other harness scripts
     # pass this because they have already synced.
-    [switch] $NoSync
+    [switch] $NoSync,
+
+    # Don't check that iconFile exists. Icons are git-ignored, so a CI checkout
+    # (Test-RecipeEvidence.ps1) never has them.
+    [switch] $SkipIconCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,7 +33,7 @@ if (-not $RecipesPath) { $RecipesPath = $projectLayout.DevelopmentRecipes }
 if (-not $IconsPath) { $IconsPath = $projectLayout.IconsPath }
 
 $workspaceRecipes = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).ProviderPath
-$workspaceIcons = (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).ProviderPath
+$workspaceIcons = if ($SkipIconCheck) { $IconsPath } else { (Resolve-Path -LiteralPath $IconsPath -ErrorAction Stop).ProviderPath }
 $yardstickModule = Join-Path $YardstickDevPath 'Yardstick.psd1'
 $yardstickRecipes = Join-Path $YardstickDevPath 'Recipes'
 
@@ -54,8 +58,8 @@ $recipe = Get-Content -LiteralPath $RecipePath -Raw | ConvertFrom-Yaml
 
 if ($recipe.ContainsKey('base')) {
     $baseId = [string]$recipe.base
-    $baseWorkspacePath = Join-Path $workspaceRecipes "$baseId.yaml"
-    $baseLookupPath = if (Test-Path -LiteralPath $baseWorkspacePath) {
+    # Found the way the runtime finds it: any folder, .yaml or .yml, Disabled included.
+    $baseLookupPath = if (Get-YardstickRecipeFile -RecipesPath $workspaceRecipes -Id $baseId -IncludeDisabled) {
         $workspaceRecipes
     } else {
         $yardstickRecipes
@@ -73,7 +77,7 @@ if (-not $recipe.ContainsKey('id') -or $recipe.id -cne $recipeId) {
     $errors.Add("Recipe id '$($recipe.id)' must exactly match filename '$recipeId'.")
 }
 
-if ($recipe.ContainsKey('iconFile') -and -not [string]::IsNullOrWhiteSpace($recipe.iconFile)) {
+if (-not $SkipIconCheck -and $recipe.ContainsKey('iconFile') -and -not [string]::IsNullOrWhiteSpace($recipe.iconFile)) {
     $workspaceIcon = Join-Path $workspaceIcons $recipe.iconFile
     $yardstickIcon = Join-Path (Join-Path $YardstickDevPath 'Icons') $recipe.iconFile
     if (-not (Test-Path -LiteralPath $workspaceIcon) -and -not (Test-Path -LiteralPath $yardstickIcon)) {
