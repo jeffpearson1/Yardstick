@@ -155,8 +155,12 @@ Describe 'Test-RecipeEvidenceContent' {
         @{ Name = 'verdict NotValidated'; Change = @{ Verdict = 'NotValidated' }; Pattern = "verdict is 'NotValidated'" }
         @{ Name = 'a missing phase'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect' | ForEach-Object { @{ name = $_; status = 'Pass' } }) }; Pattern = 'missing.*Residue' }
         @{ Name = 'no phases'; Change = @{ Phases = @() }; Pattern = 'missing.*Schema' }
-        @{ Name = 'a failed phase'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Install') { 'Fail' } else { 'Pass' } } }) }; Pattern = "Install is 'Fail'" }
-        @{ Name = 'a skipped phase'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Uninstall') { 'Skip' } else { 'Pass' } } }) }; Pattern = "Uninstall is 'Skip'" }
+        @{ Name = 'a failed phase'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Install') { 'Fail' } else { 'Pass' } } }) }; Pattern = "Install status is 'Fail'" }
+        @{ Name = 'a skipped phase'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Uninstall') { 'Skip' } else { 'Pass' } } }) }; Pattern = "Uninstall status is 'Skip'" }
+        @{ Name = 'a phase with no status'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { if ($_ -eq 'Install') { @{ name = $_ } } else { @{ name = $_; status = 'Pass' } } }) }; Pattern = 'Install status is missing' }
+        @{ Name = 'a phase with a null status'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Install') { $null } else { 'Pass' } } }) }; Pattern = 'Install status is missing' }
+        @{ Name = 'a phase with an empty status'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Install') { '' } else { 'Pass' } } }) }; Pattern = 'Install status is missing' }
+        @{ Name = 'phases with no statuses at all'; Change = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_ } }) }; Pattern = 'Schema status is missing' }
     ) {
         if (-not $Json) {
             $params = @{ RecipePath = $script:path; RecipeText = $script:text; RecipeId = '7zip' }
@@ -284,7 +288,7 @@ Describe 'Test-RecipeEvidence.ps1' {
     It 'fails <Name>, and passes with warnings when waived' -TestCases @(
         @{ Name = 'unvalidated evidence'; Evidence = @{ Validated = $false; Verdict = 'NotValidated'; Reason = 'published without a test' }; Pattern = 'validated is not true' }
         @{ Name = 'a missing phase'; Evidence = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect' | ForEach-Object { @{ name = $_; status = 'Pass' } }) }; Pattern = 'missing.*Residue' }
-        @{ Name = 'a failed phase'; Evidence = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Install') { 'Fail' } else { 'Pass' } } }) }; Pattern = "Install is 'Fail'" }
+        @{ Name = 'a failed phase'; Evidence = @{ Phases = @('Schema', 'Download', 'PreDetect', 'Install', 'PostInstallDetect', 'Uninstall', 'PostUninstallDetect', 'Residue' | ForEach-Object { @{ name = $_; status = if ($_ -eq 'Install') { 'Fail' } else { 'Pass' } } }) }; Pattern = "Install status is 'Fail'" }
     ) {
         Add-Recipe -Path 'Recipes/foo.yaml' -Evidence $Evidence | Out-Null
         Save-Commit
@@ -312,6 +316,30 @@ Describe 'Test-RecipeEvidence.ps1' {
         $check.Result.Recipes.Result | Should -Be 'Fail'
         $check.Result.Recipes.EvidenceFailures | Should -BeNullOrEmpty
         ($check.Result.Recipes.Reasons -join "`n") | Should -Match "Schema: .*must exactly match filename 'foo'"
+    }
+
+    It 'checks an inherited recipe against its base as committed, not as edited in the working tree' {
+        Add-Recipe -Path 'Recipes/Bases/parent.yaml' | Out-Null
+        $child = "base: parent`nid: child`ndisplayName: Child App`n"
+        Set-RepoFile -Path 'Recipes/child.yaml' -Text $child
+        Set-RepoFile -Path 'Tests/RecipeEvidence/child.json' -Text (New-EvidenceJson -RecipePath 'Recipes/child.yaml' -RecipeText $child)
+        Save-Commit
+        # Uncommitted, and unreadable as YAML: it must not be used.
+        Set-RepoFile -Path 'Recipes/Bases/parent.yaml' -Text "id: [broken"
+        $check = Invoke-Check
+        $check.ExitCode | Should -Be 0
+        ($check.Result.Recipes | Where-Object Id -eq 'child').Result | Should -Be 'Pass'
+    }
+
+    It 'fails an inherited recipe whose base is only in the working tree, even when waived' {
+        $child = "base: ghost`nid: child`ndisplayName: Child App`n"
+        Set-RepoFile -Path 'Recipes/child.yaml' -Text $child
+        Set-RepoFile -Path 'Tests/RecipeEvidence/child.json' -Text (New-EvidenceJson -RecipePath 'Recipes/child.yaml' -RecipeText $child)
+        Save-Commit
+        Set-RepoFile -Path 'Recipes/ghost.yaml' -Text (New-RecipeText -Id 'ghost')
+        $check = Invoke-Check -Waived
+        $check.ExitCode | Should -Be 1
+        ($check.Result.Recipes.Reasons -join "`n") | Should -Match "Schema: Base recipe 'ghost' is not in HEAD"
     }
 
     It 'matches a recipe in a subfolder to its evidence by id' {

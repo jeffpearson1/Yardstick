@@ -58,8 +58,8 @@ $recipe = Get-Content -LiteralPath $RecipePath -Raw | ConvertFrom-Yaml
 
 if ($recipe.ContainsKey('base')) {
     $baseId = [string]$recipe.base
-    $baseWorkspacePath = Join-Path $workspaceRecipes "$baseId.yaml"
-    $baseLookupPath = if (Test-Path -LiteralPath $baseWorkspacePath) {
+    # Found the way the runtime finds it: any folder, .yaml or .yml, Disabled included.
+    $baseLookupPath = if (Get-YardstickRecipeFile -RecipesPath $workspaceRecipes -Id $baseId -IncludeDisabled) {
         $workspaceRecipes
     } else {
         $yardstickRecipes

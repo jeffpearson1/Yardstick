@@ -3,12 +3,13 @@ name: Recipe evidence
 # Blocks merging a recipe that has not passed a live install test in Yardstick
 # Development Studio with exactly the contents being merged. Runs on every pull
 # request, not only when recipes change, because a required check that never
-# runs blocks the merge. See Docs/RecipeEvidence.md.
+# runs blocks the merge. That includes edited, which is the event a pull request
+# retargeted to main sends. See Docs/RecipeEvidence.md.
 
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 permissions:
   contents: read

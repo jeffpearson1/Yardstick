@@ -240,9 +240,11 @@ function Test-RecipeEvidenceContent {
     }
     foreach ($name in $Script:RequiredEvidencePhases) {
         if (-not $statuses.ContainsKey($name)) { continue }
+        # Count, not truth: a missing or empty status is a single '', which is false.
         $bad = @($statuses[$name] | Where-Object { $_ -notin @('Pass', 'Warn') })
-        if ($bad) {
-            $failures.Add("Phase $name is '$($bad[0])', not Pass or Warn; fix the recipe so the live test passes, then $Script:EvidenceRetestHint.")
+        if ($bad.Count -gt 0) {
+            $shown = if ($bad[0]) { "'$($bad[0])'" } else { 'missing' }
+            $failures.Add("Phase $name status is $shown, not Pass or Warn; fix the recipe so the live test passes, then $Script:EvidenceRetestHint.")
         }
     }
 

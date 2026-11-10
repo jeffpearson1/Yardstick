@@ -93,7 +93,8 @@ skips:
    - `PostDetect` and `PostUninstall` are accepted as the older names of the two
      detection phases.
 7. `Test-RecipeSchema.ps1` passes. The icon check is skipped because icons are not
-   in Git.
+   in Git. A `base:` recipe is read as committed in the pull request too, and must
+   be in it.
 
 **Warnings only:**
 - an evidence file whose recipe the pull request deletes;

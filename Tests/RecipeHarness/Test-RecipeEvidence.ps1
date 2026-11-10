@@ -135,21 +135,48 @@ function Write-CheckLine {
 function Invoke-RecipeSchemaCheck {
     # Runs Test-RecipeSchema.ps1 on the recipe as committed at HeadRef. It is
     # written to a temporary <id>.yaml, since the schema script requires the id to
-    # match the file name; base recipes are found in the repository's Recipes.
+    # match the file name. Its base recipe comes from HeadRef too, staged in a
+    # temporary Recipes folder, so an uncommitted or checked-out base in the
+    # working tree can't change the result.
     param(
         [Parameter(Mandatory)] [string] $RecipePath,
-        [Parameter(Mandatory)] [byte[]] $Bytes
+        [Parameter(Mandatory)] [byte[]] $Bytes,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $HeadRecipeFiles
     )
 
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "RecipeEvidence-$([guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+    $baseRoot = Join-Path $tempRoot 'Recipes'
+    New-Item -ItemType Directory -Path $baseRoot -Force | Out-Null
     try {
         $tempRecipe = Join-Path $tempRoot ([System.IO.Path]::GetFileName($RecipePath))
         [System.IO.File]::WriteAllBytes($tempRecipe, $Bytes)
 
+        # Stage every file the runtime could pick as the base (Merge-RecipeWithBase
+        # matches the id case-insensitively, in any folder, Disabled included), at
+        # the same relative path, so the schema script makes the same choice. A
+        # recipe that doesn't parse is left to the schema script to report.
+        $baseId = $null
+        try {
+            $parsed = [System.Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Yaml
+            if ($parsed -is [System.Collections.IDictionary] -and $parsed.Contains('base')) { $baseId = [string]$parsed['base'] }
+        } catch {
+            Write-Verbose "Not looking for a base recipe: $($_.Exception.Message)"
+        }
+        if ($baseId) {
+            $baseFiles = @($HeadRecipeFiles | Where-Object { [System.IO.Path]::GetFileNameWithoutExtension($_) -eq $baseId })
+            # Checked here because the schema script would otherwise look in the
+            # working tree's Recipes folder.
+            if ($baseFiles.Count -eq 0) { return "Base recipe '$baseId' is not in $HeadRef." }
+            foreach ($baseFile in $baseFiles) {
+                $target = Join-Path $baseRoot $baseFile.Substring('Recipes/'.Length)
+                New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+                [System.IO.File]::WriteAllBytes($target, (Invoke-Git -Arguments @('cat-file', 'blob', "${HeadRef}:$baseFile")).Bytes)
+            }
+        }
+
         $schemaParams = @{
             RecipePath       = $tempRecipe
-            RecipesPath      = Join-Path $RepositoryPath 'Recipes'
+            RecipesPath      = $baseRoot
             YardstickDevPath = $projectRoot
             IconsPath        = Join-Path $RepositoryPath 'Icons'
             NoSync           = $true
@@ -184,6 +211,10 @@ $changed = @(Get-GitPathList -Arguments @('diff', '--name-only', '-z', '-M', '--
 $deleted = @(Get-GitPathList -Arguments @('diff', '--name-only', '-z', '-M', '--diff-filter=D', $range, '--', 'Recipes/') |
     Where-Object { Test-RecipeEvidenceNeeded -Path $_ })
 
+# Every recipe file at the head, for base: lookups and the stray evidence check.
+$headRecipeFiles = @(Get-GitPathList -Arguments @('ls-tree', '-r', '--name-only', '-z', $HeadRef, '--', 'Recipes/') |
+    Where-Object { $_ -match '\.ya?ml$' })
+
 $results = [System.Collections.Generic.List[object]]::new()
 $warnings = [System.Collections.Generic.List[string]]::new()
 
@@ -191,6 +222,8 @@ if ($changed.Count -eq 0) {
     Write-CheckLine -Level Info -Message "No recipe changes compared with $BaseRef; nothing to check."
 } else {
     Write-CheckLine -Level Info -Message "Checking $($changed.Count) changed recipe(s) against $BaseRef$(if ($Waived) { ' (evidence-waived: evidence failures are warnings)' })."
+    # Read for base: lookups; the schema script needs powershell-yaml as well.
+    Import-Module powershell-yaml -ErrorAction Stop
 }
 
 # -- Evidence and schema, per recipe -------------------------------------------
@@ -215,7 +248,7 @@ foreach ($recipePath in $changed) {
         $testedAt = $check.TestedAt
     }
 
-    $schemaFailures = @(Invoke-RecipeSchemaCheck -RecipePath $recipePath -Bytes $recipeBytes)
+    $schemaFailures = @(Invoke-RecipeSchemaCheck -RecipePath $recipePath -Bytes $recipeBytes -HeadRecipeFiles $headRecipeFiles)
 
     $outcome = if ($schemaFailures) {
         'Fail'
@@ -255,7 +288,7 @@ $evidenceFiles = @(Get-GitPathList -Arguments @('ls-tree', '-r', '--name-only', 
     Where-Object { $_ -like '*.json' })
 if ($evidenceFiles) {
     $headIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($path in Get-GitPathList -Arguments @('ls-tree', '-r', '--name-only', '-z', $HeadRef, '--', 'Recipes/')) {
+    foreach ($path in $headRecipeFiles) {
         if (Test-RecipeEvidenceNeeded -Path $path) { [void]$headIds.Add((Get-RecipeEvidenceId -RecipePath $path)) }
     }
     $deletedIds = @($deleted | ForEach-Object { Get-RecipeEvidenceId -RecipePath $_ })
