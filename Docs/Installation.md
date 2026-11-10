@@ -389,6 +389,9 @@ change. The example file lists them all with explanations. In particular:
   `SharedRecipeOverrides` at the shared copies (the installer asks for them); each run,
   and each recipe harness script, syncs them in both directions before it reads any
   recipe. See [Shared overrides](WritingRecipes.md#shared-overrides).
+- **`syncRecipes`** downloads recipes from GitHub at the start of every run, from
+  `recipeRepository` and any `additionalRecipeRepositories`. See
+  [Recipe repositories](#recipe-repositories).
 - **`developmentOnly`** marks a [development-only instance](#development-only-instances).
 
 Yardstick checks the file when it starts and reports invalid values - for example an
@@ -397,6 +400,73 @@ unknown `emailDeliveryMethod`, a group name where an ID is expected, or a leftov
 
 Recipes that sign in to a vendor portal read a Windows credential from Credential
 Manager. Create the credential each recipe names, as the account that runs Yardstick.
+
+### Recipe repositories
+
+With `syncRecipes: true`, every run brings its recipes up to date from GitHub before
+it reads any:
+
+```yaml
+syncRecipes: true
+recipeRepository: jeffpearson1/Yardstick@main
+additionalRecipeRepositories:
+  - contoso/intune-recipes
+  - contoso/lab-recipes@stable
+requireRecipeEvidence: false
+```
+
+Each repository is `owner/name`, or `owner/name@branch`; without a branch, the
+repository's default branch is used.
+
+**What is synced:** only recipes, meaning the `.yaml` and `.yml` files under the
+repository's `Recipes` folder, apart from `Development` and `*.common.yaml`.
+Recipes in a `Disabled` folder are synced too, and stay in it: they never run,
+but an enabled recipe can use one as its `base:`.
+
+**How it compares:** every run lists the repository with one GitHub API call and
+compares each file here with it, even when the repository hasn't changed, so a
+synced recipe you deleted comes back. Only the files that differ are downloaded.
+
+**`recipeRepository`** is synced into the `Recipes` folder itself:
+- **New and changed recipes** are written.
+- **Removed recipes:** a recipe removed from the repository is removed here too.
+- **Backups:** a file that is replaced or removed is copied to
+  `Artifacts\RecipeSyncBackups` first.
+- **Local edits:** a recipe you edited after Yardstick synced it is kept, with a
+  warning in the log. To take the repository's version again, delete the file or
+  undo the edit.
+- **Local-only recipes** that aren't in the repository are never touched.
+- **Overrides:** keep site-specific changes in `Local\recipeOverrides.yaml`, not in
+  the recipes.
+
+**`additionalRecipeRepositories`** are each mirrored into a folder of their own under
+`Local\RecipeRepos`, which the sync owns: an edit made there is undone on the next run.
+- **Search order:** the run looks there after `Recipes`, in the order you list the
+  repositories.
+- **Duplicate ids:** a recipe in `Recipes` wins over one with the same id in a linked
+  repository. With `-All`, the log names each recipe that was passed over.
+- **Bases:** a linked recipe can use a recipe in `Recipes` as its `base:`.
+
+**`requireRecipeEvidence: true`** only takes a new or changed recipe when its
+[evidence file](RecipeEvidence.md) in the same repository proves it passed a live
+install test with exactly those contents. That includes recipes in `Disabled`
+folders. Otherwise the copy already here stays, and the log says why every run.
+
+**Limits and failures:**
+- **Rate limits and private repositories:** without a GitHub token, Yardstick may
+  make 60 API calls an hour. That covers the listing and the changed files, but not
+  a first sync of a large repository. A private repository needs a token. Store one
+  with `.\Set-YardstickCredential.ps1 -GitHub` (see [GitHub API token](#github-api-token)).
+- **Unreachable repositories:** a repository that can't be reached is reported, and
+  the run carries on with what was synced before.
+- **Interrupted syncs:** a sync GitHub stops part way carries on from there next
+  time.
+- **Health check:** `Test-YardstickSetup.ps1` shows when each repository was last
+  synced. It never syncs.
+
+**If this folder is a git clone:** recipes the sync updates show as modified. Before
+`git pull`, run `git checkout -- Recipes` (or `git stash`), or update by downloading
+a release instead.
 
 
 ## Email

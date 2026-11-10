@@ -132,6 +132,19 @@ Some recipes can't be live-tested on a build machine, such as licensed software 
 Only people with write access can add labels, so the label is the control. Say why
 in the pull request.
 
+## Evidence in production: `requireRecipeEvidence`
+
+When Yardstick [syncs recipes from GitHub](Installation.md#recipe-repositories), set
+`requireRecipeEvidence: true` to apply the same rules on the way in. A new or
+changed recipe is only taken when its evidence file in the same repository passes
+rules 1 to 6 above.
+- The recipe is not schema-checked here; the run checks it when it loads it.
+- Otherwise the copy already here stays, and the run's log says why.
+- A recipe merged with `evidence-waived` has no passing evidence, so it is not
+  taken. Copy it into `Recipes` by hand if you want it.
+- Recipes in a `Disabled` folder are synced because they can be bases, so they
+  need evidence here too, although the pull request check skips them.
+
 ## What this does and doesn't prove
 
 - **The evidence is self-reported by the Studio.** CI can't re-run a live install

@@ -238,7 +238,9 @@ parameters) exit 1 without writing -ResultPath; the console says why.
                     LocalMachine or Default), groupPolicy, allowsScripts
   preferences       exists, path, readError (null unless the file could not be
                     read), developmentOnly, sharedIcons, sharedRecipeOverrides,
-                    syncSharedContent (the built-in defaults when exists is false)
+                    syncSharedContent, syncRecipes, recipeRepository,
+                    additionalRecipeRepositories, requireRecipeEvidence (the
+                    built-in defaults when exists is false)
   unwritablePaths   count, examples (up to 5)
   intuneWinAppUtil  present, path
 #>

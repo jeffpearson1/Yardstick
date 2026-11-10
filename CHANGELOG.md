@@ -20,6 +20,24 @@ All notable changes to Yardstick are recorded here. Versions follow
 
   See [Recipe evidence](Docs/RecipeEvidence.md).
 
+- **Recipe repositories and sync.** With the new `syncRecipes: true` preference,
+  every run brings its recipes up to date from GitHub before it reads any.
+  - **`recipeRepository`** (default `jeffpearson1/Yardstick@main`) is synced into
+    `Recipes`.
+    - Replaced and removed files are backed up to `Artifacts\RecipeSyncBackups`.
+    - A recipe edited here after it was synced is kept, with a warning.
+  - **`additionalRecipeRepositories`** links more repositories. Each is mirrored into
+    `Local\RecipeRepos` and searched after `Recipes`, so a recipe in `Recipes` wins on
+    a duplicate id.
+  - **Only changed files are downloaded,** through the GitHub API, so the stored
+    token reaches private repositories.
+  - **`requireRecipeEvidence: true`** only takes recipes whose
+    [evidence](Docs/RecipeEvidence.md) proves they passed a live test with exactly
+    those contents.
+  - **`Test-YardstickSetup.ps1`** reports when each repository was last synced.
+
+  See [Recipe repositories](Docs/Installation.md#recipe-repositories).
+
 - **Recipe variants: more than one app from a recipe.** An entry in
   `Local\recipeOverrides.yaml` that sets `variantOf: <recipe id>` builds a second app
   from that recipe, such as a lab Zoom next to the standard one. The variant starts

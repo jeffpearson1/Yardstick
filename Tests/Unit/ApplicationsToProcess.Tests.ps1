@@ -6,7 +6,7 @@ BeforeAll {
 
     # Get-ApplicationsToProcess lives in Invoke-YardstickRun.ps1, which cannot be
     # dot-sourced (its top level runs a whole update pass), so extract it via the
-    # AST. It reads the runner's $Recipes and $RecipeOverrides, set below.
+    # AST. It reads the runner's $RecipeSearchPaths and $RecipeOverrides, set below.
     $runnerPath = "$PSScriptRoot\..\..\Private\Invoke-YardstickRun.ps1"
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($runnerPath, [ref]$null, [ref]$null)
     $fn = $ast.Find({ param($n)
@@ -15,6 +15,7 @@ BeforeAll {
     . ([scriptblock]::Create($fn.Extent.Text))
 
     $script:Recipes = Join-Path $TestDrive 'Recipes'
+    $script:RecipeSearchPaths = @($script:Recipes)
     New-Item -ItemType Directory -Path (Join-Path $script:Recipes 'Disabled') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $script:Recipes 'Interactive') -Force | Out-Null
     foreach ($id in 'alpha', 'zoom', 'Disabled\old', 'Interactive\setup') {
@@ -57,5 +58,29 @@ Describe "Get-ApplicationsToProcess -All with recipe variants" {
     It "Lists a variant that shares a recipe's id only once, as that recipe" {
         Set-Overrides @{ alpha = @{ variantOf = 'zoom'; displayName = 'Zoom (Alpha)' } }
         @(Get-ApplicationsToProcess -All) | Should -Be @('alpha', 'setup', 'zoom')
+    }
+}
+
+Describe "Get-ApplicationsToProcess -All with linked recipe repositories" {
+    BeforeAll {
+        $script:linked = Join-Path $TestDrive 'Linked'
+        New-Item -ItemType Directory -Path $script:linked -Force | Out-Null
+        foreach ($id in 'zoom', 'labapp') {
+            Set-Content -LiteralPath (Join-Path $script:linked "$id.yaml") -Value "id: $id"
+        }
+        Mock Write-Log {}
+    }
+
+    AfterAll {
+        $script:RecipeSearchPaths = @($script:Recipes)
+    }
+
+    It "Lists a recipe found in more than one folder once, and says which copy was ignored" {
+        Set-Overrides @{}
+        $script:RecipeSearchPaths = @($script:Recipes, $script:linked)
+        @(Get-ApplicationsToProcess -All) | Should -Be @('alpha', 'setup', 'zoom', 'labapp')
+        Should -Invoke Write-Log -Times 1 -ParameterFilter {
+            $Level -eq 'Warning' -and $Content -like "Recipe zoom is in more than one recipe folder*$(Join-Path $script:linked 'zoom.yaml')."
+        }
     }
 }

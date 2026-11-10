@@ -237,10 +237,44 @@ if ($unwritable.Count -gt 0) {
 }
 
 $recipeFolder = [string]$prefs.Recipes
+# With recipe sync on, the folders of linked recipe repositories are searched
+# after Recipes, as a run does.
+$recipeSearchPaths = @(Get-YardstickRecipeSearchPath -Preferences $prefs -ProjectRoot $ProjectRoot)
 if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
     $recipeCount = @(Get-YardstickRecipeFile -RecipesPath $recipeFolder).Count
     $level = if ($recipeCount) { 'OK' } else { 'Warn' }
     Add-Check 'Recipes' $level "$recipeCount recipe(s) in $recipeFolder"
+}
+
+# The health check never syncs; it reports what the last run synced.
+if ($prefs.syncRecipes -eq $true) {
+    $repositories = @(Get-YardstickRecipeRepository -Preferences $prefs -ProjectRoot $ProjectRoot)
+    $problems = [System.Collections.Generic.List[string]]::new()
+    $synced = foreach ($repository in $repositories) {
+        if ($repository.Error) { $problems.Add($repository.Error); continue }
+        $stateFile = Get-Item -LiteralPath $repository.StatePath -ErrorAction SilentlyContinue
+        if ($stateFile) {
+            "$($repository.Spec) (synced $($stateFile.LastWriteTime.ToString('yyyy-MM-dd HH:mm')))"
+        } else {
+            $problems.Add("$($repository.Spec) has not been synced yet; the next run syncs it")
+        }
+    }
+    if ($repositories.Count -eq 0) {
+        Add-Check 'Recipe sync' Warn "syncRecipes is on, but no recipe repository is set."
+    } elseif ($problems.Count) {
+        Add-Check 'Recipe sync' Warn "Recipe sync is on. $(@($problems) -join '; ')."
+    } else {
+        Add-Check 'Recipe sync' OK "Recipe sync is on: $(@($synced) -join ', ')."
+    }
+    # A first sync of a linked repository can need more than the 60 anonymous
+    # calls an hour, and a private one needs the token.
+    $syncToken = $null
+    try { $syncToken = Get-YardstickGitHubToken } catch { Write-Verbose "No GitHub token: $($_.Exception.Message)" }
+    if (-not $syncToken -and ($repositories | Where-Object { $_.Role -eq 'Linked' -and -not $_.Error })) {
+        Add-Check 'Recipe sync token' Warn 'Linked recipe repositories are synced without a GitHub token, which allows 60 API calls an hour and no private repositories. Store one with .\Set-YardstickCredential.ps1 -GitHub.'
+    }
+} else {
+    Add-Check 'Recipe sync' OK 'Recipe sync is off (optional: syncRecipes).'
 }
 
 # An override whose id matches no recipe is never applied, so a typo there would
@@ -271,7 +305,7 @@ try {
     } else {
         $recipeIds = @()
         if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
-            $recipeIds = @(Get-ChildItem -LiteralPath $recipeFolder -Recurse -File -Include '*.yaml', '*.yml' | ForEach-Object BaseName)
+            $recipeIds = @(Get-YardstickRecipeFile -RecipesPath $recipeSearchPaths -IncludeDisabled | ForEach-Object BaseName)
         }
         $variants = @(Get-RecipeVariant -Overrides $overrides)
         $unmatched = @($overrides.Keys | Where-Object { $_ -notin $recipeIds -and $_ -notin $variants.Id } | Sort-Object)
@@ -291,14 +325,14 @@ try {
                     "$($variant.Id) is also a recipe, so the variant needs another id"
                     continue
                 }
-                $parentFile = @(Get-YardstickRecipeFile -RecipesPath $recipeFolder -Id $variant.VariantOf -IncludeDisabled)[0]
+                $parentFile = @(Get-YardstickRecipeFile -RecipesPath $recipeSearchPaths -Id $variant.VariantOf -IncludeDisabled)[0]
                 if (-not $parentFile) {
                     "$($variant.Id) is built from $($variant.VariantOf), which is not a recipe"
                     continue
                 }
                 try {
                     $recipe = Get-Content -LiteralPath $parentFile.FullName -Raw | ConvertFrom-Yaml
-                    $recipe = Merge-RecipeWithBase -Recipe $recipe -RecipesPath $recipeFolder
+                    $recipe = Merge-RecipeWithBase -Recipe $recipe -RecipesPath $recipeSearchPaths
                     $resolved = Resolve-RecipeOverride -Recipe $recipe -Id $variant.Id -Overrides $overrides
                 } catch {
                     "$($variant.Id): $($_.Exception.Message)"
@@ -324,7 +358,7 @@ try {
     # variant is checked along with the recipe it is built from.
     if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
         $variants = @(Get-RecipeVariant -Overrides $overrides)
-        $unfilled = foreach ($file in Get-YardstickRecipeFile -RecipesPath $recipeFolder) {
+        $unfilled = foreach ($file in Get-YardstickRecipeFile -RecipesPath $recipeSearchPaths) {
             if ((Get-Content -LiteralPath $file.FullName -Raw) -cnotmatch '<YOUR_[A-Z0-9_]+>') { continue }
             $recipe = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Yaml
             foreach ($id in @($file.BaseName) + @($variants | Where-Object VariantOf -eq $file.BaseName | ForEach-Object Id)) {
