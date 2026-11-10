@@ -1,13 +1,27 @@
 url: https://download.blender.org/release/
 urlRedirects: false
-preDownloadScript: | 
-  $Content = Invoke-WebRequest $Script:URL
-  $Directory = (($content.links | Where-Object href -match "Blender5\.[0-9]{1,2}\/").href)[-1]
-  $Script:URL = $Script:URL + $Directory
-  $Content = Invoke-WebRequest $Script:URL
-  $Script:FileName = (($content.links | Where-Object href -match "-windows-x64\.msi$").href)[-1]
-  $Script:Version = ($FileName -split "-")[1]
-  $Script:URL = "https://download.blender.org/release/$($Directory)$($FileName)"
+preDownloadScript: |
+  # Blender creates a new BlenderX.Y/ directory before every platform build is mirrored,
+  # so walk directories newest-first and take the first one that already has an x64 MSI.
+  # Sort numerically: the index is alphabetical, which would rank 5.9 above 5.10.
+  $baseUrl = 'https://download.blender.org/release/'
+  $index = Invoke-WebRequest -Uri $baseUrl -UseBasicParsing -ErrorAction Stop
+  $directories = @($index.Links.href |
+      Where-Object { $_ -match '^Blender(5\.[0-9]+)/$' } |
+      Sort-Object { [version]($_ -replace '^Blender|/$') } -Descending)
+  if ($directories.Count -eq 0) { throw 'No Blender 5.x release directory was found.' }
+  foreach ($directory in $directories) {
+    $listing = Invoke-WebRequest -Uri "$baseUrl$directory" -UseBasicParsing -ErrorAction Stop
+    $latest = $listing.Links.href |
+        Where-Object { $_ -match '^blender-([0-9]+\.[0-9]+\.[0-9]+)-windows-x64\.msi$' } |
+        Sort-Object { [version]($_ -replace '^blender-|-windows-x64\.msi$') } -Descending |
+        Select-Object -First 1
+    if ($latest) { break }
+  }
+  if (-not $latest) { throw 'No Blender 5.x Windows x64 MSI was found.' }
+  $fileName = $latest
+  $version = $fileName -replace '^blender-|-windows-x64\.msi$'
+  $url = "$baseUrl$directory$fileName"
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
 iconFile: blender.png
