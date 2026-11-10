@@ -1,0 +1,87 @@
+# Volatility 2.6 is the final release of the Volatility 2 (Python 2) line, published by the
+# Volatility Foundation as a self-contained standalone EXE inside a ZIP. It is frozen (2016), so the
+# version is fixed; Volatility 3 is a separate recipe (volatility3) and installs side by side.
+# There is no vendor installer, so the install script copies the EXE to Program Files, adds the
+# folder to the machine PATH and publishes its own ARP entry.
+url: https://downloads.volatilityfoundation.org/releases/2.6/volatility_2.6_win64_standalone.zip
+urlRedirects: false
+preDownloadScript: |
+  $version = '2.6'
+  $fileName = 'volatility_2.6_win64_standalone.zip'
+fileType: zip
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Volatility'
+  $extractDir = Join-Path (Get-Location) 'volatility-extract'
+  if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Expand-Archive -LiteralPath '.\<filename>' -DestinationPath $extractDir -Force
+
+  $volExe = Get-ChildItem -Path $extractDir -Filter 'volatility_*_standalone.exe' -Recurse -File | Select-Object -First 1
+  if (-not $volExe) { throw 'Could not locate the Volatility standalone EXE in the downloaded ZIP.' }
+  $sourceRoot = Split-Path $volExe.FullName -Parent
+
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installDir -Recurse -Force
+  Rename-Item -LiteralPath (Join-Path $installDir $volExe.Name) -NewName 'volatility.exe'
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if (($machinePath -split ';') -notcontains $installDir) {
+    [Environment]::SetEnvironmentVariable('Path', (($machinePath.TrimEnd(';'), $installDir) -join ';'), 'Machine')
+  }
+
+  $arpKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Volatility'
+  New-Item -Path $arpKey -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayName' -Value 'Volatility' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayVersion' -Value '<version>' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'Publisher' -Value 'Volatility Foundation' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'InstallLocation' -Value $installDir -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoModify' -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoRepair' -Value 1 -PropertyType DWord -Force | Out-Null
+
+  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Volatility'
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $newPath = (($machinePath -split ';') | Where-Object { $_ -and ($_ -ne $installDir) }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+
+  Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Volatility' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: volatility.png
+id: volatility
+displayName: Volatility
+publisher: Volatility Foundation
+description: Volatility 2 is an open-source memory forensics framework for extracting digital artefacts from volatile memory (RAM) samples. This package deploys the standalone Windows x64 build of Volatility 2.6, so no Python runtime is required. Volatility 3 is packaged separately.
+detectionType: script
+detectionScript: |
+  $expected = $null
+  if (-not [version]::TryParse('<version>', [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $props = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Volatility' -ErrorAction SilentlyContinue
+  if (-not $props) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $env:ProgramFiles 'Volatility') 'volatility.exe'))) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $found = $null
+  if ([version]::TryParse(([string]$props.DisplayVersion), [ref]$found) -and $found -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+numVersionsToKeep: 1

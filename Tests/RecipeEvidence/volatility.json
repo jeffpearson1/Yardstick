@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "volatility",
+  "recipePath": "Recipes/volatility.yaml",
+  "recipeSha256": "1fc7411af509df57d902a1dc543590063947f361f97cae2d82d21b0792d956f9",
+  "validated": true,
+  "verdict": "ValidatedWithWarnings",
+  "reason": "",
+  "testedAt": "2026-11-10T22:06:08Z",
+  "studioVersion": "0.5.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "volatility_2.6_win64_standalone.zip",
+    "version": "2.6",
+    "sha256": "BB021F3B569BF8EE4A408B2E07B0662699894FF7EECD4473BADF0EF0C58F2FCE",
+    "signer": ""
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Warn",
+      "detail": "volatility_2.6_win64_standalone.zip v2.6 signature=UnknownError"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (script: exit=1 stdout='Not Detected')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout='Not Detected'"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
