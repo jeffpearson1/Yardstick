@@ -89,3 +89,16 @@ function Get-YardstickRecipeRunHistoryPath {
     $localPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
     return Join-Path (Split-Path -Parent $localPath) 'recipeRunHistory.json'
 }
+
+function Get-YardstickRecipeRepositoryCachePath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProjectRoot
+    )
+
+    # Recipes synced from additionalRecipeRepositories, one folder per repository,
+    # plus the sync state of every repository. Machine-local, beside the overrides.
+    $localPath = Get-YardstickRecipeOverridesPath -ProjectRoot $ProjectRoot
+    return Join-Path (Split-Path -Parent $localPath) 'RecipeRepos'
+}

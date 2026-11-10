@@ -130,6 +130,11 @@ function Get-YardstickDefaultPreferences {
         syncSharedContent                           = $false
         developmentOnly                             = $false
 
+        syncRecipes                                 = $false
+        recipeRepository                            = 'jeffpearson1/Yardstick@main'
+        additionalRecipeRepositories                = @()
+        requireRecipeEvidence                       = $false
+
         emailNotificationEnabled                    = $false
         emailDeliveryMethod                         = 'outlook'
         emailSubject                                = 'Yardstick Application Update Report'
@@ -464,6 +469,22 @@ function Test-YardstickPreferences {
                 }
             }
         }
+    }
+
+    # Recipe repositories are owner/name or owner/name@branch. The same check as
+    # ConvertFrom-YardstickRecipeRepositorySpec, which the sync uses.
+    $repositorySpecs = @(@($Preferences.recipeRepository) + @($Preferences.additionalRecipeRepositories) |
+        Where-Object { -not (Test-YardstickBlankValue $_) })
+    foreach ($spec in $repositorySpecs) {
+        if ([string]$spec -notmatch '^\s*[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+(@[^\s@]+)?\s*$') {
+            $errors.Add("Recipe repository '$spec' is not a GitHub repository. Use owner/name, or owner/name@branch.")
+        }
+    }
+    if ($Preferences.syncRecipes -eq $true -and $repositorySpecs.Count -eq 0) {
+        $warnings.Add("syncRecipes is on but neither 'recipeRepository' nor 'additionalRecipeRepositories' is set, so there is nothing to sync.")
+    }
+    if ($Preferences.requireRecipeEvidence -eq $true -and $Preferences.syncRecipes -ne $true) {
+        $warnings.Add("requireRecipeEvidence only applies to synced recipes, and syncRecipes is off.")
     }
 
     [PSCustomObject]@{

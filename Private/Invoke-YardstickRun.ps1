@@ -368,7 +368,7 @@ function Restore-RunnerPathVariable {
     top of every recipe. A recipe clobber then lasts only for that recipe.
     #>
     $names = @(
-        'Temp', 'BuildSpace', 'Scripts', 'Published', 'Recipes',
+        'Temp', 'BuildSpace', 'Scripts', 'Published', 'Recipes', 'RecipeSearchPaths',
         'Icons', 'Tools', 'Secrets', 'SoftwareDropbox', 'SoftwareArchive'
     )
 
@@ -1140,14 +1140,25 @@ try {
     Write-Log "Could not check the GitHub API rate limit: $($_.Exception.Message)" -Level Warning
 }
 
+# Recipe repositories: with syncRecipes on, recipes are brought up to date from
+# GitHub before any is read - Yardstick's own repository into Recipes, and each
+# additional repository into its folder under Local\RecipeRepos, which is searched
+# after Recipes. The sync never throws: a repository that cannot be reached only
+# warns, and the run carries on with what was synced before.
+if ($Prefs.syncRecipes -eq $true) {
+    $syncMessages = Invoke-YardstickRecipeSync -Preferences $Prefs -ProjectRoot $ProjectRoot
+    foreach ($message in $syncMessages) { Write-Log $message.Message -Level $message.Level }
+}
+$RecipeSearchPaths = @(Get-YardstickRecipeSearchPath -Preferences $Prefs -ProjectRoot $ProjectRoot)
+
 # Validate ApplicationId parameter. A variant's id, from the overrides file, is
 # valid when the recipe it is built from is.
 if ($ApplicationId) {
     foreach ($AppIdToValidate in $ApplicationId) {
         $variantOf = Get-RecipeVariantParent -Id $AppIdToValidate -Overrides $RecipeOverrides
         $recipeId = if ($variantOf) { $variantOf } else { $AppIdToValidate }
-        if (-not (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $recipeId)) {
-            $disabledHint = if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $recipeId -IncludeDisabled) { ' Its recipe is in a Disabled folder.' } else { '' }
+        if (-not (Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -Id $recipeId)) {
+            $disabledHint = if (Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -Id $recipeId -IncludeDisabled) { ' Its recipe is in a Disabled folder.' } else { '' }
             $variantHint = if ($variantOf) { ", which the variant $AppIdToValidate is built from" } else { '' }
             Write-Log "No recipe named $recipeId$variantHint.$disabledHint" -Level Error
             exit 1
@@ -1193,10 +1204,18 @@ function Get-ApplicationsToProcess {
         $variants = @(Get-RecipeVariant -Overrides $RecipeOverrides)
         $recipeIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         if ($variants) {
-            Get-YardstickRecipeFile -RecipesPath $Recipes -IncludeDisabled | ForEach-Object { [void]$recipeIds.Add($_.BaseName) }
+            Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -IncludeDisabled | ForEach-Object { [void]$recipeIds.Add($_.BaseName) }
             $variants = @($variants | Where-Object { -not $recipeIds.Contains($_.Id) })
         }
-        foreach ($recipeFile in Get-YardstickRecipeFile -RecipesPath $Recipes -ExcludeInteractive:$NoInteractive) {
+        # With linked recipe repositories, an id can be in more than one folder. The
+        # first folder's copy runs, as it does for -ApplicationId.
+        $listed = @{}
+        foreach ($recipeFile in Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -ExcludeInteractive:$NoInteractive) {
+            if ($listed.ContainsKey($recipeFile.BaseName)) {
+                Write-Log "Recipe $($recipeFile.BaseName) is in more than one recipe folder. Using $($listed[$recipeFile.BaseName]); ignoring $($recipeFile.FullName)." -Level Warning
+                continue
+            }
+            $listed[$recipeFile.BaseName] = $recipeFile.FullName
             $applications.Add([String]$recipeFile.BaseName) | Out-Null
             foreach ($variant in $variants | Where-Object VariantOf -eq $recipeFile.BaseName) {
                 $applications.Add($variant.Id) | Out-Null
@@ -1542,7 +1561,7 @@ while ($RecipePass.Count -gt 0) {
             # the overrides file, is built from the recipe it names.
             $VariantOf = Get-RecipeVariantParent -Id $AppId_Processing -Overrides $RecipeOverrides
             $RecipeId = if ($VariantOf) { $VariantOf } else { $AppId_Processing }
-            if ($VariantOf -and (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $AppId_Processing -IncludeDisabled)) {
+            if ($VariantOf -and (Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -Id $AppId_Processing -IncludeDisabled)) {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "$AppId_Processing is a recipe, so its entry in the overrides file cannot also make it a variant of $VariantOf. Give the variant another id." -FailureStage "Configuration"
                 continue
             }
@@ -1550,13 +1569,13 @@ while ($RecipePass.Count -gt 0) {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "$AppId_Processing is a variant of $VariantOf, which is itself a variant. Set its variantOf to $VariantOfVariant." -FailureStage "Configuration"
                 continue
             }
-            $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $Recipes -Id $RecipeId)[0]
+            $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -Id $RecipeId)[0]
             if (-not $recipeFile) {
                 # Only a group can list a disabled recipe: -ApplicationId is checked
                 # before the run and -All never lists one. Disabling is deliberate, so it
                 # is not reported as a failure.
                 $variantHint = if ($VariantOf) { ", which the variant $AppId_Processing is built from" } else { '' }
-                if (Get-YardstickRecipeFile -RecipesPath $Recipes -Id $RecipeId -IncludeDisabled) {
+                if (Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -Id $RecipeId -IncludeDisabled) {
                     Write-Log "Skipping $AppId_Processing because the recipe $RecipeId$variantHint is in a Disabled folder." -Level Warning
                 } else {
                     Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "There is no recipe named $RecipeId$variantHint." -FailureStage "Configuration"
@@ -1573,7 +1592,7 @@ while ($RecipePass.Count -gt 0) {
             # Resolve base recipe inheritance if present
             if ($Parameters.ContainsKey('base')) {
                 try {
-                    $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $Recipes
+                    $Parameters = Merge-RecipeWithBase -Recipe $Parameters -RecipesPath $RecipeSearchPaths
                 } catch {
                     Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "Could not resolve the base recipe: $_" -FailureStage "Configuration"
                     continue

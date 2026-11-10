@@ -221,7 +221,7 @@ Describe 'Test-RecipeEvidence.ps1' {
     AfterAll {
         # Test-RecipeSchema.ps1 imports Yardstick.psd1 into the global session state.
         # Unload it so Mock -ModuleName in the test files that run next sees one copy.
-        Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph', 'YardstickGitHub', 'YardstickRecipeEvidence', 'YardstickLog' -All |
+        Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph', 'YardstickGitHub', 'YardstickRecipeEvidence', 'YardstickRecipeSync', 'YardstickLog' -All |
             Remove-Module -Force -ErrorAction SilentlyContinue
     }
 

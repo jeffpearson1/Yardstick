@@ -3912,7 +3912,7 @@ function Complete-YardstickDropbox {
 function Get-YardstickRecipeFile {
     <#
     .SYNOPSIS
-    Finds recipe files in the recipes folder.
+    Finds recipe files in the recipes folders.
 
     .DESCRIPTION
     Returns the .yaml and .yml files under RecipesPath, searching subfolders. A
@@ -3921,7 +3921,10 @@ function Get-YardstickRecipeFile {
     enabled recipe wins when both exist.
 
     .PARAMETER RecipesPath
-    The recipes folder.
+    The recipes folder, or several in order of precedence (see
+    Get-YardstickRecipeSearchPath): a recipe in an earlier folder is listed before
+    one with the same id in a later folder. A folder after the first that does not
+    exist is skipped.
 
     .PARAMETER Id
     Return only the recipe with this id (its file name without the extension),
@@ -3939,25 +3942,28 @@ function Get-YardstickRecipeFile {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$RecipesPath,
+        [Parameter(Mandatory)][string[]]$RecipesPath,
         [string]$Id,
         [switch]$IncludeDisabled,
         [switch]$ExcludeInteractive
     )
 
-    $root = (Resolve-Path -LiteralPath $RecipesPath -ErrorAction Stop).ProviderPath.TrimEnd('\')
-    $recipes = foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force -Include '*.yaml', '*.yml') {
-        if ($Id -and $file.BaseName -ne $Id) { continue }
-        # Only the folders below the recipes folder count, so a Yardstick install
-        # under a path such as D:\Disabled\Yardstick still finds its recipes.
-        $folders = @([System.IO.Path]::GetRelativePath($root, $file.DirectoryName) -split '[\\/]')
-        if ($ExcludeInteractive -and $folders -contains 'Interactive') { continue }
-        $disabled = $folders -contains 'Disabled'
-        if ($disabled -and -not $IncludeDisabled) { continue }
-        [pscustomobject]@{ File = $file; Disabled = $disabled }
+    $recipes = for ($index = 0; $index -lt $RecipesPath.Count; $index++) {
+        if ($index -gt 0 -and -not (Test-Path -LiteralPath $RecipesPath[$index] -PathType Container)) { continue }
+        $root = (Resolve-Path -LiteralPath $RecipesPath[$index] -ErrorAction Stop).ProviderPath.TrimEnd('\')
+        foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force -Include '*.yaml', '*.yml') {
+            if ($Id -and $file.BaseName -ne $Id) { continue }
+            # Only the folders below the recipes folder count, so a Yardstick install
+            # under a path such as D:\Disabled\Yardstick still finds its recipes.
+            $folders = @([System.IO.Path]::GetRelativePath($root, $file.DirectoryName) -split '[\\/]')
+            if ($ExcludeInteractive -and $folders -contains 'Interactive') { continue }
+            $disabled = $folders -contains 'Disabled'
+            if ($disabled -and -not $IncludeDisabled) { continue }
+            [pscustomobject]@{ File = $file; Disabled = $disabled; Root = $index }
+        }
     }
 
-    @($recipes) | Sort-Object Disabled, { $_.File.FullName } | ForEach-Object File
+    @($recipes) | Sort-Object Disabled, Root, { $_.File.FullName } | ForEach-Object File
 }
 
 
@@ -3975,14 +3981,15 @@ function Merge-RecipeWithBase {
     The child recipe hashtable (already parsed from YAML).
 
     .PARAMETER RecipesPath
-    The root path to search for the base recipe file.
+    The recipes folder, or several in order of precedence, to search for the base
+    recipe file.
 
     .OUTPUTS
     A merged hashtable with base fields plus child overrides, or the original recipe if no 'base' field.
     #>
     param(
         [Parameter(Mandatory)][hashtable]$Recipe,
-        [Parameter(Mandatory)][string]$RecipesPath
+        [Parameter(Mandatory)][string[]]$RecipesPath
     )
 
     if (-not $Recipe.ContainsKey('base')) { return $Recipe }

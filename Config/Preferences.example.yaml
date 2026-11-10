@@ -61,6 +61,30 @@ syncSharedContent: false
 # SharedIcons: \\server\share\Intune\Icons
 # SharedRecipeOverrides: \\server\share\Intune\Yardstick\recipeOverrides.yaml
 
+# Optional. With syncRecipes: true, every run downloads recipes from GitHub
+# before it starts. Use owner/name, or owner/name@branch.
+#   recipeRepository              Yardstick's own recipes, synced into the
+#                                 Recipes folder. A recipe the sync wrote and
+#                                 you edited since is kept, with a warning.
+#                                 Files it replaces or removes are copied to
+#                                 Artifacts\RecipeSyncBackups first.
+#   additionalRecipeRepositories  More repositories, each mirrored into
+#                                 Local\RecipeRepos and searched after Recipes
+#                                 in this order. A recipe in Recipes wins over
+#                                 one with the same id here.
+# Private repositories need the GitHub token (.\Set-YardstickCredential.ps1
+# -GitHub). A repository that cannot be reached is reported and skipped; the run
+# carries on with what it last synced. See Docs\Installation.md.
+syncRecipes: false
+recipeRepository: jeffpearson1/Yardstick@main
+# additionalRecipeRepositories:
+#   - contoso/intune-recipes
+#   - contoso/lab-recipes@stable
+# Only take a new or changed recipe when its Tests/RecipeEvidence/<id>.json
+# proves it passed a live install test with exactly those contents
+# (Docs\RecipeEvidence.md). Otherwise the copy already here stays.
+requireRecipeEvidence: false
+
 
 #####################################
 # INTUNE CONNECTION SETTINGS
