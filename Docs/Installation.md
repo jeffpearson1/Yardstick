@@ -419,9 +419,13 @@ Each repository is `owner/name`, or `owner/name@branch`; without a branch, the
 repository's default branch is used.
 
 **What is synced:** only recipes, meaning the `.yaml` and `.yml` files under the
-repository's `Recipes` folder, apart from `Development`, `Disabled` and
-`*.common.yaml`. Yardstick lists the repository with one GitHub API call and
-downloads only the files that differ from its own copy.
+repository's `Recipes` folder, apart from `Development` and `*.common.yaml`.
+Recipes in a `Disabled` folder are synced too, and stay in it: they never run,
+but an enabled recipe can use one as its `base:`.
+
+**How it compares:** every run lists the repository with one GitHub API call and
+compares each file here with it, even when the repository hasn't changed, so a
+synced recipe you deleted comes back. Only the files that differ are downloaded.
 
 **`recipeRepository`** is synced into the `Recipes` folder itself:
 - **New and changed recipes** are written.
@@ -435,7 +439,8 @@ downloads only the files that differ from its own copy.
 - **Overrides:** keep site-specific changes in `Local\recipeOverrides.yaml`, not in
   the recipes.
 
-**`additionalRecipeRepositories`** are mirrored into `Local\RecipeRepos\<owner>-<name>`:
+**`additionalRecipeRepositories`** are each mirrored into a folder of their own under
+`Local\RecipeRepos`, which the sync owns: an edit made there is undone on the next run.
 - **Search order:** the run looks there after `Recipes`, in the order you list the
   repositories.
 - **Duplicate ids:** a recipe in `Recipes` wins over one with the same id in a linked
@@ -444,8 +449,8 @@ downloads only the files that differ from its own copy.
 
 **`requireRecipeEvidence: true`** only takes a new or changed recipe when its
 [evidence file](RecipeEvidence.md) in the same repository proves it passed a live
-install test with exactly those contents. Otherwise the copy already here stays,
-and the log says why.
+install test with exactly those contents. That includes recipes in `Disabled`
+folders. Otherwise the copy already here stays, and the log says why every run.
 
 **Limits and failures:**
 - **Rate limits and private repositories:** without a GitHub token, Yardstick may

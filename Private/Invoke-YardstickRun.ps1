@@ -1569,7 +1569,9 @@ while ($RecipePass.Count -gt 0) {
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "$AppId_Processing is a variant of $VariantOf, which is itself a variant. Set its variantOf to $VariantOfVariant." -FailureStage "Configuration"
                 continue
             }
-            $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -Id $RecipeId)[0]
+            # -All -NoInteractive listed this id from a folder outside Interactive, so it
+            # must not run a copy in an Interactive folder that comes first.
+            $recipeFile = @(Get-YardstickRecipeFile -RecipesPath $RecipeSearchPaths -Id $RecipeId -ExcludeInteractive:($All -and $NoInteractive))[0]
             if (-not $recipeFile) {
                 # Only a group can list a disabled recipe: -ApplicationId is checked
                 # before the run and -All never lists one. Disabling is deliberate, so it

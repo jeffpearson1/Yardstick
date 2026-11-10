@@ -142,6 +142,8 @@ rules 1 to 6 above.
 - Otherwise the copy already here stays, and the run's log says why.
 - A recipe merged with `evidence-waived` has no passing evidence, so it is not
   taken. Copy it into `Recipes` by hand if you want it.
+- Recipes in a `Disabled` folder are synced because they can be bases, so they
+  need evidence here too, although the pull request check skips them.
 
 ## What this does and doesn't prove
 

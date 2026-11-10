@@ -11,9 +11,11 @@ With syncRecipes on, every run first brings its recipes up to date from GitHub:
   A recipe in Recipes wins over one with the same id in a linked repository.
 
 Only recipes are synced: the .yaml and .yml files under the repository's Recipes
-folder, apart from Development, Disabled and *.common.yaml. Files that have not
-changed are not downloaded: one API call lists the repository, and the git blob
-hash of each local file is compared with it. Only changed files are fetched.
+folder, apart from Development and *.common.yaml. Recipes in a Disabled folder are
+synced too, where they stay: they never run, but an enabled recipe can use one as
+its base. Every run lists the repository with one API call and compares the git
+blob hash of each local file with it, so a recipe deleted or changed here is put
+right; only files that differ are downloaded.
 
 In Recipes, a file the sync wrote and that was edited here since is kept, with a
 warning, and so is any recipe that is not in the repository. A file the sync
@@ -52,16 +54,22 @@ function ConvertFrom-YardstickRecipeRepositorySpec {
     if ($text -notmatch $Script:RepositorySpecPattern) {
         throw "'$Spec' is not a GitHub repository. Use owner/name, or owner/name@branch."
     }
+    $owner = $Matches.owner
+    $name = $Matches.name
     $ref = [string]$Matches['ref']
-    $key = "$($Matches.owner)-$($Matches.name)"
-    if ($ref) { $key += '@' + ($ref -replace '[^A-Za-z0-9._-]', '_') }
+    # GitHub owner and repository names ignore case; refs do not. The folder name
+    # is readable, and a hash of the exact identity keeps a-b/c apart from a/b-c,
+    # and release/1.2 apart from release_1.2.
+    $identity = "$($owner.ToLowerInvariant())/$($name.ToLowerInvariant())@$ref"
+    $digest = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($identity))).Substring(0, 12).ToLowerInvariant()
 
     [PSCustomObject]@{
-        Spec  = $text
-        Owner = $Matches.owner
-        Name  = $Matches.name
-        Ref   = $ref
-        Key   = $key
+        Spec     = $text
+        Owner    = $owner
+        Name     = $name
+        Ref      = $ref
+        Identity = $identity
+        Key      = "$($owner.ToLowerInvariant())-$($name.ToLowerInvariant())-$digest"
     }
 }
 
@@ -91,7 +99,7 @@ function Get-YardstickRecipeRepository {
         if (-not [string]::IsNullOrWhiteSpace([string]$spec)) { $entries += , @('Linked', [string]$spec) }
     }
 
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($entry in $entries) {
         $role, $spec = $entry
         try {
@@ -100,7 +108,7 @@ function Get-YardstickRecipeRepository {
             [PSCustomObject]@{ Role = $role; Spec = $spec; Error = $_.Exception.Message }
             continue
         }
-        if ($role -eq 'Linked' -and -not $seen.Add($parsed.Key)) { continue }
+        if ($role -eq 'Linked' -and -not $seen.Add($parsed.Identity)) { continue }
         $destination = if ($role -eq 'Main') { [string]$Preferences.Recipes } else { Join-Path (Join-Path $cacheRoot $parsed.Key) 'Recipes' }
         [PSCustomObject]@{
             Role        = $role
@@ -173,7 +181,7 @@ function Get-YardstickGitBlobSha {
 function Read-RecipeSyncState {
     param([string]$Path, [string]$Spec)
 
-    $empty = @{ spec = $Spec; ref = ''; treeSha = ''; requireEvidence = $false; syncedAt = ''; files = @{} }
+    $empty = @{ spec = $Spec; ref = ''; treeSha = ''; syncedAt = ''; files = @{}; rejected = @{} }
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $empty }
     try {
         $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
@@ -186,13 +194,24 @@ function Read-RecipeSyncState {
     if ($state['files'] -is [System.Collections.IDictionary]) {
         foreach ($key in $state['files'].Keys) { $files[[string]$key] = [string]$state['files'][$key] }
     }
+    # Recipes refused for want of evidence, by path: the blob and evidence they were
+    # refused with, and why, so the same pair isn't downloaded again every run.
+    $rejected = @{}
+    if ($state['rejected'] -is [System.Collections.IDictionary]) {
+        foreach ($key in $state['rejected'].Keys) {
+            $entry = $state['rejected'][$key]
+            if ($entry -is [System.Collections.IDictionary]) {
+                $rejected[[string]$key] = @{ blobs = [string]$entry['blobs']; reason = [string]$entry['reason'] }
+            }
+        }
+    }
     @{
-        spec            = $Spec
-        ref             = [string]$state['ref']
-        treeSha         = [string]$state['treeSha']
-        requireEvidence = $state['requireEvidence'] -eq $true
-        syncedAt        = $state['syncedAt']
-        files           = $files
+        spec     = $Spec
+        ref      = [string]$state['ref']
+        treeSha  = [string]$state['treeSha']
+        syncedAt = $state['syncedAt']
+        files    = $files
+        rejected = $rejected
     }
 }
 
@@ -220,14 +239,38 @@ function Get-RecipeSyncBlob {
 
 function Resolve-RecipeSyncPath {
     # Maps a repository path under Recipes/ to the local folder, refusing any path
-    # that would land outside it.
+    # that would land outside it. Git allows names Windows reads differently: a
+    # backslash is a separator here, a colon starts a drive or stream, and a
+    # trailing dot or space is dropped.
     param([string]$Root, [string]$RepositoryPath)
 
     $segments = @($RepositoryPath.Substring('Recipes/'.Length).Split('/'))
-    if ($segments | Where-Object { $_ -in '', '.', '..' }) {
-        throw "Refusing the repository path '$RepositoryPath'."
+    # Counted, not truth-tested: an empty segment is '', which reads as false.
+    $bad = @($segments | Where-Object {
+        $_ -in '', '.', '..' -or $_ -match '[\:*?"<>|\x00-\x1f]' -or $_ -match '[. ]$'
+    })
+    if ($bad.Count -gt 0) { throw "Refusing the repository path '$RepositoryPath'." }
+
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $full = [System.IO.Path]::GetFullPath((Join-Path $Root ($segments -join [System.IO.Path]::DirectorySeparatorChar)))
+    if (-not $full.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing the repository path '$RepositoryPath', which is outside $Root."
     }
-    Join-Path $Root ($segments -join [System.IO.Path]::DirectorySeparatorChar)
+    $full
+}
+
+
+function Test-RecipeSyncPath {
+    # The repository files the sync takes: every recipe that needs evidence, and
+    # disabled ones too. Those never run, but an enabled recipe can use one as its
+    # base, so they are kept in their Disabled folder.
+    param([string]$Path)
+
+    if (Test-RecipeEvidenceNeeded -Path $Path) { return $true }
+    $segments = @($Path.Split('/'))
+    $segments.Count -gt 2 -and $segments[0] -ceq 'Recipes' -and $segments[1] -ne 'Development' -and
+        $segments[-1] -match '\.ya?ml$' -and $segments[-1] -notlike '*.common.yaml' -and
+        $segments[1..($segments.Count - 2)] -contains 'Disabled'
 }
 
 
@@ -292,19 +335,14 @@ function Sync-YardstickRecipeRepository {
     if (-not $ref) { $ref = [string](Invoke-YardstickGitHubApi $apiBase).default_branch }
     $escapedRef = [uri]::EscapeDataString($ref).Replace('%2F', '/')
     $tree = Invoke-YardstickGitHubApi "$apiBase/git/trees/${escapedRef}?recursive=1"
-
     $state = Read-RecipeSyncState -Path $Repository.StatePath -Spec $Repository.Spec
-    if ($state.treeSha -and $state.treeSha -eq [string]$tree.sha -and [bool]$state.requireEvidence -eq [bool]$RequireEvidence) {
-        $result.UpToDate = $true
-        return $result
-    }
 
     $remote = [ordered]@{}
     $evidence = @{}
     foreach ($item in @($tree.tree)) {
         if ($item.type -ne 'blob') { continue }
         $path = [string]$item.path
-        if (Test-RecipeEvidenceNeeded -Path $path) {
+        if (Test-RecipeSyncPath -Path $path) {
             $remote[$path] = [string]$item.sha
         } elseif ($path -match '^Tests/RecipeEvidence/[^/]+\.json$') {
             $evidence[(Get-RecipeEvidenceId -RecipePath $path)] = [string]$item.sha
@@ -316,18 +354,28 @@ function Sync-YardstickRecipeRepository {
         $result.Warnings.Add("GitHub returned only part of $($Repository.Spec), so recipes removed from it are not removed here.")
     }
 
+    # Every run compares every file, even when the repository has not changed, so a
+    # recipe deleted or edited here is put right. Only files that differ are
+    # downloaded.
     $files = $state.files
+    $rejected = $state.rejected
     $finished = $false
     try {
         foreach ($path in $remote.Keys) {
             $sha = $remote[$path]
-            $local = Resolve-RecipeSyncPath -Root $Repository.Destination -RepositoryPath $path
+            try {
+                $local = Resolve-RecipeSyncPath -Root $Repository.Destination -RepositoryPath $path
+            } catch {
+                $result.Warnings.Add("Skipped $path from $($Repository.Spec): $($_.Exception.Message)")
+                continue
+            }
             $relative = $path.Substring('Recipes/'.Length)
             $localBytes = if (Test-Path -LiteralPath $local -PathType Leaf) { [System.IO.File]::ReadAllBytes($local) } else { $null }
             $localSha = if ($null -ne $localBytes) { Get-YardstickGitBlobSha -Bytes $localBytes } else { $null }
 
             if ($localSha -eq $sha) {
                 $files[$path] = $sha
+                $rejected.Remove($path)
                 $result.Unchanged++
                 continue
             }
@@ -337,29 +385,52 @@ function Sync-YardstickRecipeRepository {
                 continue
             }
 
-            # Without evidence the recipe can't be taken, so it isn't downloaded.
-            $evidenceSha = $evidence[(Get-RecipeEvidenceId -RecipePath $path)]
-            if ($RequireEvidence -and -not $evidenceSha) {
-                $result.Rejected.Add("${relative}: it has no evidence file ($(Get-RecipeEvidencePath -RecipePath $path))")
-                continue
+            if ($RequireEvidence) {
+                # Without evidence the recipe can't be taken, so it isn't downloaded;
+                # nor is a recipe and evidence pair already refused.
+                $evidenceSha = $evidence[(Get-RecipeEvidenceId -RecipePath $path)]
+                if (-not $evidenceSha) {
+                    $rejected.Remove($path)
+                    $result.Rejected.Add("${relative}: it has no evidence file ($(Get-RecipeEvidencePath -RecipePath $path))")
+                    continue
+                }
+                $blobs = "$sha $evidenceSha"
+                if ($rejected.ContainsKey($path) -and $rejected[$path].blobs -eq $blobs) {
+                    $result.Rejected.Add("${relative}: $($rejected[$path].reason)")
+                    continue
+                }
             }
             $bytes = Get-RecipeSyncBlob -ApiBase $apiBase -Sha $sha
             if ($RequireEvidence) {
                 $problem = Get-RecipeSyncEvidenceProblem -ApiBase $apiBase -Path $path -Bytes $bytes -EvidenceSha $evidenceSha
                 if ($problem) {
+                    $rejected[$path] = @{ blobs = $blobs; reason = $problem }
                     $result.Rejected.Add("${relative}: $problem")
                     continue
                 }
             }
+            $rejected.Remove($path)
+
             if ($isMain -and $null -ne $localBytes) {
                 Backup-RecipeSyncFile -Path $local -Root $Repository.Destination -BackupRoot $BackupRoot
             }
-            Write-YardstickFileSafely -Path $local -Content $bytes
+            # Only replaces what was read above, so an edit saved while the files
+            # were downloading is kept.
+            $readHash = if ($null -ne $localBytes) { [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($localBytes)) } else { '' }
+            try {
+                Write-YardstickFileSafely -Path $local -Content $bytes -ExpectedHash $readHash
+            } catch {
+                $now = if (Test-Path -LiteralPath $local -PathType Leaf) { [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.IO.File]::ReadAllBytes($local))) } else { '' }
+                if ($now -eq $readHash) { throw }
+                $result.Kept.Add("$relative (changed here during the sync)")
+                continue
+            }
             if ($null -ne $localBytes) { $result.Updated.Add($relative) } else { $result.Added.Add($relative) }
             $files[$path] = $sha
         }
 
         if ($complete) {
+            foreach ($path in @($rejected.Keys | Where-Object { -not $remote.Contains($_) })) { $rejected.Remove($path) }
             foreach ($path in @($files.Keys | Where-Object { -not $remote.Contains($_) })) {
                 $local = Resolve-RecipeSyncPath -Root $Repository.Destination -RepositoryPath $path
                 $relative = $path.Substring('Recipes/'.Length)
@@ -392,15 +463,16 @@ function Sync-YardstickRecipeRepository {
         $finished = $true
     } finally {
         # Recorded even when GitHub stopped the sync part way, so the next run
-        # carries on from here; only a finished sync records the listing it used.
+        # carries on from here.
         $state.ref = $ref
         $state.treeSha = if ($finished -and $complete) { [string]$tree.sha } else { '' }
-        $state.requireEvidence = [bool]$RequireEvidence
         $state.syncedAt = (Get-Date).ToUniversalTime().ToString('o')
         $state.files = $files
+        $state.rejected = $rejected
         Save-RecipeSyncState -Path $Repository.StatePath -State $state
     }
 
+    $result.UpToDate = $result.Added.Count -eq 0 -and $result.Updated.Count -eq 0 -and $result.Removed.Count -eq 0
     $result
 }
 
@@ -471,14 +543,15 @@ function Invoke-YardstickRecipeSync {
             continue
         }
 
+        # Kept and refused recipes are reported every run, changed or not.
         if ($result.UpToDate) {
             & $say 'Info' "Recipes from $($repository.Spec) are up to date in $($repository.Destination)."
-            continue
+        } else {
+            $summary = "Synced recipes from $($repository.Spec) into $($repository.Destination): $($result.Added.Count) added, $($result.Updated.Count) updated, $($result.Removed.Count) removed, $($result.Unchanged) unchanged"
+            if ($result.Kept.Count) { $summary += ", $($result.Kept.Count) kept as edited here" }
+            if ($result.Rejected.Count) { $summary += ", $($result.Rejected.Count) not taken without evidence" }
+            & $say 'Info' "$summary."
         }
-        $summary = "Synced recipes from $($repository.Spec) into $($repository.Destination): $($result.Added.Count) added, $($result.Updated.Count) updated, $($result.Removed.Count) removed, $($result.Unchanged) unchanged"
-        if ($result.Kept.Count) { $summary += ", $($result.Kept.Count) kept as edited here" }
-        if ($result.Rejected.Count) { $summary += ", $($result.Rejected.Count) not taken without evidence" }
-        & $say 'Info' "$summary."
         foreach ($name in $result.Added) { & $say 'Detail' "Added recipe $name from $($repository.Spec)." }
         foreach ($name in $result.Updated) { & $say 'Detail' "Updated recipe $name from $($repository.Spec)." }
         foreach ($name in $result.Removed) { & $say 'Detail' "Removed recipe $name, which $($repository.Spec) no longer has." }

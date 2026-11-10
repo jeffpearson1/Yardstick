@@ -66,20 +66,33 @@ BeforeAll {
 }
 
 AfterAll {
-    Remove-Variable -Name RecipeSyncTestRepos, RecipeSyncTestCalls, RecipeSyncTestFailBlob -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name RecipeSyncTestRepos, RecipeSyncTestCalls, RecipeSyncTestFailBlob, RecipeSyncTestOnBlob -Scope Global -ErrorAction SilentlyContinue
 }
 
 Describe 'ConvertFrom-YardstickRecipeRepositorySpec' {
     It 'parses <Spec>' -TestCases @(
-        @{ Spec = 'contoso/recipes'; Owner = 'contoso'; Name = 'recipes'; Ref = ''; Key = 'contoso-recipes' }
-        @{ Spec = ' contoso/recipes@main '; Owner = 'contoso'; Name = 'recipes'; Ref = 'main'; Key = 'contoso-recipes@main' }
-        @{ Spec = 'jeffpearson1/Yardstick@release/1.2'; Owner = 'jeffpearson1'; Name = 'Yardstick'; Ref = 'release/1.2'; Key = 'jeffpearson1-Yardstick@release_1.2' }
+        @{ Spec = 'contoso/recipes'; Owner = 'contoso'; Name = 'recipes'; Ref = ''; Identity = 'contoso/recipes@' }
+        @{ Spec = ' contoso/recipes@main '; Owner = 'contoso'; Name = 'recipes'; Ref = 'main'; Identity = 'contoso/recipes@main' }
+        @{ Spec = 'jeffpearson1/Yardstick@release/1.2'; Owner = 'jeffpearson1'; Name = 'Yardstick'; Ref = 'release/1.2'; Identity = 'jeffpearson1/yardstick@release/1.2' }
     ) {
         $parsed = ConvertFrom-YardstickRecipeRepositorySpec -Spec $Spec
         $parsed.Owner | Should -BeExactly $Owner
         $parsed.Name | Should -BeExactly $Name
         $parsed.Ref | Should -BeExactly $Ref
-        $parsed.Key | Should -BeExactly $Key
+        $parsed.Identity | Should -BeExactly $Identity
+        $parsed.Key | Should -Match "^$([regex]::Escape($Owner.ToLowerInvariant()))-$([regex]::Escape($Name.ToLowerInvariant()))-[0-9a-f]{12}$"
+    }
+
+    It 'gives different folders to <A> and <B>' -TestCases @(
+        @{ A = 'a-b/c'; B = 'a/b-c' }
+        @{ A = 'contoso/lab@release/1.2'; B = 'contoso/lab@release_1.2' }
+        @{ A = 'contoso/lab@Main'; B = 'contoso/lab@main' }
+    ) {
+        (ConvertFrom-YardstickRecipeRepositorySpec -Spec $A).Key | Should -Not -Be (ConvertFrom-YardstickRecipeRepositorySpec -Spec $B).Key
+    }
+
+    It 'treats owner and name case as the same repository' {
+        (ConvertFrom-YardstickRecipeRepositorySpec -Spec 'Contoso/Lab').Key | Should -Be (ConvertFrom-YardstickRecipeRepositorySpec -Spec 'contoso/lab').Key
     }
 
     It 'refuses <Spec>' -TestCases @(
@@ -89,6 +102,15 @@ Describe 'ConvertFrom-YardstickRecipeRepositorySpec' {
         @{ Spec = '../recipes' }
     ) {
         { ConvertFrom-YardstickRecipeRepositorySpec -Spec $Spec } | Should -Throw '*owner/name*'
+    }
+}
+
+Describe 'Get-YardstickRecipeRepository' {
+    It 'keeps linked repositories whose folder names would once have collided, and drops a repeat' {
+        $prefs = @{ Recipes = $TestDrive; recipeRepository = ''; additionalRecipeRepositories = @('a-b/c', 'a/b-c', 'A/B-C') }
+        $repositories = @(Get-YardstickRecipeRepository -Preferences $prefs -ProjectRoot $script:repoRoot)
+        $repositories.Spec | Should -Be @('a-b/c', 'a/b-c')
+        $repositories[0].Destination | Should -Not -Be $repositories[1].Destination
     }
 }
 
@@ -117,10 +139,12 @@ Describe 'Invoke-YardstickRecipeSync' {
                 return [pscustomobject]@{ sha = $treeSha; truncated = $false; tree = @($entries) }
             }
             if ($rest -match '^/git/blobs/(?<sha>[0-9a-f]{40})$') {
-                if ($Global:RecipeSyncTestFailBlob -and $Matches.sha -eq $Global:RecipeSyncTestFailBlob) {
+                $blobSha = $Matches.sha
+                if ($Global:RecipeSyncTestFailBlob -and $blobSha -eq $Global:RecipeSyncTestFailBlob) {
                     throw 'GitHub asked Yardstick to wait.'
                 }
-                $entry = $entries | Where-Object sha -eq $Matches.sha | Select-Object -First 1
+                if ($Global:RecipeSyncTestOnBlob) { & $Global:RecipeSyncTestOnBlob $blobSha }
+                $entry = $entries | Where-Object sha -eq $blobSha | Select-Object -First 1
                 return [pscustomobject]@{ encoding = 'base64'; content = [Convert]::ToBase64String($files[$entry.path]) }
             }
             throw "Unexpected URI $Uri"
@@ -134,6 +158,7 @@ Describe 'Invoke-YardstickRecipeSync' {
         Copy-Item -LiteralPath (Join-Path $script:repoRoot 'Yardstick.Project.psd1') -Destination $script:root
         $Global:RecipeSyncTestRepos.Clear()
         $Global:RecipeSyncTestFailBlob = $null
+        $Global:RecipeSyncTestOnBlob = $null
         Set-FakeRepo -Repository 'contoso/yardstick' -Files @{
             'Recipes/7zip.yaml'                 = "id: 7zip`n"
             'Recipes/Jetbrains/clion.yaml'      = "id: clion`n"
@@ -151,17 +176,57 @@ Describe 'Invoke-YardstickRecipeSync' {
         $Global:RecipeSyncTestCalls | Should -BeNullOrEmpty
     }
 
-    It 'brings in only recipes, keeping their folders' {
+    It 'brings in only recipes, keeping their folders, Disabled included' {
         $messages = Invoke-TestSync
         Get-RecipeText '7zip.yaml' | Should -Be "id: 7zip`n"
         Get-RecipeText 'Jetbrains\clion.yaml' | Should -Be "id: clion`n"
+        # Disabled recipes never run, but can be the base of one that does.
+        Get-RecipeText 'Disabled\old.yaml' | Should -Be "id: old`n"
         Join-Path $script:recipes 'Development' | Should -Not -Exist
-        Join-Path $script:recipes 'Disabled' | Should -Not -Exist
         Join-Path $script:recipes 'zoom.common.yaml' | Should -Not -Exist
         Join-Path $script:recipes 'README.md' | Should -Not -Exist
         Join-Path $script:root 'Modules' | Should -Not -Exist
         $messages[0].Level | Should -Be 'Info'
-        $messages[0].Message | Should -Match '2 added, 0 updated, 0 removed, 0 unchanged'
+        $messages[0].Message | Should -Match '3 added, 0 updated, 0 removed, 0 unchanged'
+    }
+
+    It 'skips a repository path that Windows would read as outside Recipes' {
+        Set-FakeRepo -Repository 'contoso/yardstick' -Files @{
+            'Recipes/7zip.yaml'                          = "id: 7zip`n"
+            'Recipes/..\Local\preferences.yaml'          = 'syncRecipes: false'
+            'Recipes/sub\..\..\escape.yaml'              = 'id: escape'
+            'Recipes/C:evil.yaml'                        = 'id: evil'
+            'Recipes/trailing./x.yaml'                   = 'id: x'
+        }
+        $messages = Invoke-TestSync
+        Join-Path $script:root 'Local\preferences.yaml' | Should -Not -Exist
+        Join-Path $script:root 'escape.yaml' | Should -Not -Exist
+        Get-RecipeText '7zip.yaml' | Should -Be "id: 7zip`n"
+        @(Get-ChildItem -LiteralPath $script:recipes -Recurse -File).Count | Should -Be 1
+        @($messages | Where-Object { $_.Level -eq 'Warning' -and $_.Message -like 'Skipped Recipes/*Refusing*' }).Count | Should -Be 4
+    }
+
+    It 'puts back a synced recipe deleted here, even when the repository has not changed' {
+        Invoke-TestSync | Out-Null
+        Remove-Item -LiteralPath (Join-Path $script:recipes '7zip.yaml')
+        $messages = Invoke-TestSync
+        Get-RecipeText '7zip.yaml' | Should -Be "id: 7zip`n"
+        Get-BlobCallCount | Should -Be 1
+        $messages[0].Message | Should -Match '1 added'
+    }
+
+    It 'keeps an edit saved while the new version was downloading' {
+        Invoke-TestSync | Out-Null
+        Set-FakeRepo -Repository 'contoso/yardstick' -Files @{ 'Recipes/7zip.yaml' = "id: 7zip`nversion: 2`n"; 'Recipes/Jetbrains/clion.yaml' = "id: clion`n" }
+        $Global:RecipeSyncTestEditPath = Join-Path $script:recipes '7zip.yaml'
+        $Global:RecipeSyncTestOnBlob = { param($sha) [System.IO.File]::WriteAllText($Global:RecipeSyncTestEditPath, "id: 7zip`nsaved: meanwhile`n") }
+        try {
+            $messages = Invoke-TestSync
+        } finally {
+            Remove-Variable -Name RecipeSyncTestEditPath -Scope Global -ErrorAction SilentlyContinue
+        }
+        Get-RecipeText '7zip.yaml' | Should -Be "id: 7zip`nsaved: meanwhile`n"
+        (@($messages | Where-Object Level -eq 'Warning').Message -join "`n") | Should -Match 'Kept recipe 7zip.yaml \(changed here during the sync\)'
     }
 
     It 'makes one call when the repository has not changed since the last sync' {
@@ -180,8 +245,8 @@ Describe 'Invoke-YardstickRecipeSync' {
     It 'downloads only files that differ from the local copy' {
         Set-Content -LiteralPath (Join-Path $script:recipes '7zip.yaml') -Value "id: 7zip`n" -NoNewline
         $messages = Invoke-TestSync
-        Get-BlobCallCount | Should -Be 1
-        $messages[0].Message | Should -Match '1 added, 0 updated, 0 removed, 1 unchanged'
+        Get-BlobCallCount | Should -Be 2
+        $messages[0].Message | Should -Match '2 added, 0 updated, 0 removed, 1 unchanged'
     }
 
     It 'updates a recipe changed in the repository and backs up the old copy' {
@@ -217,7 +282,7 @@ Describe 'Invoke-YardstickRecipeSync' {
         $messages = Invoke-TestSync
         Join-Path $script:recipes 'Jetbrains\clion.yaml' | Should -Not -Exist
         Join-Path $script:recipes 'mine.yaml' | Should -Exist
-        $messages[0].Message | Should -Match '1 removed'
+        $messages[0].Message | Should -Match '2 removed'
         Get-ChildItem -LiteralPath (Join-Path $script:root 'Artifacts\RecipeSyncBackups') -Recurse -File -Filter 'clion.yaml' | Should -Not -BeNullOrEmpty
     }
 
@@ -239,7 +304,7 @@ Describe 'Invoke-YardstickRecipeSync' {
         $messages = Invoke-TestSync
         Get-BlobCallCount | Should -Be 1
         Get-RecipeText 'Jetbrains\clion.yaml' | Should -Be "id: clion`n"
-        $messages[0].Message | Should -Match '1 added, 0 updated, 0 removed, 1 unchanged'
+        $messages[0].Message | Should -Match '1 added, 0 updated, 0 removed, 2 unchanged'
     }
 
     Context 'Linked repositories' {
@@ -248,7 +313,8 @@ Describe 'Invoke-YardstickRecipeSync' {
                 'Recipes/labapp.yaml' = "id: labapp`n"
                 'Recipes/7zip.yaml'   = "id: 7zip`nlab: copy`n"
             }
-            $script:labFolder = Join-Path $script:root 'Local\RecipeRepos\contoso-lab\Recipes'
+            $script:labFolder = (ConvertFrom-YardstickRecipeRepositorySpec -Spec 'contoso/lab').Key |
+                ForEach-Object { Join-Path $script:root "Local\RecipeRepos\$_\Recipes" }
             $script:linkedPrefs = @{ additionalRecipeRepositories = @('contoso/lab') }
         }
 
@@ -256,6 +322,13 @@ Describe 'Invoke-YardstickRecipeSync' {
             Invoke-TestSync -Change $script:linkedPrefs | Out-Null
             Join-Path $script:labFolder 'labapp.yaml' | Should -Exist
             Get-RecipeText '7zip.yaml' | Should -Be "id: 7zip`n"
+        }
+
+        It 'puts back a mirrored recipe edited here, even when the repository has not changed' {
+            Invoke-TestSync -Change $script:linkedPrefs | Out-Null
+            Set-Content -LiteralPath (Join-Path $script:labFolder 'labapp.yaml') -Value 'id: edited'
+            Invoke-TestSync -Change $script:linkedPrefs | Out-Null
+            [System.IO.File]::ReadAllText((Join-Path $script:labFolder 'labapp.yaml')) | Should -Be "id: labapp`n"
         }
 
         It 'removes anything else from the mirror' {
@@ -312,6 +385,24 @@ Describe 'Invoke-YardstickRecipeSync' {
             $messages = Invoke-TestSync -Change $script:evidencePrefs
             Get-RecipeText '7zip.yaml' | Should -Be "id: 7zip`n"
             (@($messages | Where-Object Level -eq 'Warning').Message -join "`n") | Should -Match 'Did not take recipe 7zip.yaml: Hash mismatch'
+        }
+
+        It 'does not download a refused recipe again until it or its evidence changes' {
+            Set-FakeRepo -Repository 'contoso/yardstick' -Files @{
+                'Recipes/7zip.yaml'              = $script:text
+                'Tests/RecipeEvidence/7zip.json' = New-TestEvidence -Path 'Recipes/7zip.yaml' -Text "id: 7zip`nversion: 1`n"
+            }
+            Invoke-TestSync -Change $script:evidencePrefs | Out-Null
+            $messages = Invoke-TestSync -Change $script:evidencePrefs
+            Get-BlobCallCount | Should -Be 0
+            (@($messages | Where-Object Level -eq 'Warning').Message -join "`n") | Should -Match 'Did not take recipe 7zip.yaml: Hash mismatch'
+
+            Set-FakeRepo -Repository 'contoso/yardstick' -Files @{
+                'Recipes/7zip.yaml'              = $script:text
+                'Tests/RecipeEvidence/7zip.json' = New-TestEvidence -Path 'Recipes/7zip.yaml' -Text $script:text
+            }
+            Invoke-TestSync -Change $script:evidencePrefs | Out-Null
+            Get-RecipeText '7zip.yaml' | Should -Be $script:text
         }
 
         It 'does not take a recipe without evidence' {
