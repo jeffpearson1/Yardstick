@@ -21,6 +21,7 @@ $script:ComponentModules = @(
     'YardstickSupport'
     'YardstickCredential'
     'YardstickGitHub'
+    'YardstickRecipeEvidence'
     'YardstickConfig'
     'YardstickSetup'
 )

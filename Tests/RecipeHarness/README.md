@@ -89,6 +89,8 @@ Artifacts\RecipeHarness\_install-tests\<timestamp>\
 
 Each install-test run includes `summary.md`, `summary.json`, `harness.transcript.log`, and per-recipe `result.json`, command files, detection scripts, and raw stdout/stderr logs. The install harness exits `1` when any recipe fails.
 
+Yardstick Development Studio copies the phases from `summary.json` into the recipe's evidence file, `Tests/RecipeEvidence/<id>.json`, which a pull request needs before the recipe can be merged. `Test-RecipeEvidence.ps1 -BaseRef origin/main` runs that check locally. See [Docs/RecipeEvidence.md](../../Docs/RecipeEvidence.md).
+
 ## Safety Notes
 
 - The harness never contacts Graph or Intune.

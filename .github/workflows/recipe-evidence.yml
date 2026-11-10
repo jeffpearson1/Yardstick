@@ -1,0 +1,41 @@
+name: Recipe evidence
+
+# Blocks merging a recipe that has not passed a live install test in Yardstick
+# Development Studio with exactly the contents being merged. Runs on every pull
+# request, not only when recipes change, because a required check that never
+# runs blocks the merge. See Docs/RecipeEvidence.md.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  recipe-evidence:
+    # Branch protection requires this check by name; keep it stable.
+    name: Recipe evidence
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The check compares with the merge base, so it needs both histories.
+          fetch-depth: 0
+
+      - name: Install powershell-yaml
+        shell: pwsh
+        run: |
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module -Name powershell-yaml -Force -Scope CurrentUser
+
+      - name: Check recipe evidence
+        shell: pwsh
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          WAIVED: ${{ contains(github.event.pull_request.labels.*.name, 'evidence-waived') }}
+        run: ./Tests/RecipeHarness/Test-RecipeEvidence.ps1 -BaseRef "origin/$env:BASE_REF" -Waived:($env:WAIVED -eq 'true')
