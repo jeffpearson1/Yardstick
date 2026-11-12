@@ -1065,6 +1065,21 @@ function Resolve-YardstickScopeTagIds {
     return $ids
 }
 
+function Resolve-YardstickCategoryIds {
+    param([string[]]$CategoryName)
+    if (-not $CategoryName) { return @() }
+    $categories = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource 'deviceAppManagement/mobileAppCategories')
+    $ids = @(
+        foreach ($name in $CategoryName) {
+            # -eq is case-insensitive, so recipes can write 'productivity' for the built-in 'Productivity'.
+            $match = @($categories | Where-Object displayName -eq $name)
+            if ($match.Count -ne 1) { throw "Could not resolve a unique Intune app category named '$name'." }
+            $match[0].id
+        }
+    )
+    return @($ids | Select-Object -Unique)
+}
+
 function New-YardstickWin32AppBody {
     param(
         [Parameter(Mandatory)][xml]$Metadata,
@@ -1082,6 +1097,7 @@ function New-YardstickWin32AppBody {
         [string]$Owner,
         [int]$MaximumInstallationTimeInMinutes = 60,
         [switch]$AllowAvailableUninstall,
+        [switch]$Featured,
         [string[]]$ScopeTagName
     )
     $applicationInfo = $Metadata.ApplicationInfo
@@ -1103,7 +1119,7 @@ function New-YardstickWin32AppBody {
         notes                            = ''
         informationUrl                   = $null
         privacyInformationUrl            = $null
-        isFeatured                       = $false
+        isFeatured                       = [bool]$Featured
         fileName                         = [string]$applicationInfo.FileName
         setupFilePath                    = [string]$applicationInfo.SetupFile
         installCommandLine               = $InstallCommandLine
@@ -1155,16 +1171,20 @@ function Add-YardstickWin32App {
         [string]$Owner,
         [int]$MaximumInstallationTimeInMinutes = 60,
         [switch]$AllowAvailableUninstall,
+        [switch]$Featured,
         [string[]]$ScopeTagName,
+        [string[]]$Category,
         [int]$UploadRetryDelaySeconds = 60
     )
+    # Resolved before anything is created so a misspelt category fails without leaving an app behind.
+    $categoryIds = @(Resolve-YardstickCategoryIds -CategoryName $Category)
     $metadata = Get-YardstickWin32AppMetadata -FilePath $FilePath
     $applicationInfo = $metadata.ApplicationInfo
     $expandedContent = $null
     try {
         $bodyParameters = @{}
         foreach ($key in $PSBoundParameters.Keys) {
-            if ($key -notin 'FilePath', 'UploadRetryDelaySeconds') { $bodyParameters[$key] = $PSBoundParameters[$key] }
+            if ($key -notin 'FilePath', 'Category', 'UploadRetryDelaySeconds') { $bodyParameters[$key] = $PSBoundParameters[$key] }
         }
         $body = New-YardstickWin32AppBody @bodyParameters -Metadata $metadata
         $expandedContent = Expand-YardstickWin32AppContent -FilePath $FilePath -FileName ([string]$applicationInfo.FileName)
@@ -1202,6 +1222,11 @@ function Add-YardstickWin32App {
             $app = $null
             try {
                 $app = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource 'deviceAppManagement/mobileApps' -Body $body
+                # Categories are a navigation property, so Graph ignores them on the create body.
+                foreach ($categoryId in $categoryIds) {
+                    Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)/categories/`$ref" `
+                        -Body @{ '@odata.id' = "https://graph.microsoft.com/beta/deviceAppManagement/mobileAppCategories/$categoryId" } | Out-Null
+                }
                 $contentVersion = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions" -Body @{}
                 $fileResource = "deviceAppManagement/mobileApps/$($app.id)/microsoft.graph.win32LobApp/contentVersions/$($contentVersion.id)/files"
                 $contentFile = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource $fileResource -Body $fileBody

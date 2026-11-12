@@ -7,6 +7,18 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Added
 
+- **Company Portal categories and featured apps.** Two optional recipe fields,
+  usually set in `Local\recipeOverrides.yaml`:
+  - **`categories`** links each new app version to existing Intune app categories,
+    matched by name without regard to case. An unknown name fails the upload before
+    anything is created.
+  - **`featured: true`** shows the app as featured in Company Portal. It is set on
+    every new version, so featuring an app by hand no longer has to be redone after
+    each update.
+
+  `Test-RecipeSchema` checks that `categories` is a list of names and `featured` an
+  unquoted boolean. See [Deployment Configuration](Docs/WritingRecipes.md#deployment-configuration).
+
 - **Recipe evidence check.** A recipe can only be merged into `main` with proof that
   it passed a live install test with exactly the contents being merged. Yardstick
   Development Studio commits that proof as `Tests/RecipeEvidence/<id>.json`, and
