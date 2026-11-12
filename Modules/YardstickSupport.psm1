@@ -6102,6 +6102,21 @@ function Add-FailedApplication {
 
 
 
+function Get-FailedApplication {
+    <#
+    .SYNOPSIS
+    Returns the applications recorded as failed so far in this run.
+
+    .DESCRIPTION
+    The tracking list lives in this module's scope, so Yardstick.ps1 cannot read
+    it directly. It uses this to set the run's exit code.
+    #>
+    if (-not $Script:FailedApplications) { return @() }
+    return @($Script:FailedApplications)
+}
+
+
+
 function Test-OutlookAvailability {
     <#
     .SYNOPSIS
