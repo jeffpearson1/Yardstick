@@ -388,31 +388,47 @@ Start-Area 'Intune connection'
 if ($developmentOnly) {
     Add-Check 'Intune' Skip 'Development-only instance: Yardstick does not connect to Intune on this computer.'
 } else {
-    $target = Get-YardstickCredentialTarget -Preferences $prefs
+    $federatedIdentity = $null
     $credential = $null
     try {
-        $credential = Get-YardstickIntuneCredential -Target $target
+        $federatedIdentity = Get-YardstickFederatedIdentity
     } catch {
-        Add-Check 'Credential' Fail "Could not read the Intune credential '$target': $($_.Exception.Message)"
+        Add-Check 'Credential' Fail $_.Exception.Message
     }
 
-    if (-not $credential) {
-        if (-not ($results | Where-Object Check -eq 'Credential')) {
-            Add-Check 'Credential' Fail "No Intune credential '$target' is stored for $env:USERNAME. Run .\Install-Yardstick.ps1 -Step AppRegistration as this user."
+    if ($federatedIdentity) {
+        $credential = [pscustomobject]@{ TenantID = $federatedIdentity.TenantID; ClientID = $federatedIdentity.ClientID; ClientSecret = $null }
+        Add-Check 'Credential' OK "Workload identity federation through $(Get-YardstickFederatedSourceDescription -Identity $federatedIdentity) (app $($credential.ClientID), tenant $($credential.TenantID))"
+        Add-Check 'Secret expiry' Skip 'Workload identity federation uses no client secret.'
+    } elseif (-not ($results | Where-Object Check -eq 'Credential')) {
+        $target = Get-YardstickCredentialTarget -Preferences $prefs
+        try {
+            $credential = Get-YardstickIntuneCredential -Target $target
+        } catch {
+            Add-Check 'Credential' Fail "Could not read the Intune credential '$target': $($_.Exception.Message)"
         }
-    } else {
-        Add-Check 'Credential' OK "Credential '$target' (app $($credential.ClientID), tenant $($credential.TenantID))"
 
-        $expiry = Test-YardstickSecretExpiration -Credential $credential -Preferences $prefs -NoEmail
-        if (-not $expiry.ExpiresOn) {
-            Add-Check 'Secret expiry' Warn "The client secret's expiry date is not known, so Yardstick cannot warn before it expires. Run .\Set-YardstickCredential.ps1 to record it."
-        } elseif ($expiry.IsExpired) {
-            Add-Check 'Secret expiry' Fail "The client secret expired on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')). Run .\Install-Yardstick.ps1 -Step AppRegistration to create a new one."
-        } elseif ($expiry.IsExpiring) {
-            Add-Check 'Secret expiry' Warn "The client secret expires in $($expiry.DaysRemaining) day(s), on $($expiry.ExpiresOn.ToString('yyyy-MM-dd'))."
+        if (-not $credential) {
+            if (-not ($results | Where-Object Check -eq 'Credential')) {
+                Add-Check 'Credential' Fail "No Intune credential '$target' is stored for $env:USERNAME. Run .\Install-Yardstick.ps1 -Step AppRegistration as this user."
+            }
         } else {
-            Add-Check 'Secret expiry' OK "The client secret expires on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')) ($($expiry.DaysRemaining) days)."
+            Add-Check 'Credential' OK "Credential '$target' (app $($credential.ClientID), tenant $($credential.TenantID))"
+
+            $expiry = Test-YardstickSecretExpiration -Credential $credential -Preferences $prefs -NoEmail
+            if (-not $expiry.ExpiresOn) {
+                Add-Check 'Secret expiry' Warn "The client secret's expiry date is not known, so Yardstick cannot warn before it expires. Run .\Set-YardstickCredential.ps1 to record it."
+            } elseif ($expiry.IsExpired) {
+                Add-Check 'Secret expiry' Fail "The client secret expired on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')). Run .\Install-Yardstick.ps1 -Step AppRegistration to create a new one."
+            } elseif ($expiry.IsExpiring) {
+                Add-Check 'Secret expiry' Warn "The client secret expires in $($expiry.DaysRemaining) day(s), on $($expiry.ExpiresOn.ToString('yyyy-MM-dd'))."
+            } else {
+                Add-Check 'Secret expiry' OK "The client secret expires on $($expiry.ExpiresOn.ToString('yyyy-MM-dd')) ($($expiry.DaysRemaining) days)."
+            }
         }
+    }
+
+    if ($credential) {
 
         if ($Offline) {
             Add-Check 'Graph' Skip 'Graph sign-in skipped (-Offline).'
@@ -420,7 +436,7 @@ if ($developmentOnly) {
             $roles = $null
             try {
                 $roles = @(Get-YardstickAppTokenRoles -TenantId $credential.TenantID -ClientId $credential.ClientID -ClientSecret $credential.ClientSecret)
-                Add-Check 'Graph sign-in' OK 'Signed in to Microsoft Graph with the stored credential.'
+                Add-Check 'Graph sign-in' OK $(if ($federatedIdentity) { 'Signed in to Microsoft Graph with workload identity federation.' } else { 'Signed in to Microsoft Graph with the stored credential.' })
             } catch {
                 Add-Check 'Graph sign-in' Fail "Could not sign in to Microsoft Graph: $($_.Exception.Message)"
             }

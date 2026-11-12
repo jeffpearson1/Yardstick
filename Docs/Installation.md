@@ -266,6 +266,13 @@ If an older `preferences.yaml` still contains `TenantID`, `ClientId` and
 `ClientSecret`, the next Yardstick run moves them into Credential Manager and reminds
 you to delete them from the file.
 
+### Pipelines without a client secret
+
+In GitHub Actions, Azure DevOps or another CI/CD platform, Yardstick can sign in with
+workload identity federation instead of a stored secret: the pipeline's short-lived
+ID token stands in for the secret, and nothing is stored on the agent. See
+[Workload identity federation](FederatedIdentity.md).
+
 ### Recipe secrets
 
 Recipes that call a vendor API with their own keys (CrowdStrike Falcon, for example)

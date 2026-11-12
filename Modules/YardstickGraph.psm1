@@ -1,5 +1,7 @@
 Set-StrictMode -Version 3.0
 
+Import-Module (Join-Path $PSScriptRoot 'YardstickFederation.psm1')
+
 $script:AccessToken = $null
 
 function Get-YardstickGlobalValue {
@@ -33,6 +35,10 @@ function Connect-YardstickGraph {
     Uses the OAuth 2.0 client-credentials flow directly. Credentials default to
     the values populated by Initialize-YardstickIntuneCredential.
 
+    When the workload identity federation variables are set and no -ClientSecret
+    is passed, a fresh ID token is sent as the client assertion instead of a
+    client secret. See Docs/FederatedIdentity.md.
+
     .PARAMETER PassThru
     Returns the cached token object. Omit it so the bearer token never lands on
     the console or in a transcript.
@@ -50,7 +56,11 @@ function Connect-YardstickGraph {
     if (-not $PSBoundParameters.ContainsKey('ClientID')) { $ClientID = Get-YardstickGlobalValue -Name ClientID }
     if (-not $PSBoundParameters.ContainsKey('ClientSecret')) { $ClientSecret = Get-YardstickGlobalValue -Name ClientSecret }
 
-    if ([string]::IsNullOrWhiteSpace($TenantID) -or
+    $federatedIdentity = if (-not $PSBoundParameters.ContainsKey('ClientSecret')) { Get-YardstickFederatedIdentity }
+    if ($federatedIdentity) {
+        if (-not $PSBoundParameters.ContainsKey('TenantID')) { $TenantID = $federatedIdentity.TenantID }
+        if (-not $PSBoundParameters.ContainsKey('ClientID')) { $ClientID = $federatedIdentity.ClientID }
+    } elseif ([string]::IsNullOrWhiteSpace($TenantID) -or
         [string]::IsNullOrWhiteSpace($ClientID) -or
         [string]::IsNullOrWhiteSpace($ClientSecret)) {
         throw 'Required Graph credentials are not set: TenantID, ClientID, and ClientSecret are required.'
@@ -68,12 +78,14 @@ function Connect-YardstickGraph {
     # Explicit rather than inherited: each module has its own session state, so the
     # $Global:PSDefaultParameterValues the runner sets for recipes is not visible
     # here. Without this, an unresponsive identity endpoint hangs the run forever.
-    $tokenResponse = Invoke-RestMethod -Uri $tokenUri -Method Post -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 60 -Body @{
+    $tokenResponse = if ($federatedIdentity) {
+        Invoke-YardstickFederatedTokenRequest -TokenUri $tokenUri -ClientID $ClientID -Identity $federatedIdentity
+    } else { Invoke-RestMethod -Uri $tokenUri -Method Post -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 60 -Body @{
         client_id     = $ClientID
         client_secret = $ClientSecret
         scope         = 'https://graph.microsoft.com/.default'
         grant_type    = 'client_credentials'
-    } -ErrorAction Stop
+    } -ErrorAction Stop }
 
     if (-not $tokenResponse.access_token) {
         throw 'Microsoft identity platform returned no access token.'

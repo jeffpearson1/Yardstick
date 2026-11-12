@@ -45,6 +45,7 @@ $Script:CredNotFound = 1168
 
 # No -Force, so an already-loaded copy is reused.
 Import-Module (Join-Path $PSScriptRoot 'YardstickLog.psm1')
+Import-Module (Join-Path $PSScriptRoot 'YardstickFederation.psm1')
 
 
 function Write-CredentialLog {
@@ -494,6 +495,9 @@ function Initialize-YardstickIntuneCredential {
 
     .DESCRIPTION
     Resolution order:
+      0. Workload identity federation, when its environment variables are set.
+         Nothing is read from Credential Manager or preferences.yaml; see
+         Docs/FederatedIdentity.md.
       1. Windows Credential Manager (the supported location).
       2. Legacy TenantID / ClientId / ClientSecret keys in preferences.yaml, which
          are migrated into Credential Manager and then flagged for removal.
@@ -520,6 +524,9 @@ function Initialize-YardstickIntuneCredential {
         [switch]$NoPrompt,
         [switch]$Force
     )
+
+    $federatedCredential = Get-YardstickFederatedCredential
+    if ($federatedCredential) { return $federatedCredential }
 
     $target = Get-YardstickCredentialTarget -Preferences $Preferences
 
@@ -599,6 +606,7 @@ function Update-YardstickSecretExpiration {
         $Credential
     )
 
+    if (Test-YardstickFederatedCredential $Credential) { return $Credential }
     if ($Credential.SecretExpiresOn) {
         return $Credential
     }
@@ -689,6 +697,7 @@ function Test-YardstickSecretExpiration {
         Notified      = $false
     }
 
+    if (Test-YardstickFederatedCredential $Credential) { return $result }
     if (-not $Credential.SecretExpiresOn) {
         Write-CredentialLog "The expiration date of the Intune client secret is unknown. Grant Application.Read.All to the app registration or record the date with .\Set-YardstickCredential.ps1." -Warning
         return $result
