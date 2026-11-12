@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "keepassxc",
+  "recipePath": "Recipes/keepassxc.yaml",
+  "recipeSha256": "1cc0bb3a41ef7cd04cf382cbc6859c6b3b89b5fe2a193f3f8185a3e68b89bcfe",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-12T18:53:21Z",
+  "studioVersion": "0.5.1",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "KeePassXC-2.8.0-x64.msi",
+    "version": "2.8.0",
+    "sha256": "4F105AF5BA780428718C8BE5614CF95DECEED5CB3B474A9BD624C5DF81CEC6E5",
+    "signer": "CN=\"DroidMonkey Apps, LLC\", O=\"DroidMonkey Apps, LLC\", S=Virginia, C=US"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "KeePassXC-2.8.0-x64.msi v2.8.0 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{7B154FB8-DD64-452C-9B09-64AD98205DE1}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i KeePassXC-2.8.0-x64.msi /qn /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{7B154FB8-DD64-452C-9B09-64AD98205DE1}' version '2.8.0' >= '2.8.0'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {7B154FB8-DD64-452C-9B09-64AD98205DE1} /qn /norestart'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{7B154FB8-DD64-452C-9B09-64AD98205DE1}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}

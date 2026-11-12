@@ -1,0 +1,25 @@
+url: https://github.com/keepassxreboot/keepassxc
+urlRedirects: false
+preDownloadScript: |
+  using module ".\Modules\Custom\GithubDownloader.psm1"
+  $downloadFileRegex = "/KeePassXC-[0-9.]+-x64\.msi$"
+  $versionRegex = "[0-9]+(\.[0-9]+){2,3}"
+  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.filename
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+fileName: KeePassXC-x64.msi
+iconFile: keepassxc.png
+id: keepassxc
+displayName: KeePassXC
+publisher: KeePassXC Team
+description: KeePassXC is a free, open source, cross-platform password manager that stores credentials in an encrypted database with browser integration, TOTP and SSH agent support.
+fileType: msi
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
