@@ -39,7 +39,7 @@ AfterAll {
     # session state, while this file imported them into Pester's, so two copies of
     # each are loaded now. Unload both or Mock -ModuleName in the test files that
     # run next refuses to choose.
-    Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph', 'YardstickGitHub', 'YardstickRecipeEvidence', 'YardstickRecipeSync', 'YardstickLog' -All |
+    Get-Module -Name 'Yardstick', 'YardstickSupport', 'YardstickCredential', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune', 'YardstickGraph', 'YardstickGitHub', 'YardstickRecipeEvidence', 'YardstickRecipeSync', 'YardstickFederation', 'YardstickLog' -All |
         Remove-Module -Force -ErrorAction SilentlyContinue
 }
 
@@ -229,6 +229,29 @@ demo.kiosk:
         $run = Invoke-HealthCheck
         $run.ExitCode | Should -Be 1
         ($run.Results | Where-Object Check -eq 'Credential').Message | Should -Match 'AppRegistration'
+    }
+
+    It "Signs in with workload identity federation instead of a stored credential" {
+        Set-TestPreferences
+        Mock Get-YardstickFederatedIdentity {
+            [pscustomobject]@{ TenantID = 'tenant-fed'; ClientID = 'client-fed'; Provider = 'GitHubActions'; ServiceConnectionID = $null; RequestUri = 'https://example.invalid'; TokenFile = $null }
+        }
+        $run = Invoke-HealthCheck
+        Should -Invoke Get-YardstickIntuneCredential -Times 0 -Exactly
+        Should -Invoke Get-YardstickAppTokenRoles -Times 1 -Exactly -ParameterFilter { $TenantId -eq 'tenant-fed' -and $ClientId -eq 'client-fed' -and -not $ClientSecret }
+        ($run.Results | Where-Object Check -eq 'Credential').Message | Should -Match 'GitHub Actions'
+        ($run.Results | Where-Object Check -eq 'Secret expiry').Level | Should -Be 'Skip'
+        ($run.Results | Where-Object Level -eq 'Fail').Message | Should -BeNullOrEmpty
+    }
+
+    It "Fails when workload identity federation is misconfigured" {
+        Set-TestPreferences
+        Mock Get-YardstickFederatedIdentity { throw 'Workload identity federation is enabled (YARDSTICK_TENANT_ID set) but is not configured correctly: YARDSTICK_CLIENT_ID is not set.' }
+        $run = Invoke-HealthCheck
+        $run.ExitCode | Should -Be 1
+        ($run.Results | Where-Object Check -eq 'Credential').Message | Should -Match 'YARDSTICK_CLIENT_ID is not set'
+        Should -Invoke Get-YardstickIntuneCredential -Times 0 -Exactly
+        Should -Invoke Get-YardstickAppTokenRoles -Times 0 -Exactly
     }
 
     It "Fails an expired secret and warns about one close to expiry" {

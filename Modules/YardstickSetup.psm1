@@ -957,15 +957,18 @@ function Get-YardstickAppTokenRoles {
     <#
     .SYNOPSIS
     Gets an app-only token with the given credentials and returns the Graph
-    application permissions in it (its "roles" claim).
+    application permissions in it (its "roles" claim). Without -ClientSecret the
+    token comes from workload identity federation.
     #>
     param(
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter(Mandatory)][string]$ClientId,
-        [Parameter(Mandatory)][string]$ClientSecret
+        [string]$ClientSecret
     )
 
-    $token = Connect-YardstickGraph -TenantID $TenantId -ClientID $ClientId -ClientSecret $ClientSecret -Force -PassThru
+    $connect = @{ TenantID = $TenantId; ClientID = $ClientId }
+    if ($ClientSecret) { $connect.ClientSecret = $ClientSecret }
+    $token = Connect-YardstickGraph @connect -Force -PassThru
     $claims = ConvertFrom-YardstickJwt -Token $token.AccessToken
     if ($claims.PSObject.Properties['roles']) { return @($claims.roles) }
     @()

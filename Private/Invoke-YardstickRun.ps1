@@ -1477,7 +1477,9 @@ try {
     $Script:IntuneCredential = Update-YardstickSecretExpiration -Credential $Script:IntuneCredential
 } catch {
     Write-Log "Could not authenticate to Microsoft Graph: $_" -Level Error
-    Write-Log "If the client secret was rotated, store the new one with .\Set-YardstickCredential.ps1."
+    if (-not (Test-YardstickFederatedCredential $Script:IntuneCredential)) {
+        Write-Log "If the client secret was rotated, store the new one with .\Set-YardstickCredential.ps1."
+    }
     exit 1
 }
 Test-YardstickSecretExpiration -Credential $Script:IntuneCredential -Preferences $Prefs -NoEmail:$NoEmail | Out-Null
