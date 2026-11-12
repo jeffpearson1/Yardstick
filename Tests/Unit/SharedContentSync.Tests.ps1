@@ -4,6 +4,7 @@ BeforeAll {
     $script:repoRoot = (Resolve-Path "$PSScriptRoot\..\..").ProviderPath
     Import-Module powershell-yaml -ErrorAction Stop
     Import-Module (Join-Path $script:repoRoot 'Modules\YardstickSupport.psm1') -Force
+    Import-Module (Join-Path $script:repoRoot 'Modules\YardstickConfig.psm1') -Force
     Add-Type -AssemblyName System.Drawing
 
     function New-TestFolder {
@@ -351,6 +352,38 @@ Describe "Sync-YardstickSharedRecipeOverrides" {
         Get-ChildItem -LiteralPath $script:shareFolder, (Split-Path $script:local) -Force |
             Where-Object { $_.Name -like '*.tmp' -or $_.Name -like '*.lock' } | Should -BeNullOrEmpty
     }
+
+    It "Syncs with the recipeOverrides.yaml file in a folder given as the shared path" {
+        Set-TestFile $script:share 'zoom:', '  scopeTags:', "    - 'Labs'"
+        Set-TestFile $script:local 'jasp:', '  scopeTags:', "    - 'Mine'"
+        $script:share = $script:shareFolder
+        $result = Invoke-Sync
+        $result.Pushed | Should -Be @('jasp: scopeTags')
+        $result.SharedEntries | Should -Be 2
+        (Get-Entries (Join-Path $script:shareFolder 'recipeOverrides.yaml')).Keys | Should -Contain 'jasp'
+    }
+
+    It "Takes a path without a .yaml extension as a folder, even before the folder exists" {
+        # What setup stored for -SharedRecipeOverrides \\server\share\Yardstick
+        # when that folder did not exist yet.
+        Set-TestFile $script:local 'jasp:', '  scopeTags:', "    - 'Mine'"
+        $script:share = Join-Path $script:shareFolder 'Yardstick'
+        { Invoke-Sync } | Should -Throw "*'$script:share' is not reachable*"
+        Test-Path -LiteralPath $script:share | Should -BeFalse -Because 'a file by the folder''s name would stop the folder being created'
+
+        New-Item -ItemType Directory -Path $script:share | Out-Null
+        $result = Invoke-Sync
+        $result.Pushed | Should -Be @('jasp: scopeTags')
+        (Get-Entries (Join-Path $script:share 'recipeOverrides.yaml'))['jasp'].scopeTags | Should -Be @('Mine')
+    }
+
+    It "Keeps using a shared file without a .yaml extension that exists" {
+        $script:share = Join-Path $script:shareFolder 'overrides'
+        Set-TestFile $script:share 'zoom:', '  scopeTags:', "    - 'Labs'"
+        Set-TestFile $script:local '# none'
+        (Invoke-Sync).SharedEntries | Should -Be 1
+        Test-Path -LiteralPath $script:share -PathType Leaf | Should -BeTrue
+    }
 }
 
 Describe "Write-YardstickFileSafely" {
@@ -406,6 +439,107 @@ Describe "Invoke-YardstickSharedContentSync" {
         $messages[0].Level | Should -Be 'Info'
         $messages[1].Level | Should -Be 'Warning'
         $messages[1].Message | Should -BeLike '*zoom: scopeTags*changed both here and in the shared file*'
+    }
+
+    It "Syncs without a warning when SharedRecipeOverrides is a folder" {
+        # The handoff's reproduction: setup stored the folder, which was created later.
+        $shareFolder = New-TestFolder 'share'
+        $script:prefs.SharedIcons = $null
+        $script:prefs.SharedRecipeOverrides = $shareFolder
+        Set-TestFile $script:localOverrides 'zoom:', '  scopeTags:', "    - 'A'"
+
+        $messages = @(Invoke-YardstickSharedContentSync -Preferences $script:prefs -LocalOverridesPath $script:localOverrides -SharedOverridesCachePath $script:cache)
+        $messages.Level | Should -Be @('Info')
+        $messages[0].Message | Should -BeLike '*1 shared entry; sent zoom: scopeTags.'
+        Test-Path -LiteralPath (Join-Path $shareFolder 'recipeOverrides.yaml') -PathType Leaf | Should -BeTrue
+        Test-Path -LiteralPath $script:cache -PathType Leaf | Should -BeTrue
+    }
+}
+
+Describe "Resolve-YardstickSharedRecipeOverridesPath" {
+    BeforeEach {
+        $script:folder = New-TestFolder 'share'
+    }
+
+    It "Means the recipeOverrides.yaml file in a folder" {
+        Resolve-YardstickSharedRecipeOverridesPath -Path $script:folder | Should -Be (Join-Path $script:folder 'recipeOverrides.yaml')
+        Resolve-YardstickSharedRecipeOverridesPath -Path "$script:folder\" | Should -Be (Join-Path $script:folder 'recipeOverrides.yaml')
+    }
+
+    It "Takes a path without a .yaml or .yml extension as a folder, whether or not it exists" {
+        $missing = Join-Path $script:folder 'Yardstick'
+        Resolve-YardstickSharedRecipeOverridesPath -Path $missing | Should -Be (Join-Path $missing 'recipeOverrides.yaml')
+        $offline = Join-Path $TestDrive 'no-such-share\Intune.Yardstick'
+        Resolve-YardstickSharedRecipeOverridesPath -Path $offline | Should -Be (Join-Path $offline 'recipeOverrides.yaml')
+    }
+
+    It "Leaves a .yaml or .yml file alone, whether or not it exists" {
+        foreach ($name in 'recipeOverrides.yaml', 'team.yml', 'Overrides.YAML') {
+            $path = Join-Path $script:folder $name
+            Resolve-YardstickSharedRecipeOverridesPath -Path $path | Should -Be $path
+        }
+        $offline = Join-Path $TestDrive 'no-such-share\recipeOverrides.yaml'
+        Resolve-YardstickSharedRecipeOverridesPath -Path $offline | Should -Be $offline
+    }
+
+    It "Leaves an existing file without a .yaml extension alone" {
+        $path = Join-Path $script:folder 'overrides'
+        Set-TestFile $path '# none'
+        Resolve-YardstickSharedRecipeOverridesPath -Path $path | Should -Be $path
+    }
+
+    It "Returns a blank value unchanged" {
+        Resolve-YardstickSharedRecipeOverridesPath -Path '' | Should -Be ''
+        Resolve-YardstickSharedRecipeOverridesPath -Path $null | Should -Be ''
+    }
+}
+
+Describe "Test-YardstickPreferences with a SharedRecipeOverrides folder" {
+    BeforeEach {
+        $root = New-TestFolder 'root'
+        Copy-Item (Join-Path $script:repoRoot 'Yardstick.Project.psd1') $root
+        New-Item -ItemType Directory -Path (Join-Path $root 'Recipes') | Out-Null
+        $script:prefs = Import-YardstickPreferences -ProjectRoot $root -AllowMissing
+        $script:prefs.syncSharedContent = $true
+    }
+
+    It "Warns, rather than fails, and uses the recipeOverrides.yaml file in it" {
+        $folder = New-TestFolder 'share'
+        $script:prefs.SharedRecipeOverrides = $folder
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeTrue
+        $result.Errors | Should -BeNullOrEmpty
+        $result.Warnings | Should -HaveCount 1
+        $result.Warnings[0] | Should -BeLike "*'$folder' is a folder*Set SharedRecipeOverrides to '$(Join-Path $folder 'recipeOverrides.yaml')'*"
+    }
+
+    It "Also warns when that folder is not reachable" {
+        $folder = Join-Path (New-TestFolder 'share') 'Yardstick'
+        $script:prefs.SharedRecipeOverrides = $folder
+        $result = Test-YardstickPreferences -Preferences $script:prefs
+        $result.IsValid | Should -BeTrue
+        $result.Warnings | Should -HaveCount 2
+        $result.Warnings[0] | Should -BeLike "*'$folder' is a folder*"
+        $result.Warnings[1] | Should -BeLike "*file '$(Join-Path $folder 'recipeOverrides.yaml')' is not reachable*"
+    }
+}
+
+Describe "ConvertTo-YardstickUncPath" {
+    It "Replaces a mapped network drive with its share" {
+        Mock Get-PSDrive { [pscustomobject]@{ Name = 'Z'; DisplayRoot = '\\server\share' } } -ModuleName YardstickConfig
+        ConvertTo-YardstickUncPath 'Z:\Intune\Icons' | Should -Be '\\server\share\Intune\Icons'
+        ConvertTo-YardstickUncPath 'z:\' | Should -Be '\\server\share\'
+        ConvertTo-YardstickUncPath 'Z:' | Should -Be '\\server\share\'
+    }
+
+    It "Leaves local drives, unknown drives and UNC paths alone" {
+        Mock Get-PSDrive { [pscustomobject]@{ Name = 'C'; DisplayRoot = $null } } -ModuleName YardstickConfig -ParameterFilter { $Name -eq 'C' }
+        Mock Get-PSDrive { } -ModuleName YardstickConfig -ParameterFilter { $Name -eq 'Q' }
+        ConvertTo-YardstickUncPath 'C:\Intune\Icons' | Should -Be 'C:\Intune\Icons'
+        ConvertTo-YardstickUncPath 'Q:\Intune\Icons' | Should -Be 'Q:\Intune\Icons'
+        ConvertTo-YardstickUncPath '\\server\share\Icons' | Should -Be '\\server\share\Icons'
+        ConvertTo-YardstickUncPath 'Icons' | Should -Be 'Icons'
+        ConvertTo-YardstickUncPath '' | Should -Be ''
     }
 }
 

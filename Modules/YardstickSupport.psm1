@@ -4981,7 +4981,8 @@ function Sync-YardstickSharedRecipeOverrides {
     This machine's overrides file (Local\recipeOverrides.yaml).
 
     .PARAMETER SharedPath
-    The shared overrides file, from the SharedRecipeOverrides preference.
+    The shared overrides file, from the SharedRecipeOverrides preference. A
+    folder means the recipeOverrides.yaml file in it.
 
     .PARAMETER CachePath
     The local copy of the shared file (Get-YardstickSharedRecipeOverridesCachePath).
@@ -5005,12 +5006,17 @@ function Sync-YardstickSharedRecipeOverrides {
     if (-not $StatePath) { $StatePath = [IO.Path]::ChangeExtension($CachePath, '.sync.json') }
     $warnings = [System.Collections.Generic.List[string]]::new()
 
+    # A folder, or a path with no .yaml or .yml extension that is not a file,
+    # means the recipeOverrides.yaml file in it. Setup used to store a folder that
+    # did not exist yet as the file. The same rule as
+    # Resolve-YardstickSharedRecipeOverridesPath in YardstickConfig.
+    if ((Test-Path -LiteralPath $SharedPath -PathType Container) -or
+        ([IO.Path]::GetExtension($SharedPath) -notin '.yaml', '.yml' -and -not (Test-Path -LiteralPath $SharedPath -PathType Leaf))) {
+        $SharedPath = Join-Path $SharedPath 'recipeOverrides.yaml'
+    }
     $sharedFolder = Split-Path -Parent $SharedPath
     if (-not $sharedFolder -or -not (Test-Path -LiteralPath $sharedFolder -PathType Container)) {
         throw "The shared overrides folder '$sharedFolder' is not reachable."
-    }
-    if (Test-Path -LiteralPath $SharedPath -PathType Container) {
-        throw "SharedRecipeOverrides '$SharedPath' is a folder, not a file."
     }
 
     try {

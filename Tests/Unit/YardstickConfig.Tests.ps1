@@ -481,14 +481,6 @@ Describe "Test-YardstickPreferences" {
         $result.IsValid | Should -BeTrue
         $result.Warnings | Should -BeNullOrEmpty
     }
-
-    It "Rejects a shared overrides path that is a folder" {
-        $script:prefs.syncSharedContent = $true
-        $script:prefs.SharedRecipeOverrides = $TestDrive
-        $result = Test-YardstickPreferences -Preferences $script:prefs
-        $result.IsValid | Should -BeFalse
-        $result.Errors | Should -Match 'is a folder'
-    }
 }
 
 Describe "Allowed values stay in step with YardstickIntune" {

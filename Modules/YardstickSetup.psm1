@@ -1682,6 +1682,7 @@ function Get-YardstickSetupStatus {
             sharedIcons           = [string]$prefs.SharedIcons
             sharedRecipeOverrides = [string]$prefs.SharedRecipeOverrides
             syncSharedContent     = $prefs.syncSharedContent -eq $true
+            softwareDropbox       = [string]$prefs.SoftwareDropbox
             syncRecipes           = $prefs.syncRecipes -eq $true
             recipeRepository      = [string]$prefs.recipeRepository
             additionalRecipeRepositories = @(@($prefs.additionalRecipeRepositories) | Where-Object { $_ } | ForEach-Object { [string]$_ })

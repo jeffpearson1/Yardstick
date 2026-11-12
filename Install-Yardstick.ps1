@@ -101,11 +101,20 @@ full one.
 
 .PARAMETER SharedIcons
 Shared icon folder to sync with on every run. Setting it (or
--SharedRecipeOverrides) turns on syncSharedContent.
+-SharedRecipeOverrides) to a new path turns on syncSharedContent; passing the
+path already stored leaves syncSharedContent as it is. A mapped drive letter is
+stored as the share it maps to, because the scheduled task does not see it.
 
 .PARAMETER SharedRecipeOverrides
-Shared recipe overrides file to sync with on every run. A folder means the
-recipeOverrides.yaml file in it.
+Shared recipe overrides file to sync with on every run. A folder, or any path
+without a .yaml or .yml extension, means the recipeOverrides.yaml file in it,
+whether or not the folder exists yet.
+
+.PARAMETER SoftwareDropbox
+Folder where installers for manualDownload recipes are put by hand, in a
+subfolder per recipe id. Works for development-only instances and with
+-NonInteractive; '' clears it. A mapped drive letter is stored as the share it
+maps to.
 
 .PARAMETER Owner
 Shown as the Owner of every app Yardstick creates in Intune.
@@ -238,7 +247,8 @@ parameters) exit 1 without writing -ResultPath; the console says why.
                     LocalMachine or Default), groupPolicy, allowsScripts
   preferences       exists, path, readError (null unless the file could not be
                     read), developmentOnly, sharedIcons, sharedRecipeOverrides,
-                    syncSharedContent, syncRecipes, recipeRepository,
+                    syncSharedContent, softwareDropbox ("" when unset),
+                    syncRecipes, recipeRepository,
                     additionalRecipeRepositories, requireRecipeEvidence (the
                     built-in defaults when exists is false)
   unwritablePaths   count, examples (up to 5)
@@ -295,7 +305,8 @@ param(
     [string[]]$InstallOptionalModule,
     [switch]$SetExecutionPolicy,
     [switch]$Status,
-    [string]$ResultPath
+    [string]$ResultPath,
+    [string]$SoftwareDropbox
 )
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
@@ -685,7 +696,9 @@ function Set-SharedContentPreferences {
     <#
     Asks for (or takes from -SharedIcons and -SharedRecipeOverrides) the shared
     icon folder and recipe overrides file, and turns syncSharedContent on or off
-    to match.
+    to match. The parameters turn sync on only when they change a path, so
+    running setup again with the stored paths leaves a sync someone turned off
+    alone. Without either, -NonInteractive only repairs the stored paths.
     #>
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -695,11 +708,31 @@ function Set-SharedContentPreferences {
     $currentIcons = [string]$Preferences.SharedIcons
     $currentOverrides = [string]$Preferences.SharedRecipeOverrides
     $syncOn = $Preferences.syncSharedContent -eq $true
+    # A mapped drive means the share it maps to: the scheduled task and elevated
+    # processes do not see the mapping. A folder for the overrides, even one that
+    # does not exist yet, means the recipeOverrides.yaml file in it.
+    $normalize = {
+        param([string]$IconPath, [string]$OverridesPath)
+        ConvertTo-YardstickUncPath $IconPath
+        Resolve-YardstickSharedRecipeOverridesPath -Path (ConvertTo-YardstickUncPath $OverridesPath)
+    }
+    $repairedIcons, $repairedOverrides = & $normalize $currentIcons $currentOverrides
+    $askedToSync = $false
 
     if ($ScriptBound.ContainsKey('SharedIcons') -or $ScriptBound.ContainsKey('SharedRecipeOverrides')) {
         $icons = if ($ScriptBound.ContainsKey('SharedIcons')) { ConvertFrom-YardstickQuotedPath $SharedIcons } else { $currentIcons }
         $overrides = if ($ScriptBound.ContainsKey('SharedRecipeOverrides')) { ConvertFrom-YardstickQuotedPath $SharedRecipeOverrides } else { $currentOverrides }
     } elseif ($NonInteractive) {
+        # Paths an earlier version of setup stored: a mapped drive, or a folder
+        # for the overrides file.
+        if ($repairedIcons -ne $currentIcons) {
+            Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value $repairedIcons
+            Write-YardstickSetupStatus "SharedIcons is now $repairedIcons." -Level OK
+        }
+        if ($repairedOverrides -ne $currentOverrides) {
+            Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value $repairedOverrides
+            Write-YardstickSetupStatus "SharedRecipeOverrides is now $repairedOverrides." -Level OK
+        }
         return
     } else {
         Write-Host ''
@@ -712,18 +745,18 @@ function Set-SharedContentPreferences {
             }
             return
         }
+        $askedToSync = $true
         $icons = Read-YardstickSetupValue -Prompt 'Shared icon folder (blank to leave off)' -Default $currentIcons -Path
         $overrides = Read-YardstickSetupValue -Prompt 'Shared recipe overrides file, or the folder it is in (blank to leave off)' -Default $currentOverrides -Path
     }
 
-    # A folder means the overrides file in it.
-    if ($overrides -and ($overrides -match '[\\/]$' -or (Test-Path -LiteralPath $overrides -PathType Container))) {
-        $overrides = Join-Path $overrides 'recipeOverrides.yaml'
-    }
+    $icons, $overrides = & $normalize $icons $overrides
 
     if ($icons -ne $currentIcons) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value $icons }
     if ($overrides -ne $currentOverrides) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value $overrides }
-    $enable = [bool]($icons -or $overrides)
+    $havePaths = [bool]($icons -or $overrides)
+    $pathsChanged = $icons -ne $repairedIcons -or $overrides -ne $repairedOverrides
+    $enable = $havePaths -and ($syncOn -or $askedToSync -or $pathsChanged)
     if ($enable -ne $syncOn) { Set-YardstickPreferenceValue -Path $Path -Key 'syncSharedContent' -Value $enable }
 
     if ($enable) {
@@ -735,8 +768,15 @@ function Set-SharedContentPreferences {
             }
         }
         if ($overrides) {
-            Write-YardstickSetupStatus "Recipe overrides will sync with $overrides." -Level OK
+            $overridesFolder = Split-Path -Parent $overrides
+            if ($overridesFolder -and ($problem = Get-YardstickFolderProblem -Path $overridesFolder)) {
+                Write-YardstickSetupStatus "Shared recipe overrides folder $overridesFolder is not reachable from here: $problem Recipe overrides will sync with $overrides once it is." -Level Warn
+            } else {
+                Write-YardstickSetupStatus "Recipe overrides will sync with $overrides." -Level OK
+            }
         }
+    } elseif ($havePaths) {
+        Write-YardstickSetupStatus "Shared icon and recipe override sync stays off: it was turned off, and the locations have not changed. Set syncSharedContent: true in $Path, or run .\Install-Yardstick.ps1 -Step Preferences and answer yes, to turn it back on." -Level OK
     } elseif ($syncOn) {
         Write-YardstickSetupStatus 'Shared icon and recipe override sync is off.' -Level OK
     }
@@ -792,12 +832,25 @@ function Invoke-PreferencesStep {
 
     Set-SharedContentPreferences -Path $path -Preferences $prefs
 
+    if ($ScriptBound.ContainsKey('SoftwareDropbox')) {
+        $dropbox = ConvertTo-YardstickUncPath (ConvertFrom-YardstickQuotedPath $SoftwareDropbox)
+        if ($dropbox -ne [string]$prefs.SoftwareDropbox) { Set-YardstickPreferenceValue -Path $path -Key 'SoftwareDropbox' -Value $dropbox }
+        if (-not $dropbox) {
+            Write-YardstickSetupStatus 'No software dropbox is set, so recipes with manualDownload: true cannot run.' -Level OK
+        } elseif ($problem = Get-YardstickFolderProblem -Path (Resolve-YardstickPreferencePath -Path $dropbox -ProjectRoot $Root)) {
+            Write-YardstickSetupStatus "Software dropbox $dropbox is not reachable from here: $problem" -Level Warn
+        } else {
+            Write-YardstickSetupStatus "Recipes with manualDownload: true will take their installers from $dropbox." -Level OK
+        }
+    }
+
     if (-not $NonInteractive -and -not $developmentOnlyInstance) {
         Write-Host ''
         Write-Host 'Optional folders: a backup location for every uploaded package, and a dropbox for' -ForegroundColor DarkGray
         Write-Host 'recipes whose installers have to be downloaded by hand (manualDownload: true).' -ForegroundColor DarkGray
         if (Read-YardstickSetupYesNo -Prompt 'Set up optional folders now?' -Default $false) {
             foreach ($key in @('Backup', 'SoftwareDropbox', 'SoftwareArchive')) {
+                if ($ScriptBound.ContainsKey($key)) { continue }
                 $value = Read-YardstickSetupValue -Prompt "$key folder (blank to leave off)" -Default ([string]$prefs[$key]) -Path
                 if ($value -ne [string]$prefs[$key]) { Set-YardstickPreferenceValue -Path $path -Key $key -Value $value }
             }
