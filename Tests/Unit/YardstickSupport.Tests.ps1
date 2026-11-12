@@ -414,6 +414,30 @@ Describe "Send-YardstickEmailReport over SMTP" {
     }
 }
 
+Describe "Get-FailedApplication" {
+    It "Returns nothing before any application is tracked" {
+        InModuleScope YardstickSupport {
+            Initialize-ApplicationTracker
+            @(Get-FailedApplication).Count | Should -Be 0
+        }
+    }
+
+    It "Returns each failed application once" {
+        InModuleScope YardstickSupport {
+            Mock Write-Log {}
+            Initialize-ApplicationTracker
+            Add-FailedApplication -ApplicationId 'app-a' -ErrorMessage 'download failed' -FailureStage 'Download'
+            Add-FailedApplication -ApplicationId 'app-a' -ErrorMessage 'again' -FailureStage 'General Processing'
+            Add-FailedApplication -ApplicationId 'app-b' -ErrorMessage 'upload failed' -FailureStage 'Upload'
+            Add-SuccessfulApplication -ApplicationId 'app-c' -DisplayName 'App C' -Version '1.0'
+
+            $failed = @(Get-FailedApplication)
+            $failed.ApplicationId | Should -Be @('app-a', 'app-b')
+            $failed[0].FailureStage | Should -Be 'Download'
+        }
+    }
+}
+
 Describe "Send-YardstickEmailReport audiences" {
     BeforeAll {
         $script:audiencePrefs = {
