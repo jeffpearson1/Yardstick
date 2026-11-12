@@ -5464,6 +5464,20 @@ function Test-RecipeSchema {
         }
     }
 
+    # Validated as a real boolean because [bool]'false' is $true, so a quoted value would feature the app.
+    if ($Recipe.ContainsKey('featured') -and $null -ne $Recipe['featured'] -and $Recipe['featured'] -isnot [bool]) {
+        $errors.Add("Field 'featured' must be true or false (unquoted)")
+    }
+
+    if ($Recipe.ContainsKey('categories') -and $null -ne $Recipe['categories']) {
+        $categories = $Recipe['categories']
+        if ($categories -is [string] -or $categories -isnot [System.Collections.IEnumerable]) {
+            $errors.Add("Field 'categories' must be a list, e.g. categories: [""productivity"", ""collaboration""]")
+        } elseif (@($categories | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+            $errors.Add("Field 'categories' must contain only non-empty category names")
+        }
+    }
+
     # Conditionally required fields based on detectionType
     $detectionTypeFields = @{
         'file'     = @('fileDetectionPath', 'fileDetectionMethod', 'fileDetectionName')
@@ -5594,7 +5608,7 @@ function Test-RecipeSchema {
         'dependentLinkUpdateRetryCount', 'dependentLinkUpdateRetryDelaySeconds',
         'dependentLinkUpdateTimeoutSeconds',
         'supersedence', 'uninstallPreviousVersion', 'autoUpdateOnAssignment', 'autoUpdate',
-        'groupSkipAutoUpdates',
+        'groupSkipAutoUpdates', 'categories', 'featured',
         'base'
     )
     $knownFieldsLower = $knownFields | ForEach-Object { $_.ToLower() }

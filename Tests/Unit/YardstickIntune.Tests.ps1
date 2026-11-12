@@ -42,6 +42,16 @@ Describe 'Yardstick Intune payload builders' {
             $body.roleScopeTagIds | Should -Be @('0')
         }
     }
+
+    It 'only marks the app featured when asked' {
+        InModuleScope YardstickIntune {
+            $metadata = [xml]'<ApplicationInfo><FileName>payload.bin</FileName><SetupFile>setup.exe</SetupFile></ApplicationInfo>'
+            $requirement = New-YardstickWin32AppRequirementRule -Architecture x64 -MinimumSupportedWindowsRelease W10_22H2
+            $common = @{ Metadata = $metadata; DisplayName = 'App'; Description = 'Desc'; Publisher = 'Pub'; InstallCommandLine = 'i'; UninstallCommandLine = 'u'; DetectionRule = @{}; RequirementRule = $requirement }
+            (New-YardstickWin32AppBody @common).isFeatured | Should -BeFalse
+            (New-YardstickWin32AppBody @common -Featured).isFeatured | Should -BeTrue
+        }
+    }
 }
 
 Describe 'Yardstick Intune assignments' {
@@ -683,6 +693,109 @@ Describe 'Yardstick Intune content upload' {
                 $Script:sends | Should -Be 2
                 # Each attempt's half-made app is removed.
                 Should -Invoke Remove-YardstickWin32App -Times 2 -Exactly
+            }
+        }
+    }
+
+    Context 'categories' {
+        BeforeEach {
+            $extractRoot = Join-Path $TestDrive 'extract'
+            New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+            $Payload = Join-Path $extractRoot 'payload.bin'
+            [io.file]::WriteAllBytes($Payload, [byte[]]::new(8))
+
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                Mock Get-YardstickWin32AppMetadata {
+                    [xml]@'
+<ApplicationInfo>
+  <FileName>payload.intunewin</FileName>
+  <UnencryptedContentSize>100</UnencryptedContentSize>
+  <EncryptionInfo>
+    <EncryptionKey>k</EncryptionKey>
+    <MacKey>m</MacKey>
+    <InitializationVector>iv</InitializationVector>
+    <Mac>mac</Mac>
+    <ProfileIdentifier>p</ProfileIdentifier>
+    <FileDigest>d</FileDigest>
+    <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+  </EncryptionInfo>
+</ApplicationInfo>
+'@
+                }
+                Mock New-YardstickWin32AppBody { @{} }
+                Mock Expand-YardstickWin32AppContent { $Payload }.GetNewClosure()
+                Mock Remove-YardstickWin32App {}
+                Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
+            }
+        }
+
+        It 'links each named category to the new app, matching case-insensitively' {
+            InModuleScope YardstickIntune {
+                $Script:refs = [System.Collections.Generic.List[object]]::new()
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -eq 'deviceAppManagement/mobileAppCategories') {
+                        return @(
+                            [pscustomobject]@{ id = 'cat-prod'; displayName = 'Productivity' }
+                            [pscustomobject]@{ id = 'cat-biz'; displayName = 'Business' }
+                        )
+                    }
+                    if ($Resource -like '*/categories/$ref') { $Script:refs.Add($Body); return }
+                    if ($Resource -like '*contentVersions') { throw 'stop after create' }
+                    [pscustomobject]@{ id = 'app-1' }
+                }
+
+                { Add-YardstickWin32App -FilePath 'x.intunewin' `
+                        -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                        -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                        -DetectionRule @{} -RequirementRule @{} -Category 'productivity', 'Business' } |
+                    Should -Throw '*stop after create*'
+
+                # Each upload attempt creates a fresh app, so the retry links them again.
+                $Script:refs.Count | Should -Be 4
+                $Script:refs[0].'@odata.id' | Should -BeLike '*/mobileAppCategories/cat-prod'
+                $Script:refs[1].'@odata.id' | Should -BeLike '*/mobileAppCategories/cat-biz'
+                $Script:refs[2].'@odata.id' | Should -BeLike '*/mobileAppCategories/cat-prod'
+                $Script:refs[3].'@odata.id' | Should -BeLike '*/mobileAppCategories/cat-biz'
+                Should -Invoke New-YardstickWin32AppBody -ParameterFilter { -not $PSBoundParameters.ContainsKey('Category') }
+            }
+        }
+
+        It 'fails before creating anything when a category does not exist' {
+            InModuleScope YardstickIntune {
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -eq 'deviceAppManagement/mobileAppCategories') {
+                        return @([pscustomobject]@{ id = 'cat-prod'; displayName = 'Productivity' })
+                    }
+                    throw "unexpected call to $Resource"
+                }
+
+                { Add-YardstickWin32App -FilePath 'x.intunewin' `
+                        -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                        -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                        -DetectionRule @{} -RequirementRule @{} -Category 'collaboration' } |
+                    Should -Throw "*app category named 'collaboration'*"
+
+                Should -Invoke Get-YardstickWin32AppMetadata -Times 0 -Exactly
+                Should -Invoke Remove-YardstickWin32App -Times 0 -Exactly
+            }
+        }
+
+        It 'makes no category calls when none are given' {
+            InModuleScope YardstickIntune {
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -like '*contentVersions') { throw 'stop after create' }
+                    [pscustomobject]@{ id = 'app-1' }
+                }
+
+                { Add-YardstickWin32App -FilePath 'x.intunewin' `
+                        -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                        -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                        -DetectionRule @{} -RequirementRule @{} -Category @() } |
+                    Should -Throw '*stop after create*'
+
+                Should -Invoke Invoke-YardstickGraphRequest -Times 0 -Exactly -ParameterFilter { $Resource -like '*categor*' }
             }
         }
     }

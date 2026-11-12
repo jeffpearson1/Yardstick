@@ -48,6 +48,45 @@ Describe "Test-RecipeSchema" {
             $result.Errors.Count | Should -Be 0
         }
 
+        It "Accepts an optional categories list" {
+            $recipe = New-ValidRecipe
+            $recipe["categories"] = [System.Collections.Generic.List[object]]@("productivity", "business")
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+            $result.Warnings | Should -Not -Contain "Unknown field 'categories' - this field is not used by Yardstick and may be a typo"
+        }
+
+        It "Rejects categories written as a single string" {
+            $recipe = New-ValidRecipe
+            $recipe["categories"] = "productivity"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeFalse
+            $result.Errors[0] | Should -BeLike "*'categories' must be a list*"
+        }
+
+        It "Rejects blank category names" {
+            $recipe = New-ValidRecipe
+            $recipe["categories"] = @("productivity", "")
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeFalse
+        }
+
+        It "Accepts a boolean featured flag" {
+            $recipe = New-ValidRecipe
+            $recipe["featured"] = $true
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeTrue
+            $result.Warnings | Should -Not -Contain "Unknown field 'featured' - this field is not used by Yardstick and may be a typo"
+        }
+
+        It "Rejects featured written as a string" {
+            $recipe = New-ValidRecipe
+            $recipe["featured"] = "false"
+            $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
+            $result.IsValid | Should -BeFalse
+            $result.Errors[0] | Should -BeLike "*'featured' must be true or false*"
+        }
+
         It "Validates a file-detection recipe" {
             $recipe = New-ValidRecipe -DetectionType "file"
             $result = Test-RecipeSchema -Recipe $recipe -RecipeId "testapp"
