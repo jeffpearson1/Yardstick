@@ -705,16 +705,35 @@ function Set-SharedContentPreferences {
         [Parameter(Mandatory)][hashtable]$Preferences
     )
 
+    # Preferences come from Import-YardstickPreferences, so these are already
+    # resolved: environment variables expanded, relative paths anchored to $Root.
     $currentIcons = [string]$Preferences.SharedIcons
     $currentOverrides = [string]$Preferences.SharedRecipeOverrides
     $syncOn = $Preferences.syncSharedContent -eq $true
+    # Resolves a path the way a run will, so it compares with the stored ones and
+    # a relative overrides file is looked for under $Root, not the current folder.
     # A mapped drive means the share it maps to: the scheduled task and elevated
     # processes do not see the mapping. A folder for the overrides, even one that
     # does not exist yet, means the recipeOverrides.yaml file in it.
     $normalize = {
         param([string]$IconPath, [string]$OverridesPath)
-        ConvertTo-YardstickUncPath $IconPath
-        Resolve-YardstickSharedRecipeOverridesPath -Path (ConvertTo-YardstickUncPath $OverridesPath)
+        $resolve = {
+            param([string]$Value)
+            if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+            ConvertTo-YardstickUncPath (Resolve-YardstickPreferencePath -Path $Value -ProjectRoot $Root)
+        }
+        & $resolve $IconPath
+        Resolve-YardstickSharedRecipeOverridesPath -Path (& $resolve $OverridesPath)
+    }
+    # What to write for a changed path: the value as given, so a relative or
+    # %VARIABLE% path stays that way, unless normalizing changed more than that.
+    $toStore = {
+        param([string]$Given, [string]$Normalized)
+        if (-not $Normalized) { return '' }
+        $resolved = Resolve-YardstickPreferencePath -Path $Given -ProjectRoot $Root
+        if ($Normalized -eq $resolved) { return $Given }
+        if ($Normalized -eq (Join-Path $resolved 'recipeOverrides.yaml')) { return Join-Path $Given 'recipeOverrides.yaml' }
+        $Normalized
     }
     $repairedIcons, $repairedOverrides = & $normalize $currentIcons $currentOverrides
     $askedToSync = $false
@@ -750,10 +769,11 @@ function Set-SharedContentPreferences {
         $overrides = Read-YardstickSetupValue -Prompt 'Shared recipe overrides file, or the folder it is in (blank to leave off)' -Default $currentOverrides -Path
     }
 
+    $givenIcons, $givenOverrides = $icons, $overrides
     $icons, $overrides = & $normalize $icons $overrides
 
-    if ($icons -ne $currentIcons) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value $icons }
-    if ($overrides -ne $currentOverrides) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value $overrides }
+    if ($icons -ne $currentIcons) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value (& $toStore $givenIcons $icons) }
+    if ($overrides -ne $currentOverrides) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value (& $toStore $givenOverrides $overrides) }
     $havePaths = [bool]($icons -or $overrides)
     $pathsChanged = $icons -ne $repairedIcons -or $overrides -ne $repairedOverrides
     $enable = $havePaths -and ($syncOn -or $askedToSync -or $pathsChanged)
@@ -833,11 +853,21 @@ function Invoke-PreferencesStep {
     Set-SharedContentPreferences -Path $path -Preferences $prefs
 
     if ($ScriptBound.ContainsKey('SoftwareDropbox')) {
-        $dropbox = ConvertTo-YardstickUncPath (ConvertFrom-YardstickQuotedPath $SoftwareDropbox)
-        if ($dropbox -ne [string]$prefs.SoftwareDropbox) { Set-YardstickPreferenceValue -Path $path -Key 'SoftwareDropbox' -Value $dropbox }
+        # $prefs holds the resolved path, so compare resolved with resolved, and
+        # store the value as given (relative or %VARIABLE%) unless it was a mapped drive.
+        $givenDropbox = ConvertFrom-YardstickQuotedPath $SoftwareDropbox
+        $dropbox = ''
+        if (-not [string]::IsNullOrWhiteSpace($givenDropbox)) {
+            $resolvedDropbox = Resolve-YardstickPreferencePath -Path $givenDropbox -ProjectRoot $Root
+            $dropbox = ConvertTo-YardstickUncPath $resolvedDropbox
+        }
+        if ($dropbox -ne [string]$prefs.SoftwareDropbox) {
+            $storedDropbox = if ($dropbox -and $dropbox -eq $resolvedDropbox) { $givenDropbox } else { $dropbox }
+            Set-YardstickPreferenceValue -Path $path -Key 'SoftwareDropbox' -Value $storedDropbox
+        }
         if (-not $dropbox) {
             Write-YardstickSetupStatus 'No software dropbox is set, so recipes with manualDownload: true cannot run.' -Level OK
-        } elseif ($problem = Get-YardstickFolderProblem -Path (Resolve-YardstickPreferencePath -Path $dropbox -ProjectRoot $Root)) {
+        } elseif ($problem = Get-YardstickFolderProblem -Path $dropbox) {
             Write-YardstickSetupStatus "Software dropbox $dropbox is not reachable from here: $problem" -Level Warn
         } else {
             Write-YardstickSetupStatus "Recipes with manualDownload: true will take their installers from $dropbox." -Level OK

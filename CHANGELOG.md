@@ -90,11 +90,14 @@ All notable changes to Yardstick are recorded here. Versions follow
   (`-SharedIcons`, `-SharedRecipeOverrides`; a folder, or any path without a `.yaml`
   or `.yml` extension, means the `recipeOverrides.yaml` in it, even if the folder
   doesn't exist yet). A mapped drive letter is stored as the share it maps to, since
-  the scheduled task doesn't see drive mappings. Passing the locations already set
-  doesn't turn `syncSharedContent` back on after it was turned off.
+  the scheduled task doesn't see drive mappings. Relative and `%VARIABLE%` paths are
+  resolved against the Yardstick folder, as a run resolves them, and stored as given.
+  Passing the locations already set, in any of those forms, doesn't turn
+  `syncSharedContent` back on after it was turned off.
 - **`-SoftwareDropbox` in the installer**, which also works for development-only
   instances and with `-NonInteractive`, so the recipe harness can test
-  `manualDownload` recipes there. `''` clears it.
+  `manualDownload` recipes there. `''` clears it. `Invoke-RecipeInstallTest.ps1` now
+  resolves `SoftwareDropbox` as a run does, so relative and `%VARIABLE%` paths work.
 - **The installer can be driven by another program.** For the Yardstick Development
   Studio's setup wizard, which runs it without a console:
   - `-InstallOptionalModule` installs the named optional modules (Selenium,

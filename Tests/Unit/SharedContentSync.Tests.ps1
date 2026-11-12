@@ -524,6 +524,45 @@ Describe "Test-YardstickPreferences with a SharedRecipeOverrides folder" {
     }
 }
 
+Describe "Get-RecipeHarnessSoftwareDropbox" {
+    BeforeAll {
+        Import-Module (Join-Path $script:repoRoot 'Tests\RecipeHarness\RecipeTestSupport.psm1') -Force
+    }
+
+    BeforeEach {
+        $script:root = New-TestFolder 'root'
+        Copy-Item (Join-Path $script:repoRoot 'Yardstick.Project.psd1') $script:root
+        New-Item -ItemType Directory -Path (Join-Path $script:root 'Local') | Out-Null
+        $script:prefsPath = Join-Path $script:root 'Local\preferences.yaml'
+    }
+
+    AfterEach {
+        Remove-Item Env:\YARDSTICK_TEST_DROPBOX_ROOT -ErrorAction SilentlyContinue
+    }
+
+    It "Expands an environment variable, as a Yardstick run does" {
+        $env:YARDSTICK_TEST_DROPBOX_ROOT = $TestDrive
+        Set-TestFile $script:prefsPath "SoftwareDropbox: '%YARDSTICK_TEST_DROPBOX_ROOT%\SoftwareDropbox'"
+        Get-RecipeHarnessSoftwareDropbox -YardstickDevPath $script:root | Should -Be (Join-Path $TestDrive 'SoftwareDropbox')
+    }
+
+    It "Anchors a relative path to the Yardstick root, not the current folder" {
+        Set-TestFile $script:prefsPath 'SoftwareDropbox: Shared\SoftwareDropbox'
+        Push-Location $TestDrive
+        try {
+            Get-RecipeHarnessSoftwareDropbox -YardstickDevPath $script:root | Should -Be (Join-Path $script:root 'Shared\SoftwareDropbox')
+        } finally {
+            Pop-Location
+        }
+    }
+
+    It "Returns an empty string when none is set, or there is no preferences file" {
+        Get-RecipeHarnessSoftwareDropbox -YardstickDevPath $script:root | Should -Be ''
+        Set-TestFile $script:prefsPath 'SoftwareDropbox:'
+        Get-RecipeHarnessSoftwareDropbox -YardstickDevPath $script:root | Should -Be ''
+    }
+}
+
 Describe "ConvertTo-YardstickUncPath" {
     It "Replaces a mapped network drive with its share" {
         Mock Get-PSDrive { [pscustomobject]@{ Name = 'Z'; DisplayRoot = '\\server\share' } } -ModuleName YardstickConfig
