@@ -375,6 +375,49 @@ Describe "Set-YardstickPreferenceValue" {
 }
 
 
+Describe "Set-YardstickFolderPreference" {
+    BeforeEach {
+        $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $script:root
+        $script:file = Join-Path $script:root 'preferences.yaml'
+    }
+
+    It "Leaves the stored folder alone when it is given in another form" -TestCases @(
+        @{ Stored = 'Dropbox'; Given = '.\Dropbox\' }
+        @{ Stored = '\\server\share'; Given = '\\server\share\' }
+        @{ Stored = 'C:\Team\Dropbox'; Given = 'C:/Team/Other/../Dropbox/' }
+    ) {
+        Set-Content -LiteralPath $script:file -Value "SoftwareDropbox: '$Stored'"
+        $current = Resolve-YardstickPreferencePath -Path $Stored -ProjectRoot $script:root
+
+        Set-YardstickFolderPreference -Path $script:file -Key 'SoftwareDropbox' -Value $Given -Current $current -ProjectRoot $script:root |
+            Should -Be (ConvertTo-YardstickUncPath (Resolve-YardstickPreferencePath -Path $Given -ProjectRoot $script:root))
+        Get-Content -LiteralPath $script:file | Should -Be "SoftwareDropbox: '$Stored'"
+    }
+
+    It "Stores a changed folder as given" {
+        Set-Content -LiteralPath $script:file -Value "Backup: ''"
+        Set-YardstickFolderPreference -Path $script:file -Key 'Backup' -Value '"%TEMP%\Backup"' -Current '' -ProjectRoot $script:root |
+            Should -Be "$env:TEMP\Backup"
+        Get-Content -LiteralPath $script:file | Should -Be "Backup: '%TEMP%\Backup'"
+    }
+
+    It "Stores a mapped drive as the share it maps to" {
+        Mock Get-PSDrive { [pscustomobject]@{ Name = 'Z'; DisplayRoot = '\\server\share' } } -ModuleName YardstickConfig
+        Set-Content -LiteralPath $script:file -Value "Backup: 'Z:\Backup'"
+        Set-YardstickFolderPreference -Path $script:file -Key 'Backup' -Value 'Z:\Backup' -Current 'Z:\Backup' -ProjectRoot $script:root |
+            Should -Be '\\server\share\Backup'
+        Get-Content -LiteralPath $script:file | Should -Be "Backup: '\\server\share\Backup'"
+    }
+
+    It "Clears the folder when given a blank value" {
+        Set-Content -LiteralPath $script:file -Value "SoftwareArchive: 'Archive'"
+        Set-YardstickFolderPreference -Path $script:file -Key 'SoftwareArchive' -Value ' ' -Current (Join-Path $script:root 'Archive') -ProjectRoot $script:root |
+            Should -Be ''
+        Get-Content -LiteralPath $script:file | Should -Be 'SoftwareArchive:'
+    }
+}
+
 Describe "New-YardstickPreferencesFile" {
     BeforeEach { $script:root = New-TestProjectRoot }
 
@@ -1216,6 +1259,7 @@ Describe "Get-YardstickSetupStatus" {
         $status.preferences.developmentOnly | Should -BeFalse
         $status.preferences.sharedIcons | Should -Be ''
         $status.preferences.syncSharedContent | Should -BeFalse
+        $status.preferences.softwareDropbox | Should -Be ''
         $status.unwritablePaths.count | Should -Be 0
         $status.intuneWinAppUtil.present | Should -BeFalse
     }
@@ -1241,6 +1285,7 @@ Describe "Get-YardstickSetupStatus" {
         Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value '\\server\share\Icons'
         Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value '\\server\share\recipeOverrides.yaml'
         Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SoftwareDropbox' -Value '\\server\share\SoftwareDropbox'
         $tools = (Import-YardstickPreferences -ProjectRoot $script:root).Tools
         New-Item -ItemType Directory -Path $tools -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $tools 'IntuneWinAppUtil.exe') -Value 'tool'
@@ -1251,6 +1296,7 @@ Describe "Get-YardstickSetupStatus" {
         $status.preferences.sharedIcons | Should -Be '\\server\share\Icons'
         $status.preferences.sharedRecipeOverrides | Should -Be '\\server\share\recipeOverrides.yaml'
         $status.preferences.syncSharedContent | Should -BeTrue
+        $status.preferences.softwareDropbox | Should -Be '\\server\share\SoftwareDropbox'
         $status.intuneWinAppUtil.present | Should -BeTrue
         $status.intuneWinAppUtil.path | Should -Be (Join-Path $tools 'IntuneWinAppUtil.exe')
     }
@@ -1293,12 +1339,12 @@ Describe "Install-Yardstick.ps1 run by another program" {
 
         function Invoke-TestInstaller {
             # Started as the Studio starts it: an argument list, output captured, no console.
-            param([string]$Root, [string[]]$Arguments)
+            param([string]$Root, [string[]]$Arguments, [string]$WorkingDirectory = $Root)
             $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
             foreach ($argument in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'Install-Yardstick.ps1')) + $Arguments) {
                 $start.ArgumentList.Add($argument)
             }
-            $start.WorkingDirectory = $Root
+            $start.WorkingDirectory = $WorkingDirectory
             $start.UseShellExecute = $false
             $start.RedirectStandardOutput = $true
             $start.RedirectStandardError = $true
@@ -1376,5 +1422,225 @@ Describe "Install-Yardstick.ps1 run by another program" {
         $result.developmentOnly | Should -BeTrue
         $result.steps.step | Should -Be 'Preferences'
         $result.messages.message | Should -Contain 'Shared icon and recipe override sync is off.'
+    }
+
+    It "-SharedRecipeOverrides with a folder that does not exist yet stores the file in it" -Skip:$script:elevated {
+        # The handoff's reproduction: the share is there, the Yardstick folder is not yet.
+        $root = New-TestInstallerRoot
+        $folder = Join-Path $TestDrive "$(New-Guid)\Yardstick"
+        New-Item -ItemType Directory -Path (Split-Path $folder) | Out-Null
+        $resultPath = Join-Path $TestDrive "$(New-Guid)\result.json"
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-DevelopmentOnly', '-NonInteractive', '-SharedRecipeOverrides', $folder, '-ResultPath', $resultPath
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $prefs = Import-YardstickPreferences -ProjectRoot $root
+        $prefs.SharedRecipeOverrides | Should -Be (Join-Path $folder 'recipeOverrides.yaml')
+        $prefs.syncSharedContent | Should -BeTrue
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        $warning = @($result.messages | Where-Object level -eq 'Warn' | Where-Object message -like 'Shared recipe overrides folder*')
+        $warning | Should -HaveCount 1
+        $warning[0].message | Should -BeLike "*$folder is not reachable from here*"
+        Test-Path -LiteralPath $folder | Should -BeFalse
+    }
+
+    It "-NonInteractive repairs a folder stored as SharedRecipeOverrides" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $folder = Join-Path $TestDrive "$(New-Guid)\Yardstick"
+        $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value $folder
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $true
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive'
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        (Import-YardstickPreferences -ProjectRoot $root).SharedRecipeOverrides | Should -Be (Join-Path $folder 'recipeOverrides.yaml')
+    }
+
+    It "-NonInteractive repairs a %VARIABLE% folder stored as SharedRecipeOverrides in the form it was written in" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $env:YARDSTICK_TEST_SHARE = Join-Path $TestDrive "$(New-Guid)"
+        try {
+            $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+            Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+            Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value 'Shared\Icons'
+            Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value '%YARDSTICK_TEST_SHARE%\Yardstick'
+
+            $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive'
+
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+            $stored.SharedRecipeOverrides | Should -Be '%YARDSTICK_TEST_SHARE%\Yardstick\recipeOverrides.yaml'
+            $stored.SharedIcons | Should -Be 'Shared\Icons'
+        } finally {
+            Remove-Item Env:\YARDSTICK_TEST_SHARE -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "Passing a stored shared path with a trailing separator does not turn sync back on" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $icons = Join-Path $TestDrive "$(New-Guid)\Icons"
+        $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value $icons
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $false
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive', '-SharedIcons', "$icons\"
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $run.Output | Should -Match 'sync stays off'
+        $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+        $stored.syncSharedContent | Should -BeFalse
+        $stored.SharedIcons | Should -Be $icons
+    }
+
+    It "Passing the stored shared paths written another way leaves them and the sync alone" -Skip:$script:elevated {
+        # Copilot review of #42: \\server\share and \\server\share\ are the same share.
+        $root = New-TestInstallerRoot
+        $icons = '\\yardstick-test-server\share'
+        $folder = Join-Path $TestDrive "$(New-Guid)"
+        $overrides = Join-Path $folder 'recipeOverrides.yaml'
+        $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value $icons
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value $overrides
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $false
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive',
+            '-SharedIcons', "$icons\", '-SharedRecipeOverrides', "$($folder.Replace('\', '/'))/Other/../recipeOverrides.yaml"
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $run.Output | Should -Match 'sync stays off'
+        $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+        $stored.syncSharedContent | Should -BeFalse
+        $stored.SharedIcons | Should -Be $icons
+        $stored.SharedRecipeOverrides | Should -Be $overrides
+    }
+
+    It "Passing the stored shared paths does not turn sync back on" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $icons = Join-Path $TestDrive "$(New-Guid)\Icons"
+        $overrides = Join-Path $TestDrive "$(New-Guid)\recipeOverrides.yaml"
+        $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value $icons
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value $overrides
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $false
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive', '-SharedIcons', $icons, '-SharedRecipeOverrides', $overrides
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        (Import-YardstickPreferences -ProjectRoot $root).syncSharedContent | Should -BeFalse
+        $run.Output | Should -Match 'sync stays off'
+
+        # A new path does turn it on.
+        $newIcons = Join-Path $TestDrive "$(New-Guid)\Icons"
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive', '-SharedIcons', $newIcons
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $prefs = Import-YardstickPreferences -ProjectRoot $root
+        $prefs.syncSharedContent | Should -BeTrue
+        $prefs.SharedIcons | Should -Be $newIcons
+    }
+
+    It "Passing stored relative or %VARIABLE% shared paths again neither turns sync back on nor rewrites them" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $env:YARDSTICK_TEST_SHARE = Join-Path $TestDrive "$(New-Guid)"
+        try {
+            $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+            Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+            Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value 'Shared\Icons'
+            Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value '%YARDSTICK_TEST_SHARE%\recipeOverrides.yaml'
+            Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $false
+
+            $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive', '-SharedIcons', 'Shared\Icons', '-SharedRecipeOverrides', '%YARDSTICK_TEST_SHARE%\recipeOverrides.yaml'
+
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            $run.Output | Should -Match 'sync stays off'
+            $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+            $stored.syncSharedContent | Should -BeFalse
+            $stored.SharedIcons | Should -Be 'Shared\Icons'
+            $stored.SharedRecipeOverrides | Should -Be '%YARDSTICK_TEST_SHARE%\recipeOverrides.yaml'
+
+            # A new relative folder is stored as given, with the file name added.
+            $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive', '-SharedRecipeOverrides', '%YARDSTICK_TEST_SHARE%\Team'
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+            $stored.SharedRecipeOverrides | Should -Be '%YARDSTICK_TEST_SHARE%\Team\recipeOverrides.yaml'
+            $stored.syncSharedContent | Should -BeTrue
+        } finally {
+            Remove-Item Env:\YARDSTICK_TEST_SHARE -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "A relative overrides file without an extension is found under the Yardstick folder when run from elsewhere" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        New-Item -ItemType Directory -Path (Join-Path $root 'Shared') | Out-Null
+        Set-Content -LiteralPath (Join-Path $root 'Shared\overrides') -Value '# none'
+        $elsewhere = (New-Item -ItemType Directory -Path (Join-Path $TestDrive "$(New-Guid)")).FullName
+
+        $run = Invoke-TestInstaller -Root $root -WorkingDirectory $elsewhere -Arguments '-Step', 'Preferences', '-DevelopmentOnly', '-NonInteractive', '-SharedRecipeOverrides', 'Shared\overrides'
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $prefs = Import-YardstickPreferences -ProjectRoot $root
+        $prefs.SharedRecipeOverrides | Should -Be (Join-Path $root 'Shared\overrides')
+        (Get-Content -LiteralPath (Join-Path $root 'Local\preferences.yaml') -Raw | ConvertFrom-Yaml).SharedRecipeOverrides | Should -Be 'Shared\overrides'
+    }
+
+    It "-SoftwareDropbox keeps a relative or %VARIABLE% path as given, and passing it again changes nothing" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $env:YARDSTICK_TEST_SHARE = (New-Item -ItemType Directory -Path (Join-Path $TestDrive "$(New-Guid)")).FullName
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $env:YARDSTICK_TEST_SHARE 'SoftwareDropbox') | Out-Null
+            $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+            $resultPath = Join-Path $TestDrive "$(New-Guid)\result.json"
+
+            $run = Invoke-TestInstaller -Root $root -Arguments '-DevelopmentOnly', '-NonInteractive', '-Step', 'Preferences', '-SoftwareDropbox', '%YARDSTICK_TEST_SHARE%\SoftwareDropbox', '-ResultPath', $resultPath
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            (Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml).SoftwareDropbox | Should -Be '%YARDSTICK_TEST_SHARE%\SoftwareDropbox'
+            $resolved = Join-Path $env:YARDSTICK_TEST_SHARE 'SoftwareDropbox'
+            (Import-YardstickPreferences -ProjectRoot $root).SoftwareDropbox | Should -Be $resolved
+            $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            $result.messages.message | Should -Contain "Recipes with manualDownload: true will take their installers from $resolved."
+
+            $run = Invoke-TestInstaller -Root $root -Arguments '-NonInteractive', '-Step', 'Preferences', '-SoftwareDropbox', '%YARDSTICK_TEST_SHARE%\SoftwareDropbox'
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            (Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml).SoftwareDropbox | Should -Be '%YARDSTICK_TEST_SHARE%\SoftwareDropbox'
+
+            $run = Invoke-TestInstaller -Root $root -Arguments '-NonInteractive', '-Step', 'Preferences', '-SoftwareDropbox', 'Dropbox'
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            (Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml).SoftwareDropbox | Should -Be 'Dropbox'
+            (Import-YardstickPreferences -ProjectRoot $root).SoftwareDropbox | Should -Be (Join-Path $root 'Dropbox')
+        } finally {
+            Remove-Item Env:\YARDSTICK_TEST_SHARE -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "-SoftwareDropbox sets and clears the dropbox of a development-only instance, and -Status reports it" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $dropbox = (New-Item -ItemType Directory -Path (Join-Path $TestDrive "$(New-Guid)\SoftwareDropbox")).FullName
+        $resultPath = Join-Path $TestDrive "$(New-Guid)\result.json"
+        $statusPath = Join-Path $TestDrive "$(New-Guid)\status.json"
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-DevelopmentOnly', '-NonInteractive', '-Step', 'Preferences', '-SoftwareDropbox', $dropbox, '-ResultPath', $resultPath
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        (Import-YardstickPreferences -ProjectRoot $root).SoftwareDropbox | Should -Be $dropbox
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        $result.messages.message | Should -Contain "Recipes with manualDownload: true will take their installers from $dropbox."
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Status', '-ResultPath', $statusPath
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).preferences.softwareDropbox | Should -Be $dropbox
+
+        $missing = Join-Path $TestDrive "$(New-Guid)\SoftwareDropbox"
+        $run = Invoke-TestInstaller -Root $root -Arguments '-NonInteractive', '-Step', 'Preferences', '-SoftwareDropbox', $missing, '-ResultPath', $resultPath
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        @($result.messages | Where-Object { $_.level -eq 'Warn' -and $_.message -like "Software dropbox $missing is not reachable from here:*" }) |
+            Should -HaveCount 1
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-NonInteractive', '-Step', 'Preferences', '-SoftwareDropbox', ''
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        (Import-YardstickPreferences -ProjectRoot $root).SoftwareDropbox | Should -BeNullOrEmpty
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Status', '-ResultPath', $statusPath
+        (Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).preferences.softwareDropbox | Should -Be ''
     }
 }

@@ -351,6 +351,78 @@ function Get-YardstickFolderProblem {
 }
 
 
+function Resolve-YardstickSharedRecipeOverridesPath {
+    <#
+    .SYNOPSIS
+    Returns the shared recipe overrides file a SharedRecipeOverrides value means.
+
+    .DESCRIPTION
+    A folder means the recipeOverrides.yaml file in it. So does a path without a
+    .yaml or .yml extension that is not an existing file, because a folder that
+    does not exist yet, or sits on a share that is offline, cannot be told apart
+    from a file any other way. Anything else is returned unchanged.
+
+    Sync-YardstickSharedRecipeOverrides applies the same rule; YardstickSupport
+    does not load this module.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return [string]$Path }
+    if ((Test-Path -LiteralPath $Path -PathType Container) -or
+        ([IO.Path]::GetExtension($Path) -notin '.yaml', '.yml' -and -not (Test-Path -LiteralPath $Path -PathType Leaf))) {
+        return Join-Path $Path 'recipeOverrides.yaml'
+    }
+    $Path
+}
+
+
+function ConvertTo-YardstickUncPath {
+    <#
+    .SYNOPSIS
+    Replaces a mapped network drive letter in a path with the share it maps to.
+
+    .DESCRIPTION
+    Drive mappings belong to the signed-in session. Elevated processes and the
+    scheduled task do not see them (unless EnableLinkedConnections is set), so
+    a stored Z:\ path would not resolve there. Local drives, unmapped letters and
+    paths without a drive letter are returned unchanged.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Path)
+
+    if ([string]$Path -notmatch '^([A-Za-z]):([\\/].*)?$') { return [string]$Path }
+    $rest = ([string]$Matches[2]).Replace('/', '\')
+    $drive = Get-PSDrive -Name $Matches[1] -PSProvider FileSystem -ErrorAction SilentlyContinue
+    $root = if ($drive) { [string]$drive.DisplayRoot }
+    if (-not $root -or -not $root.StartsWith('\\')) { return $Path }
+    $root.TrimEnd('\') + $(if ($rest) { $rest } else { '\' })
+}
+
+
+function ConvertTo-YardstickComparablePath {
+    <#
+    .SYNOPSIS
+    Writes a resolved path in one form, so two ways of writing the same location
+    compare equal.
+
+    .DESCRIPTION
+    For a fully qualified path, forward slashes become backslashes and . and ..
+    segments and doubled separators collapse. A trailing separator is dropped
+    except after a drive root (C:\), so \\server\share and \\server\share\ are the
+    same. Case is left alone: PowerShell's -eq and -ne ignore it. Anything else (a
+    template placeholder, a relative path) only loses its trailing separator.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    $value = $Path
+    if ($value -match '^([A-Za-z]:[\\/]|[\\/]{2}[^\\/?.])') {
+        try { $value = [IO.Path]::GetFullPath($value) } catch { $value = $Path }
+    }
+    if ($value -match '^[A-Za-z]:[\\/]?$') { return $value }
+    $value.TrimEnd('\', '/')
+}
+
+
 function Test-YardstickPreferences {
     <#
     .SYNOPSIS
@@ -459,9 +531,14 @@ function Test-YardstickPreferences {
         }
         $sharedOverrides = [string]$Preferences.SharedRecipeOverrides
         if (-not [string]::IsNullOrWhiteSpace($sharedOverrides) -and $sharedOverrides -notmatch '<REPLACE_') {
-            if (Test-Path -LiteralPath $sharedOverrides -PathType Container) {
-                $errors.Add("SharedRecipeOverrides '$sharedOverrides' is a folder. Point it at a file in that folder, such as $(Join-Path $sharedOverrides 'recipeOverrides.yaml').")
-            } elseif (-not (Test-Path -LiteralPath $sharedOverrides -PathType Leaf)) {
+            # Setup used to store a folder that did not exist yet as the file. The
+            # sync uses the recipeOverrides.yaml file in it instead.
+            $sharedFile = Resolve-YardstickSharedRecipeOverridesPath -Path $sharedOverrides
+            if ($sharedFile -ne $sharedOverrides) {
+                $warnings.Add("SharedRecipeOverrides '$sharedOverrides' is a folder (or has no .yaml extension), so the recipeOverrides.yaml file in it is used. Set SharedRecipeOverrides to '$sharedFile' to make that explicit.")
+                $sharedOverrides = $sharedFile
+            }
+            if (-not (Test-Path -LiteralPath $sharedOverrides -PathType Leaf)) {
                 # A missing file in a reachable folder is created by the first sync.
                 $parent = Split-Path -Parent $sharedOverrides
                 if (-not $parent -or ($problem = Get-YardstickFolderProblem -Path $parent)) {
@@ -503,6 +580,9 @@ Export-ModuleMember -Function @(
     'Get-YardstickPreferenceAllowedValues',
     'ConvertFrom-YardstickQuotedPath',
     'Get-YardstickFolderProblem',
+    'Resolve-YardstickSharedRecipeOverridesPath',
+    'ConvertTo-YardstickUncPath',
+    'ConvertTo-YardstickComparablePath',
     'Resolve-YardstickPreferencePath',
     'Get-YardstickProjectLayout',
     'Get-YardstickPreferencesPath',

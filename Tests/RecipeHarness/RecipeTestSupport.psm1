@@ -694,8 +694,25 @@ function Sync-RecipeHarnessSharedContent {
     }
 }
 
+function Get-RecipeHarnessSoftwareDropbox {
+    <#
+    .SYNOPSIS
+    Returns the SoftwareDropbox folder from the Yardstick preferences, resolved
+    as a Yardstick run resolves it, or an empty string when none is set.
+
+    .DESCRIPTION
+    Environment variables are expanded and a relative path is anchored to the
+    Yardstick root. Needs the Yardstick module (Yardstick.psd1) to be imported first.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string] $YardstickDevPath)
+
+    [string](Import-YardstickPreferences -ProjectRoot $YardstickDevPath -AllowMissing)['SoftwareDropbox']
+}
+
 Export-ModuleMember -Function Test-IsElevated, Expand-RecipeString, Expand-RecipeToken,
 ConvertTo-ComparableVersion, Compare-DetectionValue, Get-InstalledPackage,
 Get-SystemSnapshot, Compare-SystemSnapshot, Invoke-TestProcess, Invoke-CommandLine,
 Invoke-DetectionScript, Get-RegistryValueForDetection, Test-RecipeDetection,
-Sync-RecipeHarnessSharedContent
+Sync-RecipeHarnessSharedContent, Get-RecipeHarnessSoftwareDropbox

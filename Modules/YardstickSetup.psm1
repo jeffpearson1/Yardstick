@@ -523,6 +523,47 @@ function Set-YardstickPreferenceValue {
     }
 }
 
+
+function Set-YardstickFolderPreference {
+    <#
+    .SYNOPSIS
+    Sets an optional folder preference (SoftwareDropbox, Backup, SoftwareArchive)
+    to a folder given at a prompt or as a setup parameter.
+
+    .DESCRIPTION
+    The folder is resolved the way a run resolves it and compared with the
+    current, already resolved value, so the stored folder written another way
+    (relative, %VARIABLE%, a trailing separator, forward slashes) changes nothing.
+    A changed folder is stored as given, so relative and %VARIABLE% paths stay
+    that way, except that a mapped drive is stored as the share it maps to: the
+    scheduled task and elevated processes do not see the mapping. A blank value
+    clears the preference.
+
+    .OUTPUTS
+    The folder as a run will use it, or '' when there is none.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Key,
+        [AllowNull()][AllowEmptyString()][string]$Value,
+        [AllowNull()][AllowEmptyString()][string]$Current,
+        [Parameter(Mandatory)][string]$ProjectRoot
+    )
+
+    $given = ConvertFrom-YardstickQuotedPath $Value
+    $resolved = ''
+    $folder = ''
+    if (-not [string]::IsNullOrWhiteSpace($given)) {
+        $resolved = Resolve-YardstickPreferencePath -Path $given -ProjectRoot $ProjectRoot
+        $folder = ConvertTo-YardstickUncPath $resolved
+    }
+    if ((ConvertTo-YardstickComparablePath $folder) -ne (ConvertTo-YardstickComparablePath $Current)) {
+        $stored = if ($folder -eq $resolved) { $given } else { $folder }
+        Set-YardstickPreferenceValue -Path $Path -Key $Key -Value $stored
+    }
+    $folder
+}
+
 #endregion
 
 
@@ -1682,6 +1723,7 @@ function Get-YardstickSetupStatus {
             sharedIcons           = [string]$prefs.SharedIcons
             sharedRecipeOverrides = [string]$prefs.SharedRecipeOverrides
             syncSharedContent     = $prefs.syncSharedContent -eq $true
+            softwareDropbox       = [string]$prefs.SoftwareDropbox
             syncRecipes           = $prefs.syncRecipes -eq $true
             recipeRepository      = [string]$prefs.recipeRepository
             additionalRecipeRepositories = @(@($prefs.additionalRecipeRepositories) | Where-Object { $_ } | ForEach-Object { [string]$_ })
@@ -1718,6 +1760,7 @@ Export-ModuleMember -Function @(
     'New-YardstickPreferencesFile'
     'ConvertTo-YardstickYamlValue'
     'Set-YardstickPreferenceValue'
+    'Set-YardstickFolderPreference'
     'Get-YardstickSetupGraphError'
     'Connect-YardstickSetupGraph'
     'Use-YardstickSetupAppCredential'

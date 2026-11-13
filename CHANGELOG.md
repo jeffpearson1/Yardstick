@@ -99,8 +99,22 @@ All notable changes to Yardstick are recorded here. Versions follow
   icons and recipe overrides.
 - **Shared folders in the installer.** The `Preferences` step asks whether to sync
   icons and recipe overrides with a shared folder, and for both locations
-  (`-SharedIcons`, `-SharedRecipeOverrides`; a folder means the
-  `recipeOverrides.yaml` in it).
+  (`-SharedIcons`, `-SharedRecipeOverrides`; a folder, or any path without a `.yaml`
+  or `.yml` extension, means the `recipeOverrides.yaml` in it, even if the folder
+  doesn't exist yet). A mapped drive letter (`Z:\` or `Z:/`) is stored as the share it maps to, since
+  the scheduled task doesn't see drive mappings. Relative and `%VARIABLE%` paths are
+  resolved against the Yardstick folder, as a run resolves them, and stored as given.
+  Passing the locations already set, in any of those forms or written another way
+  (a trailing separator, forward slashes, `..` segments, `\\server\share` with or
+  without a trailing `\`), doesn't turn `syncSharedContent` back on after it was
+  turned off.
+- **`-SoftwareDropbox` in the installer**, which also works for development-only
+  instances and with `-NonInteractive`, so the recipe harness can test
+  `manualDownload` recipes there. `''` clears it. `Invoke-RecipeInstallTest.ps1` now
+  resolves `SoftwareDropbox` as a run does, so relative and `%VARIABLE%` paths work.
+  The optional-folder prompts (`Backup`, `SoftwareDropbox`, `SoftwareArchive`) follow
+  the same rules: a mapped drive is stored as its share, and a relative or
+  `%VARIABLE%` path is kept as written.
 - **The installer can be driven by another program.** For the Yardstick Development
   Studio's setup wizard, which runs it without a console:
   - `-InstallOptionalModule` installs the named optional modules (Selenium,
@@ -110,7 +124,7 @@ All notable changes to Yardstick are recorded here. Versions follow
   - `-ResultPath` writes the outcome of every step, and every status line, to a JSON
     file, even when a step fails.
   - `-Status` reports the state of setup as JSON without changing anything, before
-    or after setup has run.
+    or after setup has run. It includes `preferences.softwareDropbox`.
 
   See [Running the installer from another program](Docs/Installation.md#running-the-installer-from-another-program).
 
@@ -139,7 +153,11 @@ All notable changes to Yardstick are recorded here. Versions follow
     replace newer shared values with out-of-date ones. Delete such a copy, and remove
     any value that should not reach every machine.
 - A missing `SharedRecipeOverrides` file in a reachable folder is no longer a warning;
-  the first sync creates it. A path that is a folder is an error.
+  the first sync creates it. A `SharedRecipeOverrides` folder means the
+  `recipeOverrides.yaml` file in it, with a warning from `Test-YardstickSetup.ps1`.
+  Setup used to store a folder that didn't exist yet, or wasn't reachable, as the
+  file, and every sync then failed. Such settings now work, and the next
+  `.\Install-Yardstick.ps1 -NonInteractive` run corrects them.
 - **Custom schedule days.** The installer's `ScheduledTask` step offers Every day,
   Weekdays (Monday to Friday) or Custom, which asks which days to run
   (`-TaskSchedule Daily|Weekdays|Custom`, `-TaskDays`). `-TaskSchedule MondayToFriday`

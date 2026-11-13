@@ -144,19 +144,10 @@ Import-Module BitsTransfer -ErrorAction Stop
 if (-not $ElevatedChild) { Sync-RecipeHarnessSharedContent -YardstickDevPath $YardstickDevPath }
 
 # Manual-download recipes use the same SoftwareDropbox setting as production
-# Yardstick. The harness only reads and copies staged media; it never invokes
+# Yardstick, resolved the same way (environment variables, relative paths). The
+# harness only reads and copies staged media; it never invokes
 # Complete-YardstickDropbox or changes the source folder.
-$yardstickPreferencesPath = Join-Path $YardstickDevPath 'Local\preferences.yaml'
-if (-not (Test-Path -LiteralPath $yardstickPreferencesPath -PathType Leaf)) {
-    $yardstickPreferencesPath = Join-Path $YardstickDevPath 'preferences.yaml'
-}
-$softwareDropbox = $null
-if (Test-Path -LiteralPath $yardstickPreferencesPath -PathType Leaf) {
-    $yardstickPreferences = Get-Content -LiteralPath $yardstickPreferencesPath -Raw | ConvertFrom-Yaml
-    if ($yardstickPreferences.ContainsKey('SoftwareDropbox')) {
-        $softwareDropbox = [string]$yardstickPreferences['SoftwareDropbox']
-    }
-}
+$softwareDropbox = Get-RecipeHarnessSoftwareDropbox -YardstickDevPath $YardstickDevPath
 
 #region recipe selection ------------------------------------------------------
 

@@ -180,7 +180,8 @@ Answer yes to *Is this a development-only computer?* in the `Preferences` step, 
 
 ```powershell
 .\Install-Yardstick.ps1 -DevelopmentOnly -SharedIcons \\server\share\Intune\Icons `
-    -SharedRecipeOverrides \\server\share\Intune\Yardstick\recipeOverrides.yaml
+    -SharedRecipeOverrides \\server\share\Intune\Yardstick\recipeOverrides.yaml `
+    -SoftwareDropbox \\server\share\Intune\SoftwareDropbox
 ```
 
 This sets `developmentOnly: true` in `Local\preferences.yaml`. `Yardstick.ps1` refuses
@@ -188,9 +189,19 @@ to run on such a computer, and `Test-YardstickSetup.ps1` skips its Intune, email
 scheduled task checks. To turn it into a full instance later, run
 `.\Install-Yardstick.ps1 -DevelopmentOnly:$false`.
 
+`-SharedRecipeOverrides` can also name the folder: a path without a `.yaml` or `.yml`
+extension means the `recipeOverrides.yaml` file in it, even if the folder doesn't
+exist yet. A mapped drive letter in any of the three is stored as the share it maps
+to, because elevated processes and the scheduled task don't see drive mappings.
+
+The installer only asks for `SoftwareDropbox` on full instances, so a development-only
+instance needs `-SoftwareDropbox` to test [manualDownload](SoftwareDropbox.md)
+recipes. `-SoftwareDropbox ''` clears it.
+
 An empty location clears it, and when neither is left, `syncSharedContent` is turned
 off: `.\Install-Yardstick.ps1 -Step Preferences -SharedIcons '' -SharedRecipeOverrides ''`
-stops syncing.
+stops syncing. Passing the locations that are already set doesn't turn
+`syncSharedContent` back on after it was turned off; only a new location does.
 
 
 ## Microsoft Graph permissions
