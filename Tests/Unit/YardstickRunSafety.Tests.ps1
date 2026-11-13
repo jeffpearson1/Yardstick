@@ -287,22 +287,29 @@ Describe "Watchdog interrupt hand-off" {
             while (-not $box.CheckPending) { }
             try { Start-Sleep -Milliseconds 100; 'nothing pending' } catch { 'an interrupt was pending' }
         }
-        while (-not $box.Thread) { Start-Sleep -Milliseconds 20 }
-
-        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 60 -MainThread $box.Thread
-        $state = Get-YardstickWatchdogState
-        $state['StageStarted'] = (Get-Date).AddMinutes(-5)
-
-        $deadline = (Get-Date).AddSeconds(10)
+        $result = $null
         try {
+            $startupDeadline = (Get-Date).AddSeconds(10)
+            while (-not $box.Thread -and (Get-Date) -lt $startupDeadline) { Start-Sleep -Milliseconds 20 }
+            if (-not $box.Thread) { throw 'The busy worker did not start.' }
+
+            Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 60 -MainThread $box.Thread
+            $state = Get-YardstickWatchdogState
+            $state['StageStarted'] = (Get-Date).AddMinutes(-5)
+
+            $deadline = (Get-Date).AddSeconds(10)
             while (-not $box.BusyDone -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
             while (-not $state['ExpiredFor'] -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
-            Stop-YardstickWatchdog
         } finally {
-            # Always release the job, even when watchdog teardown itself fails.
-            $box.CheckPending = $true
+            try {
+                # Stop first, so it cannot see the pending-interrupt check's sleep.
+                Stop-YardstickWatchdog
+            } finally {
+                # Always release and collect the worker, even when setup or teardown fails.
+                $box.CheckPending = $true
+                $result = Receive-Job -Job $busy -Wait -AutoRemoveJob
+            }
         }
-        $result = Receive-Job -Job $busy -Wait -AutoRemoveJob
 
         $state['ExpiredFor'] | Should -Be $state['StageStarted'] -Because 'the stage was abandoned'
         $state['InterruptedFor'] | Should -BeNullOrEmpty
