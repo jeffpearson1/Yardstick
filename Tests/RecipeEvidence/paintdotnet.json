@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "paintdotnet",
+  "recipePath": "Recipes/paintdotnet.yaml",
+  "recipeSha256": "1fe1be6386fbe93d71085b170f29c46be3efd1e8072ced119dd594cd35236ffc",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-13T17:36:33Z",
+  "studioVersion": "none (assembled from Invoke-RecipeInstallTest.ps1 summary.json)",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "PaintDotNet.x64.msi",
+    "version": "5.2",
+    "sha256": "5d32664137481641aeae388f8ff08f98c1d459e5ce1ad1eddf67837483a6c33f",
+    "signer": "DOTPDN LLC"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "PaintDotNet.x64.msi v5.2 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{B4E18504-BFEE-461C-AA97-5DD40848C0AD}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i PaintDotNet.x64.msi /qn /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{B4E18504-BFEE-461C-AA97-5DD40848C0AD}' version '5.2' >= '5.2'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {B4E18504-BFEE-461C-AA97-5DD40848C0AD} /qn /norestart'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{B4E18504-BFEE-461C-AA97-5DD40848C0AD}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}

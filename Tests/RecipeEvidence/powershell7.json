@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "powershell7",
+  "recipePath": "Recipes/powershell7.yaml",
+  "recipeSha256": "3b7524c9ef718033c202b809b7bf74bf881fc47d2c321ab92ea91c1f825ca1d0",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-13T17:37:44Z",
+  "studioVersion": "none (assembled from Invoke-RecipeInstallTest.ps1 summary.json)",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "PowerShell-7.6.10-win-x64.msi",
+    "version": "7.6.10",
+    "sha256": "7d8daea48b450d4d62fcd1ac4d6faa7ac2db5e11aba5061ee81b7496adca8c07",
+    "signer": "Microsoft Corporation"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "PowerShell-7.6.10-win-x64.msi v7.6.10 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{2E334F2C-291A-46DA-9D05-1697F697E04D}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i PowerShell-7.6.10-win-x64.msi /qn /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{2E334F2C-291A-46DA-9D05-1697F697E04D}' version '7.6.10.0' >= '7.6.10'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {2E334F2C-291A-46DA-9D05-1697F697E04D} /qn /norestart'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{2E334F2C-291A-46DA-9D05-1697F697E04D}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}

@@ -1,14 +1,19 @@
 url: https://github.com/powershell/powershell
 urlRedirects: false
 preDownloadScript: |
-  using module .\Modules\Custom\GithubDownloader.psm1
-  $downloadFileRegex = "powershell-.*x64\.msi$"
-  $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
-  $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
-  $downloader.Update()
-  $Version = $downloader.LatestVersion
-  $URL = $downloader.URL
-  $filename = $downloader.filename
+  # PowerShell 7.7 and later ship no Windows MSI (only ZIPs and an msixbundle), so take the
+  # newest stable release that still has one - the 7.6 LTS line keeps getting MSI servicing builds.
+  $releases = Invoke-YardstickGitHubApi 'https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=30'
+  # Older lines (7.4, 7.5) get servicing builds too, so sort by version rather than publish date.
+  $release = $releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v[0-9]+\.[0-9]+\.[0-9]+$' } |
+    Where-Object { @($_.assets | Where-Object name -match '^PowerShell-[0-9.]+-win-x64\.msi$').Count -eq 1 } |
+    Sort-Object { [version]$_.tag_name.TrimStart('v') } -Descending | Select-Object -First 1
+  if (-not $release) { throw 'No stable PowerShell release with a single x64 MSI was found.' }
+  $asset = $release.assets | Where-Object name -match '^PowerShell-[0-9.]+-win-x64\.msi$'
+  $version = ([string]$release.tag_name).TrimStart('v')
+  if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw "Unexpected PowerShell version '$version'." }
+  $url = [string]$asset.browser_download_url
+  $fileName = [string]$asset.name
 installScript: msiexec /i <filename> /qn /norestart
 uninstallScript: msiexec /x <productcode> /qn /norestart
 iconFile: powershell7.png
