@@ -89,7 +89,7 @@ All notable changes to Yardstick are recorded here. Versions follow
   icons and recipe overrides with a shared folder, and for both locations
   (`-SharedIcons`, `-SharedRecipeOverrides`; a folder, or any path without a `.yaml`
   or `.yml` extension, means the `recipeOverrides.yaml` in it, even if the folder
-  doesn't exist yet). A mapped drive letter is stored as the share it maps to, since
+  doesn't exist yet). A mapped drive letter (`Z:\` or `Z:/`) is stored as the share it maps to, since
   the scheduled task doesn't see drive mappings. Relative and `%VARIABLE%` paths are
   resolved against the Yardstick folder, as a run resolves them, and stored as given.
   Passing the locations already set, in any of those forms, doesn't turn

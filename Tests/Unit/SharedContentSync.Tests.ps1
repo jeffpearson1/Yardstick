@@ -571,6 +571,12 @@ Describe "ConvertTo-YardstickUncPath" {
         ConvertTo-YardstickUncPath 'Z:' | Should -Be '\\server\share\'
     }
 
+    It "Replaces a mapped network drive written with forward slashes" {
+        Mock Get-PSDrive { [pscustomobject]@{ Name = 'Z'; DisplayRoot = '\\server\share' } } -ModuleName YardstickConfig
+        ConvertTo-YardstickUncPath 'Z:/Intune/SoftwareDropbox' | Should -Be '\\server\share\Intune\SoftwareDropbox'
+        ConvertTo-YardstickUncPath 'Z:/' | Should -Be '\\server\share\'
+    }
+
     It "Leaves local drives, unknown drives and UNC paths alone" {
         Mock Get-PSDrive { [pscustomobject]@{ Name = 'C'; DisplayRoot = $null } } -ModuleName YardstickConfig -ParameterFilter { $Name -eq 'C' }
         Mock Get-PSDrive { } -ModuleName YardstickConfig -ParameterFilter { $Name -eq 'Q' }

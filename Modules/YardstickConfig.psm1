@@ -389,8 +389,8 @@ function ConvertTo-YardstickUncPath {
     #>
     param([AllowNull()][AllowEmptyString()][string]$Path)
 
-    if ([string]$Path -notmatch '^([A-Za-z]):(\\.*)?$') { return [string]$Path }
-    $rest = $Matches[2]
+    if ([string]$Path -notmatch '^([A-Za-z]):([\\/].*)?$') { return [string]$Path }
+    $rest = ([string]$Matches[2]).Replace('/', '\')
     $drive = Get-PSDrive -Name $Matches[1] -PSProvider FileSystem -ErrorAction SilentlyContinue
     $root = if ($drive) { [string]$drive.DisplayRoot }
     if (-not $root -or -not $root.StartsWith('\\')) { return $Path }
