@@ -569,6 +569,18 @@ These settings control how Intune handles installation. All default to values in
     - My Scope Tag 2
   ```
 
+**`categories`** (array, optional) - Intune app categories, shown in Company Portal.
+- Names match existing categories in the tenant case-insensitively (built-ins include `Productivity`, `Business`, `Collaboration & Social`); Yardstick does not create categories, and an unknown name fails the upload.
+- Like `displayName` and `description`, only applied when a new app or version is created. Existing versions keep their categories.
+- A category your tenant created exists only there, so set it in `Local\recipeOverrides.yaml` (see [Site-Specific Overrides](#site-specific-overrides)) rather than in a recipe you share
+- Example: `categories: ["productivity", "business"]`
+
+**`featured`** (boolean, optional) - Show the app as featured in Company Portal.
+- Default: `false`
+- Set on every new version Yardstick creates, so featuring an app by hand in Intune is lost on the next update. Use this field instead.
+- Which apps to feature is your choice, so set it in `Local\recipeOverrides.yaml` rather than in a recipe you share
+- Example: `featured: true`
+
 **`owner`** (string) - Application owner.
 - Default: From `preferences.yaml`
 - Example: `owner: IT Department`

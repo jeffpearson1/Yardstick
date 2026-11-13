@@ -122,8 +122,8 @@ existence-only detection do not.
 e.g. `3.11.x`), `dependentApplicationBlocklist`, `minRunInterval` (whole days
 between runs, for vendor sites that throttle repeated requests; `-Force` ignores it).
 
-Do not put `scopeTags` in a shared recipe. They are tenant-specific, so they go in
-the gitignored `Local\recipeOverrides.yaml`, keyed by recipe id; see "Site-Specific
+Do not put `scopeTags`, `featured` or tenant-created `categories` in a shared
+recipe. They are tenant-specific, so they go in the gitignored `Local\recipeOverrides.yaml`, keyed by recipe id; see "Site-Specific
 Overrides" in `Docs/WritingRecipes.md`. Do not copy a recipe to make a second,
 differently configured app from it either: add a variant (an overrides entry with
 `variantOf: <recipe id>` and its own `displayName`) instead.

@@ -1034,6 +1034,8 @@ function Set-ScriptVariables {
     # Additional variables
     $Script:IconFile = $Parameters.iconFile
     $Script:Description = $Parameters.description
+    $Script:Categories = @($Parameters.categories | Where-Object { $_ })
+    $Script:Featured = [bool]$Parameters.featured
     $Script:Publisher = $Parameters.publisher
     $Script:VersionLock = $Parameters.versionLock
     $Script:ProductCode = $null
@@ -1965,9 +1967,9 @@ while ($RecipePass.Count -gt 0) {
             Connect-YardstickGraph
             try {
                 if ($Script:AllowUserUninstall) {
-                    $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes -AllowAvailableUninstall
+                    $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Category $Script:Categories -Featured:$Script:Featured -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes -AllowAvailableUninstall
                 } else {
-                    $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
+                    $Win32App = Add-YardstickWin32App -FilePath $App.path -DisplayName $Script:DisplayName -Description $Script:Description -Publisher $Script:Publisher -InstallExperience $Script:InstallExperience -RestartBehavior $Script:RestartBehavior -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $Script:InstallScript -UninstallCommandLine $Script:UninstallScript -Icon $Icon -AppVersion "$Script:Version" -ScopeTagName $Script:ScopeTags -Category $Script:Categories -Featured:$Script:Featured -Owner $Script:Owner -MaximumInstallationTimeInMinutes $Script:MaximumInstallationTimeInMinutes
                 }
                 Write-Log "Uploaded. Waiting for Intune to publish it..."
                 $PublishTimeout = (Get-Date).AddMinutes(30)
