@@ -588,6 +588,23 @@ Describe "ConvertTo-YardstickUncPath" {
     }
 }
 
+Describe "ConvertTo-YardstickComparablePath" {
+    It "Writes <Path> as <Expected>" -TestCases @(
+        @{ Path = '\\server\share\'; Expected = '\\server\share' }
+        @{ Path = '\\server\share'; Expected = '\\server\share' }
+        @{ Path = '\\server\share\Icons\'; Expected = '\\server\share\Icons' }
+        @{ Path = 'C:/Team/Icons/'; Expected = 'C:\Team\Icons' }
+        @{ Path = 'C:\Team\.\Other\..\Icons'; Expected = 'C:\Team\Icons' }
+        @{ Path = 'C:\Team\\Icons'; Expected = 'C:\Team\Icons' }
+        @{ Path = 'C:\'; Expected = 'C:\' }
+        @{ Path = 'C:/'; Expected = 'C:\' }
+        @{ Path = '<REPLACE_WITH_PATH>'; Expected = '<REPLACE_WITH_PATH>' }
+        @{ Path = ''; Expected = '' }
+    ) {
+        ConvertTo-YardstickComparablePath $Path | Should -BeExactly $Expected
+    }
+}
+
 Describe "Merge-RecipeOverrideSet" {
     It "Lets a local field beat the shared field and keeps the other shared fields" {
         $shared = @{ zoom = @{ scopeTags = @('Shared'); url = 'https://shared.zoom.us' } }

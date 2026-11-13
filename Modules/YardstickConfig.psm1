@@ -398,6 +398,31 @@ function ConvertTo-YardstickUncPath {
 }
 
 
+function ConvertTo-YardstickComparablePath {
+    <#
+    .SYNOPSIS
+    Writes a resolved path in one form, so two ways of writing the same location
+    compare equal.
+
+    .DESCRIPTION
+    For a fully qualified path, forward slashes become backslashes and . and ..
+    segments and doubled separators collapse. A trailing separator is dropped
+    except after a drive root (C:\), so \\server\share and \\server\share\ are the
+    same. Case is left alone: PowerShell's -eq and -ne ignore it. Anything else (a
+    template placeholder, a relative path) only loses its trailing separator.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    $value = $Path
+    if ($value -match '^([A-Za-z]:[\\/]|[\\/]{2}[^\\/?.])') {
+        try { $value = [IO.Path]::GetFullPath($value) } catch { $value = $Path }
+    }
+    if ($value -match '^[A-Za-z]:[\\/]?$') { return $value }
+    $value.TrimEnd('\', '/')
+}
+
+
 function Test-YardstickPreferences {
     <#
     .SYNOPSIS
@@ -557,6 +582,7 @@ Export-ModuleMember -Function @(
     'Get-YardstickFolderProblem',
     'Resolve-YardstickSharedRecipeOverridesPath',
     'ConvertTo-YardstickUncPath',
+    'ConvertTo-YardstickComparablePath',
     'Resolve-YardstickPreferencePath',
     'Get-YardstickProjectLayout',
     'Get-YardstickPreferencesPath',

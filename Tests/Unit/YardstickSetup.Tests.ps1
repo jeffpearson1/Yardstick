@@ -375,6 +375,49 @@ Describe "Set-YardstickPreferenceValue" {
 }
 
 
+Describe "Set-YardstickFolderPreference" {
+    BeforeEach {
+        $script:root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $script:root
+        $script:file = Join-Path $script:root 'preferences.yaml'
+    }
+
+    It "Leaves the stored folder alone when it is given in another form" -TestCases @(
+        @{ Stored = 'Dropbox'; Given = '.\Dropbox\' }
+        @{ Stored = '\\server\share'; Given = '\\server\share\' }
+        @{ Stored = 'C:\Team\Dropbox'; Given = 'C:/Team/Other/../Dropbox/' }
+    ) {
+        Set-Content -LiteralPath $script:file -Value "SoftwareDropbox: '$Stored'"
+        $current = Resolve-YardstickPreferencePath -Path $Stored -ProjectRoot $script:root
+
+        Set-YardstickFolderPreference -Path $script:file -Key 'SoftwareDropbox' -Value $Given -Current $current -ProjectRoot $script:root |
+            Should -Be (ConvertTo-YardstickUncPath (Resolve-YardstickPreferencePath -Path $Given -ProjectRoot $script:root))
+        Get-Content -LiteralPath $script:file | Should -Be "SoftwareDropbox: '$Stored'"
+    }
+
+    It "Stores a changed folder as given" {
+        Set-Content -LiteralPath $script:file -Value "Backup: ''"
+        Set-YardstickFolderPreference -Path $script:file -Key 'Backup' -Value '"%TEMP%\Backup"' -Current '' -ProjectRoot $script:root |
+            Should -Be "$env:TEMP\Backup"
+        Get-Content -LiteralPath $script:file | Should -Be "Backup: '%TEMP%\Backup'"
+    }
+
+    It "Stores a mapped drive as the share it maps to" {
+        Mock Get-PSDrive { [pscustomobject]@{ Name = 'Z'; DisplayRoot = '\\server\share' } } -ModuleName YardstickConfig
+        Set-Content -LiteralPath $script:file -Value "Backup: 'Z:\Backup'"
+        Set-YardstickFolderPreference -Path $script:file -Key 'Backup' -Value 'Z:\Backup' -Current 'Z:\Backup' -ProjectRoot $script:root |
+            Should -Be '\\server\share\Backup'
+        Get-Content -LiteralPath $script:file | Should -Be "Backup: '\\server\share\Backup'"
+    }
+
+    It "Clears the folder when given a blank value" {
+        Set-Content -LiteralPath $script:file -Value "SoftwareArchive: 'Archive'"
+        Set-YardstickFolderPreference -Path $script:file -Key 'SoftwareArchive' -Value ' ' -Current (Join-Path $script:root 'Archive') -ProjectRoot $script:root |
+            Should -Be ''
+        Get-Content -LiteralPath $script:file | Should -Be 'SoftwareArchive:'
+    }
+}
+
 Describe "New-YardstickPreferencesFile" {
     BeforeEach { $script:root = New-TestProjectRoot }
 
@@ -1450,6 +1493,29 @@ Describe "Install-Yardstick.ps1 run by another program" {
         $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
         $stored.syncSharedContent | Should -BeFalse
         $stored.SharedIcons | Should -Be $icons
+    }
+
+    It "Passing the stored shared paths written another way leaves them and the sync alone" -Skip:$script:elevated {
+        # Copilot review of #42: \\server\share and \\server\share\ are the same share.
+        $root = New-TestInstallerRoot
+        $icons = '\\yardstick-test-server\share'
+        $folder = Join-Path $TestDrive "$(New-Guid)"
+        $overrides = Join-Path $folder 'recipeOverrides.yaml'
+        $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value $icons
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value $overrides
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $false
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive',
+            '-SharedIcons', "$icons\", '-SharedRecipeOverrides', "$($folder.Replace('\', '/'))/Other/../recipeOverrides.yaml"
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $run.Output | Should -Match 'sync stays off'
+        $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+        $stored.syncSharedContent | Should -BeFalse
+        $stored.SharedIcons | Should -Be $icons
+        $stored.SharedRecipeOverrides | Should -Be $overrides
     }
 
     It "Passing the stored shared paths does not turn sync back on" -Skip:$script:elevated {
