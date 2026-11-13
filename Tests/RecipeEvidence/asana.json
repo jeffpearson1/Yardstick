@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "asana",
+  "recipePath": "Recipes/asana.yaml",
+  "recipeSha256": "53a022851e6264c3631fe30d328b28521cbbc842552a223daec2df637eabed59",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-13T21:27:54Z",
+  "studioVersion": "0.5.2",
+  "installExperience": "user",
+  "installer": {
+    "fileName": "AsanaSetup.exe",
+    "version": "2.10.6",
+    "sha256": "D3F0B9BA6568F81FE31D54AB2F3DF953F86FE355EFEEA700E6DDD236EF365FF7",
+    "signer": "CN=Asana, O=Asana, L=San Francisco, S=California, C=US"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "AsanaSetup.exe v2.10.6 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (file/version: 'C:\\Users\\jpears17\\AppData\\Local\\Asana\\app-2.10.6\\Asana.exe' does not exist)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='AsanaSetup.exe --silent'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "file/version: 'C:\\Users\\jpears17\\AppData\\Local\\Asana\\app-2.10.6\\Asana.exe' version '2.10.6' greaterThanOrEqual '2.10.6'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "file/version: 'C:\\Users\\jpears17\\AppData\\Local\\Asana\\app-2.10.6\\Asana.exe' does not exist"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+url: https://desktop-downloads.asana.com/win32_x64/prod/latest/AsanaSetup.exe
+urlRedirects: false
+fileName: AsanaSetup.exe
+preDownloadScript: |
+  # Asana publishes no version feed (RELEASES/latest.yml are denied), but the
+  # Squirrel Setup.exe embeds "Asana-<version>-full.nupkg" near its start, so a
+  # ranged request of the first 8 MB is enough to learn the version.
+  $head = Invoke-WebRequest -Uri $url -Headers @{ Range = 'bytes=0-8388607' } -UseBasicParsing
+  $bytes = $head.Content
+  if ($bytes -is [string]) { $bytes = [Text.Encoding]::GetEncoding(28591).GetBytes($bytes) }
+  $text = [Text.Encoding]::GetEncoding(28591).GetString($bytes)
+  $match = [regex]::Match($text, 'Asana-(?<ver>[0-9]+(?:\.[0-9]+){1,3})-full\.nupkg')
+  if (-not $match.Success) { throw "Could not read the Asana version from the head of $url." }
+  $version = $match.Groups['ver'].Value
+  $fileDetectionPath = "%LocalAppData%\Asana\app-$version"
+  # Asana.exe carries the 3-part file version "2.10.6"; padding it to 2.10.6.0 would never match.
+  $fileDetectionVersion = $version
+installScript: <filename> --silent
+powerShellUninstallScript: |
+  # Squirrel refuses to uninstall while the app holds its lock.
+  Get-Process -Name 'Asana' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 3
+  $root = Join-Path $env:LOCALAPPDATA 'Asana'
+  $updater = Join-Path $root 'Update.exe'
+  if (Test-Path -LiteralPath $updater) {
+    $process = Start-Process -FilePath $updater -ArgumentList '--uninstall', '-s' -Wait -PassThru
+    if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+  }
+  # Squirrel leaves the root folder, ARP entry and Start Menu folder behind.
+  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Asana' -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Asana') -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+iconFile: asana.png
+id: asana
+displayName: Asana
+publisher: Asana, Inc.
+description: Asana for Windows is the desktop app for Asana work management, with tasks, projects, and team collaboration.
+detectionType: file
+fileDetectionName: Asana.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+architecture: x64
+installExperience: user
+restartBehavior: suppress
+minOSVersion: W11_24H2
