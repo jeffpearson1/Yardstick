@@ -1415,6 +1415,43 @@ Describe "Install-Yardstick.ps1 run by another program" {
         (Import-YardstickPreferences -ProjectRoot $root).SharedRecipeOverrides | Should -Be (Join-Path $folder 'recipeOverrides.yaml')
     }
 
+    It "-NonInteractive repairs a %VARIABLE% folder stored as SharedRecipeOverrides in the form it was written in" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $env:YARDSTICK_TEST_SHARE = Join-Path $TestDrive "$(New-Guid)"
+        try {
+            $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+            Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+            Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value 'Shared\Icons'
+            Set-YardstickPreferenceValue -Path $path -Key 'SharedRecipeOverrides' -Value '%YARDSTICK_TEST_SHARE%\Yardstick'
+
+            $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive'
+
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+            $stored.SharedRecipeOverrides | Should -Be '%YARDSTICK_TEST_SHARE%\Yardstick\recipeOverrides.yaml'
+            $stored.SharedIcons | Should -Be 'Shared\Icons'
+        } finally {
+            Remove-Item Env:\YARDSTICK_TEST_SHARE -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "Passing a stored shared path with a trailing separator does not turn sync back on" -Skip:$script:elevated {
+        $root = New-TestInstallerRoot
+        $icons = Join-Path $TestDrive "$(New-Guid)\Icons"
+        $path = (New-YardstickPreferencesFile -ProjectRoot $root).Path
+        Set-YardstickPreferenceValue -Path $path -Key 'developmentOnly' -Value $true
+        Set-YardstickPreferenceValue -Path $path -Key 'SharedIcons' -Value $icons
+        Set-YardstickPreferenceValue -Path $path -Key 'syncSharedContent' -Value $false
+
+        $run = Invoke-TestInstaller -Root $root -Arguments '-Step', 'Preferences', '-NonInteractive', '-SharedIcons', "$icons\"
+
+        $run.ExitCode | Should -Be 0 -Because $run.Output
+        $run.Output | Should -Match 'sync stays off'
+        $stored = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+        $stored.syncSharedContent | Should -BeFalse
+        $stored.SharedIcons | Should -Be $icons
+    }
+
     It "Passing the stored shared paths does not turn sync back on" -Skip:$script:elevated {
         $root = New-TestInstallerRoot
         $icons = Join-Path $TestDrive "$(New-Guid)\Icons"

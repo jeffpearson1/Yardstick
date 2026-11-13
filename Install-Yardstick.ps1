@@ -710,6 +710,17 @@ function Set-SharedContentPreferences {
     $currentIcons = [string]$Preferences.SharedIcons
     $currentOverrides = [string]$Preferences.SharedRecipeOverrides
     $syncOn = $Preferences.syncSharedContent -eq $true
+    # The values as written in the file (relative, %VARIABLE%), for defaults and repairs.
+    $stored = if (Test-Path -LiteralPath $Path -PathType Leaf) { Get-Content -LiteralPath $Path -Raw | ConvertFrom-Yaml }
+    if ($stored -isnot [hashtable]) { $stored = @{} }
+    $storedIcons = [string]$stored['SharedIcons']
+    $storedOverrides = [string]$stored['SharedRecipeOverrides']
+    # A trailing separator does not make a different folder. Roots keep theirs.
+    $trim = {
+        param([string]$Value)
+        if ($Value -match '^[A-Za-z]:[\\/]?$' -or $Value -match '^\\\\[^\\/]+[\\/][^\\/]+[\\/]?$') { return $Value }
+        $Value.TrimEnd('\', '/')
+    }
     # Resolves a path the way a run will, so it compares with the stored ones and
     # a relative overrides file is looked for under $Root, not the current folder.
     # A mapped drive means the share it maps to: the scheduled task and elevated
@@ -720,7 +731,7 @@ function Set-SharedContentPreferences {
         $resolve = {
             param([string]$Value)
             if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
-            ConvertTo-YardstickUncPath (Resolve-YardstickPreferencePath -Path $Value -ProjectRoot $Root)
+            & $trim (ConvertTo-YardstickUncPath (Resolve-YardstickPreferencePath -Path $Value -ProjectRoot $Root))
         }
         & $resolve $IconPath
         Resolve-YardstickSharedRecipeOverridesPath -Path (& $resolve $OverridesPath)
@@ -730,7 +741,7 @@ function Set-SharedContentPreferences {
     $toStore = {
         param([string]$Given, [string]$Normalized)
         if (-not $Normalized) { return '' }
-        $resolved = Resolve-YardstickPreferencePath -Path $Given -ProjectRoot $Root
+        $resolved = & $trim (Resolve-YardstickPreferencePath -Path $Given -ProjectRoot $Root)
         if ($Normalized -eq $resolved) { return $Given }
         if ($Normalized -eq (Join-Path $resolved 'recipeOverrides.yaml')) { return Join-Path $Given 'recipeOverrides.yaml' }
         $Normalized
@@ -739,18 +750,20 @@ function Set-SharedContentPreferences {
     $askedToSync = $false
 
     if ($ScriptBound.ContainsKey('SharedIcons') -or $ScriptBound.ContainsKey('SharedRecipeOverrides')) {
-        $icons = if ($ScriptBound.ContainsKey('SharedIcons')) { ConvertFrom-YardstickQuotedPath $SharedIcons } else { $currentIcons }
-        $overrides = if ($ScriptBound.ContainsKey('SharedRecipeOverrides')) { ConvertFrom-YardstickQuotedPath $SharedRecipeOverrides } else { $currentOverrides }
+        $icons = if ($ScriptBound.ContainsKey('SharedIcons')) { ConvertFrom-YardstickQuotedPath $SharedIcons } else { $storedIcons }
+        $overrides = if ($ScriptBound.ContainsKey('SharedRecipeOverrides')) { ConvertFrom-YardstickQuotedPath $SharedRecipeOverrides } else { $storedOverrides }
     } elseif ($NonInteractive) {
         # Paths an earlier version of setup stored: a mapped drive, or a folder
-        # for the overrides file.
-        if ($repairedIcons -ne $currentIcons) {
-            Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value $repairedIcons
-            Write-YardstickSetupStatus "SharedIcons is now $repairedIcons." -Level OK
+        # for the overrides file. Repaired in the form they were written in.
+        if ($repairedIcons -ne (& $trim $currentIcons)) {
+            $value = & $toStore $storedIcons $repairedIcons
+            Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value $value
+            Write-YardstickSetupStatus "SharedIcons is now $value." -Level OK
         }
-        if ($repairedOverrides -ne $currentOverrides) {
-            Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value $repairedOverrides
-            Write-YardstickSetupStatus "SharedRecipeOverrides is now $repairedOverrides." -Level OK
+        if ($repairedOverrides -ne (& $trim $currentOverrides)) {
+            $value = & $toStore $storedOverrides $repairedOverrides
+            Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value $value
+            Write-YardstickSetupStatus "SharedRecipeOverrides is now $value." -Level OK
         }
         return
     } else {
@@ -765,15 +778,16 @@ function Set-SharedContentPreferences {
             return
         }
         $askedToSync = $true
-        $icons = Read-YardstickSetupValue -Prompt 'Shared icon folder (blank to leave off)' -Default $currentIcons -Path
-        $overrides = Read-YardstickSetupValue -Prompt 'Shared recipe overrides file, or the folder it is in (blank to leave off)' -Default $currentOverrides -Path
+        $icons = Read-YardstickSetupValue -Prompt 'Shared icon folder (blank to leave off)' -Default $storedIcons -Path
+        $overrides = Read-YardstickSetupValue -Prompt 'Shared recipe overrides file, or the folder it is in (blank to leave off)' -Default $storedOverrides -Path
     }
 
     $givenIcons, $givenOverrides = $icons, $overrides
     $icons, $overrides = & $normalize $icons $overrides
 
-    if ($icons -ne $currentIcons) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value (& $toStore $givenIcons $icons) }
-    if ($overrides -ne $currentOverrides) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value (& $toStore $givenOverrides $overrides) }
+    # Written when it changed, or when the stored value needs a repair.
+    if ($icons -ne (& $trim $currentIcons)) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedIcons' -Value (& $toStore $givenIcons $icons) }
+    if ($overrides -ne (& $trim $currentOverrides)) { Set-YardstickPreferenceValue -Path $Path -Key 'SharedRecipeOverrides' -Value (& $toStore $givenOverrides $overrides) }
     $havePaths = [bool]($icons -or $overrides)
     $pathsChanged = $icons -ne $repairedIcons -or $overrides -ne $repairedOverrides
     $enable = $havePaths -and ($syncOn -or $askedToSync -or $pathsChanged)
