@@ -280,14 +280,36 @@ Describe "Watchdog interrupt hand-off" {
             $box.Thread = [System.Threading.Thread]::CurrentThread
             $end = (Get-Date).AddSeconds(5)
             while ((Get-Date) -lt $end) { }
+            # Stay Running until the test has stopped the watchdog. Without this
+            # hand-off, its one-second poll can coincide with the sleep below and
+            # legitimately observe WaitSleepJoin, making the test timing-dependent.
+            $box.BusyDone = $true
+            while (-not $box.CheckPending) { }
             try { Start-Sleep -Milliseconds 100; 'nothing pending' } catch { 'an interrupt was pending' }
         }
-        while (-not $box.Thread) { Start-Sleep -Milliseconds 20 }
+        $result = $null
+        try {
+            $startupDeadline = (Get-Date).AddSeconds(10)
+            while (-not $box.Thread -and (Get-Date) -lt $startupDeadline) { Start-Sleep -Milliseconds 20 }
+            if (-not $box.Thread) { throw 'The busy worker did not start.' }
 
-        Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 60 -MainThread $box.Thread
-        $state = Get-YardstickWatchdogState
-        $state['StageStarted'] = (Get-Date).AddMinutes(-5)
-        $result = Receive-Job -Job $busy -Wait -AutoRemoveJob
+            Start-YardstickWatchdog -TimeoutMinutes 1 -PollSeconds 1 -NoExit -AbandonGraceMinutes 60 -MainThread $box.Thread
+            $state = Get-YardstickWatchdogState
+            $state['StageStarted'] = (Get-Date).AddMinutes(-5)
+
+            $deadline = (Get-Date).AddSeconds(10)
+            while (-not $box.BusyDone -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
+            while (-not $state['ExpiredFor'] -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
+        } finally {
+            try {
+                # Stop first, so it cannot see the pending-interrupt check's sleep.
+                Stop-YardstickWatchdog
+            } finally {
+                # Always release and collect the worker, even when setup or teardown fails.
+                $box.CheckPending = $true
+                $result = Receive-Job -Job $busy -Wait -AutoRemoveJob
+            }
+        }
 
         $state['ExpiredFor'] | Should -Be $state['StageStarted'] -Because 'the stage was abandoned'
         $state['InterruptedFor'] | Should -BeNullOrEmpty
