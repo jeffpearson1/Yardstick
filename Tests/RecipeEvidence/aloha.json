@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "aloha",
+  "recipePath": "Recipes/aloha.yaml",
+  "recipeSha256": "72456d2c359b09308bbe1feefc1cd6dc1c9a501fd11dfc52f9f992a8a90c4f79",
+  "validated": true,
+  "verdict": "ValidatedWithWarnings",
+  "reason": "",
+  "testedAt": "2026-11-13T17:35:43Z",
+  "studioVersion": "none (assembled from Invoke-RecipeInstallTest.ps1 summary.json)",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "aloha547installer.exe",
+    "version": "5.4.7",
+    "sha256": "2b7e597cd3708a9758bf55e0d069018f8a26bdc55b8d4e31fb2f93b0e30ca3d4",
+    "signer": null
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Warn",
+      "detail": "aloha547installer.exe v5.4.7 signature=NotSigned"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (registry/version: 'HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ALOHA_is1\\DisplayVersion' = '' greaterThanOrEqual '5.4.7')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='aloha547installer.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "registry/version: 'HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ALOHA_is1\\DisplayVersion' = '5.4.7' greaterThanOrEqual '5.4.7'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='\"%ProgramFiles(x86)%\\ALOHA\\unins000.exe\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "registry/version: 'HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ALOHA_is1\\DisplayVersion' = '' greaterThanOrEqual '5.4.7'"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}

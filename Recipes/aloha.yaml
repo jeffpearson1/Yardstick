@@ -1,13 +1,14 @@
-url: https://www.epa.gov/cameo/aloha-software
+url: https://response.restoration.noaa.gov/aloha
 urlRedirects: false
 preDownloadScript: |
-  # Official EPA CAMEO page. ALOHA has no version-neutral URL or feed, so the page is the only source.
+  # Official NOAA ALOHA page. EPA's CAMEO page used to host the installer but now only links here.
+  # ALOHA has no version-neutral URL or feed, so the page is the only source.
   $html = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
   if ($html -is [byte[]]) { $html = [System.Text.Encoding]::UTF8.GetString($html) }
-  $installer = [regex]::Match($html, 'href="(?<path>/sites/[^"]+/aloha\d+installer\.exe)"[^>]*>.*?</a>\s*\(Version\s+(?<ver>\d+(?:\.\d+)+)', 'IgnoreCase,Singleline')
-  if (-not $installer.Success) { throw 'No ALOHA Windows installer and version were found on the official EPA page.' }
+  $installer = [regex]::Match($html, 'href="(?<path>(?:https://response\.restoration\.noaa\.gov)?/sites/[^"]+/aloha\d+installer\.exe)"[^>]*>\s*Download ALOHA\s+(?<ver>\d+(?:\.\d+)+)\s+for Windows', 'IgnoreCase')
+  if (-not $installer.Success) { throw 'No ALOHA Windows installer and version were found on the official NOAA page.' }
   $version = $installer.Groups['ver'].Value
-  $url = 'https://www.epa.gov' + $installer.Groups['path'].Value
+  $url = [string]([Uri]::new([Uri]'https://response.restoration.noaa.gov', $installer.Groups['path'].Value))
   $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
   $registryDetectionValue = $version
 # ALOHA ships an Inno Setup installer, not NSIS, so /S is ignored and the wizard appears.
