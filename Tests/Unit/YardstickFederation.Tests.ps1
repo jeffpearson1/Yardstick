@@ -96,9 +96,9 @@ Describe 'Get-YardstickFederatedIdentity' {
         Get-YardstickFederatedIdentity | Should -BeNullOrEmpty
     }
 
-    It 'treats whitespace-only values as unset' {
+    It 'rejects a variable that is set but blank instead of falling back to a secret' {
         [Environment]::SetEnvironmentVariable('YARDSTICK_TENANT_ID', '   ')
-        Get-YardstickFederatedIdentity | Should -BeNullOrEmpty
+        { Get-YardstickFederatedIdentity } | Should -Throw '*YARDSTICK_TENANT_ID is set but blank*does not fall back to a client secret*'
     }
 
     It 'returns the identity when every input is present' {
@@ -190,7 +190,76 @@ Describe 'Get-YardstickFederatedIdentity' {
 
     It 'rejects a relative OIDC request URI' {
         Set-FederationEnvironment -Override @{ SYSTEM_OIDCREQUESTURI = '/oidctoken' }
-        { Get-YardstickFederatedIdentity } | Should -Throw '*SYSTEM_OIDCREQUESTURI is not an absolute URI*'
+        { Get-YardstickFederatedIdentity } | Should -Throw '*SYSTEM_OIDCREQUESTURI is not an absolute https URI*'
+    }
+
+    It 'rejects a plain-HTTP <Name> on another host, so the job token is never sent unencrypted' -TestCases @(
+        @{ Name = 'SYSTEM_OIDCREQUESTURI'; Set = { Set-FederationEnvironment -Override @{ SYSTEM_OIDCREQUESTURI = 'http://dev.azure.com/org/oidctoken' } } }
+        @{ Name = 'ACTIONS_ID_TOKEN_REQUEST_URL'; Set = { Set-GitHubActionsEnvironment -Override @{ ACTIONS_ID_TOKEN_REQUEST_URL = 'http://pipelines.actions.githubusercontent.com/idtoken' } } }
+    ) {
+        & $Set
+        { Get-YardstickFederatedIdentity } | Should -Throw "*$Name is not an absolute https URI*"
+    }
+
+    It 'allows plain HTTP to this machine' {
+        Set-GitHubActionsEnvironment -Override @{ ACTIONS_ID_TOKEN_REQUEST_URL = 'http://localhost:8080/idtoken' }
+        (Get-YardstickFederatedIdentity).Provider | Should -Be 'GitHubActions'
+    }
+
+    It 'rejects a token file given as a relative path' {
+        Set-Content -LiteralPath (Join-Path $TestDrive 'token') -Value 'id-token'
+        Push-Location $TestDrive
+        try {
+            [Environment]::SetEnvironmentVariable('YARDSTICK_TENANT_ID', 'tenant-fed')
+            [Environment]::SetEnvironmentVariable('YARDSTICK_CLIENT_ID', $script:ClientId)
+            [Environment]::SetEnvironmentVariable('YARDSTICK_FEDERATED_TOKEN_FILE', 'token')
+            { Get-YardstickFederatedIdentity } | Should -Throw "*YARDSTICK_FEDERATED_TOKEN_FILE 'token' is not a full path*"
+        } finally {
+            Pop-Location
+        }
+    }
+}
+
+Describe 'Retry delay' {
+    It 'waits as long as Retry-After asks, up to a minute' -TestCases @(
+        @{ Seconds = 30; Expected = 30 }
+        @{ Seconds = 600; Expected = 60 }
+    ) {
+        $record = New-HttpErrorRecord -StatusCode 429
+        $record.Exception.Response.Headers.RetryAfter = [System.Net.Http.Headers.RetryConditionHeaderValue]::new([timespan]::FromSeconds($Seconds))
+        InModuleScope YardstickFederation -Parameters @{ Record = $record } { Get-FederationRetryDelay -ErrorRecord $Record -Attempt 1 } | Should -Be $Expected
+    }
+
+    It 'reads a Retry-After date' {
+        $record = New-HttpErrorRecord -StatusCode 503
+        $record.Exception.Response.Headers.RetryAfter = [System.Net.Http.Headers.RetryConditionHeaderValue]::new([datetimeoffset]::UtcNow.AddSeconds(20))
+        $delay = InModuleScope YardstickFederation -Parameters @{ Record = $record } { Get-FederationRetryDelay -ErrorRecord $Record -Attempt 1 }
+        $delay | Should -BeGreaterOrEqual 18
+        $delay | Should -BeLessOrEqual 21
+    }
+
+    It 'backs off exponentially without Retry-After' {
+        $record = New-HttpErrorRecord -StatusCode 503
+        InModuleScope YardstickFederation -Parameters @{ Record = $record } { Get-FederationRetryDelay -ErrorRecord $Record -Attempt 2 } | Should -Be 4
+    }
+
+    It 'waits the Retry-After time between attempts' {
+        Clear-FederationEnvironment
+        Set-FederationEnvironment
+        $identity = Get-YardstickFederatedIdentity
+        $script:Calls = 0
+        Mock Start-Sleep -ModuleName YardstickFederation {}
+        Mock Invoke-RestMethod -ModuleName YardstickFederation {
+            $script:Calls++
+            if ($script:Calls -eq 1) {
+                $record = New-HttpErrorRecord -StatusCode 429
+                $record.Exception.Response.Headers.RetryAfter = [System.Net.Http.Headers.RetryConditionHeaderValue]::new([timespan]::FromSeconds(30))
+                throw $record
+            }
+            [pscustomobject]@{ oidcToken = 'id-token' }
+        }
+        Get-YardstickFederatedAssertion -Identity $identity | Should -Be 'id-token'
+        Should -Invoke Start-Sleep -ModuleName YardstickFederation -Times 1 -Exactly -ParameterFilter { $Seconds -eq 30 }
     }
 }
 
@@ -472,6 +541,21 @@ Describe 'Connect-YardstickGraph with workload identity federation' {
         Connect-YardstickGraph
         Connect-YardstickGraph
         Should -Invoke Invoke-RestMethod -ModuleName YardstickFederation -Times 1 -Exactly -ParameterFilter { $Uri -like '*oidctoken*' }
+    }
+
+    It 'does not reuse a token from a client-secret sign-in once federation is on' {
+        Clear-FederationEnvironment
+        Mock Invoke-RestMethod -ModuleName YardstickGraph { [pscustomobject]@{ access_token = 'secret-token'; token_type = 'Bearer'; expires_in = 3600 } }
+        Connect-YardstickGraph -TenantID 'tenant-old' -ClientID 'client-old' -ClientSecret 'secret'
+        Set-FederationEnvironment
+        Connect-YardstickGraph
+        $Global:AuthenticationHeader.Authorization | Should -Be 'Bearer graph-token-1'
+    }
+
+    It 'does not reuse a token for a different app' {
+        Connect-YardstickGraph
+        Connect-YardstickGraph -ClientID '99999999-8888-7777-6666-555555555555'
+        Should -Invoke Invoke-RestMethod -ModuleName YardstickFederation -Times 2 -Exactly -ParameterFilter { $Uri -like '*oidctoken*' }
     }
 
     It 'gets a fresh assertion on -Force' {

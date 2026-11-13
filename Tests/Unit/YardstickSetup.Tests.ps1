@@ -639,6 +639,30 @@ Describe "App registration building blocks" {
 }
 
 
+Describe "Get-YardstickAppTokenRoles" {
+    BeforeEach {
+        Mock Connect-YardstickGraph { [pscustomobject]@{ AccessToken = (New-TestJwt -Claims @{ roles = @('DeviceManagementApps.ReadWrite.All') }) } } -ModuleName YardstickSetup
+    }
+
+    It "Signs in with the secret it is given" {
+        Mock Get-YardstickFederatedIdentity { $null } -ModuleName YardstickSetup
+        Get-YardstickAppTokenRoles -TenantId 't' -ClientId 'c' -ClientSecret 's' | Should -Be 'DeviceManagementApps.ReadWrite.All'
+        Should -Invoke Connect-YardstickGraph -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { $ClientSecret -eq 's' }
+    }
+
+    It "Refuses to sign in without a secret when federation is not configured, rather than borrow the session's" {
+        Mock Get-YardstickFederatedIdentity { $null } -ModuleName YardstickSetup
+        { Get-YardstickAppTokenRoles -TenantId 't' -ClientId 'c' } | Should -Throw '*client secret is required*'
+        Should -Invoke Connect-YardstickGraph -ModuleName YardstickSetup -Times 0 -Exactly
+    }
+
+    It "Signs in through federation without a secret" {
+        Mock Get-YardstickFederatedIdentity { [pscustomobject]@{ TenantID = 't'; ClientID = 'c'; Provider = 'GitHubActions' } } -ModuleName YardstickSetup
+        Get-YardstickAppTokenRoles -TenantId 't' -ClientId 'c' | Should -Be 'DeviceManagementApps.ReadWrite.All'
+        Should -Invoke Connect-YardstickGraph -ModuleName YardstickSetup -Times 1 -Exactly -ParameterFilter { -not $PSBoundParameters.ContainsKey('ClientSecret') }
+    }
+}
+
 Describe "Wait-YardstickAppCredential" {
     BeforeEach { Mock Start-Sleep { } -ModuleName YardstickSetup }
 

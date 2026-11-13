@@ -16,7 +16,7 @@ BeforeAll {
 
     # Mocks need the commands to exist already. The script re-imports these, but a
     # Pester mock is an alias, which wins over the re-imported functions.
-    foreach ($module in 'YardstickSupport', 'YardstickCredential', 'YardstickGitHub', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune') {
+    foreach ($module in 'YardstickSupport', 'YardstickFederation', 'YardstickCredential', 'YardstickGitHub', 'YardstickConfig', 'YardstickSetup', 'YardstickIntune') {
         Import-Module (Join-Path $script:repoRoot "Modules\$module.psm1") -Force
     }
 
@@ -52,6 +52,8 @@ Describe "Test-YardstickSetup.ps1" {
             [pscustomobject]@{ Target = 'Yardstick:IntuneGraph'; TenantID = 'tenant'; ClientID = 'client'; ClientSecret = 'secret'; SecretExpiresOn = $Global:YardstickTestSecretExpiresOn; LastNotifiedOn = $null }
         }
         Mock Get-YardstickAppTokenRoles { @('DeviceManagementApps.ReadWrite.All', 'DeviceManagementRBAC.Read.All') }
+        # Keep any YARDSTICK_* variables on this machine out of it.
+        Mock Get-YardstickFederatedIdentity { $null }
         Mock Invoke-RestMethod { [pscustomobject]@{ value = @() } }
         Mock Get-ScheduledTask { $null }
         Mock Test-OutlookAvailability { $true }

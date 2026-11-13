@@ -38,6 +38,7 @@ $script:FederationTriggerVariables = @(
 $script:AzureDevOpsOidcApiVersion = '7.1'
 $script:EntraTokenExchangeAudience = 'api://AzureADTokenExchange'
 $script:FederationMaxAttempts = 3
+$script:FederationMaxRetryDelaySeconds = 60
 $script:ClientAssertionType = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
 
 
@@ -47,6 +48,16 @@ function Get-FederationEnvironmentValue {
     $value = [Environment]::GetEnvironmentVariable($Name)
     if ([string]::IsNullOrWhiteSpace($value)) { return $null }
     return $value.Trim()
+}
+
+
+function Test-FederationRequestUri {
+    # Plain HTTP only to this machine, so a job token is never sent unencrypted.
+    param([string]$Uri)
+
+    $parsed = $null
+    if (-not [uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$parsed)) { return $false }
+    return $parsed.Scheme -eq 'https' -or ($parsed.Scheme -eq 'http' -and $parsed.IsLoopback)
 }
 
 
@@ -85,7 +96,7 @@ function Get-YardstickFederatedIdentity {
     [CmdletBinding()]
     param()
 
-    $triggered = @($script:FederationTriggerVariables | Where-Object { Get-FederationEnvironmentValue -Name $_ })
+    $triggered = @($script:FederationTriggerVariables | Where-Object { -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($_)) })
     if ($triggered.Count -eq 0) { return $null }
 
     $values = @{}
@@ -96,12 +107,14 @@ function Get-YardstickFederatedIdentity {
 
     $problems = [System.Collections.Generic.List[string]]::new()
     foreach ($name in $script:FederationTriggerVariables) {
-        if ($values[$name] -and (Test-UnresolvedPipelineMacro $values[$name])) {
+        if ($name -in $triggered -and -not $values[$name]) {
+            $problems.Add("$name is set but blank")
+        } elseif ($values[$name] -and (Test-UnresolvedPipelineMacro $values[$name])) {
             $problems.Add("$name is the unresolved pipeline variable '$($values[$name])'")
         }
     }
     foreach ($name in 'YARDSTICK_TENANT_ID', 'YARDSTICK_CLIENT_ID') {
-        if (-not $values[$name]) { $problems.Add("$name is not set") }
+        if ($name -notin $triggered) { $problems.Add("$name is not set") }
     }
 
     $guid = [guid]::Empty
@@ -132,16 +145,21 @@ function Get-YardstickFederatedIdentity {
     switch ($provider) {
         'File' {
             $tokenFile = $values.YARDSTICK_FEDERATED_TOKEN_FILE
-            if (-not (Test-UnresolvedPipelineMacro $tokenFile) -and -not (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
-                $problems.Add("YARDSTICK_FEDERATED_TOKEN_FILE '$tokenFile' does not exist")
+            if (-not (Test-UnresolvedPipelineMacro $tokenFile)) {
+                if (-not [IO.Path]::IsPathFullyQualified($tokenFile)) {
+                    # Yardstick changes directory during a run, so a relative path would move.
+                    $problems.Add("YARDSTICK_FEDERATED_TOKEN_FILE '$tokenFile' is not a full path")
+                } elseif (-not (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
+                    $problems.Add("YARDSTICK_FEDERATED_TOKEN_FILE '$tokenFile' does not exist")
+                }
             }
         }
         'AzureDevOps' {
             $requestUri = $values.SYSTEM_OIDCREQUESTURI
             if (-not $requestUri) {
                 $problems.Add('SYSTEM_OIDCREQUESTURI is not set (it is predefined in Azure DevOps jobs; Yardstick must run inside a pipeline job)')
-            } elseif (-not [uri]::IsWellFormedUriString($requestUri, [UriKind]::Absolute)) {
-                $problems.Add('SYSTEM_OIDCREQUESTURI is not an absolute URI')
+            } elseif (-not (Test-FederationRequestUri $requestUri)) {
+                $problems.Add('SYSTEM_OIDCREQUESTURI is not an absolute https URI')
             }
             if (-not $values.SYSTEM_ACCESSTOKEN -or (Test-UnresolvedPipelineMacro $values.SYSTEM_ACCESSTOKEN)) {
                 $problems.Add('SYSTEM_ACCESSTOKEN is not available; map it on the step with "SYSTEM_ACCESSTOKEN: $(System.AccessToken)"')
@@ -149,8 +167,8 @@ function Get-YardstickFederatedIdentity {
         }
         'GitHubActions' {
             $requestUri = $values.ACTIONS_ID_TOKEN_REQUEST_URL
-            if (-not [uri]::IsWellFormedUriString($requestUri, [UriKind]::Absolute)) {
-                $problems.Add('ACTIONS_ID_TOKEN_REQUEST_URL is not an absolute URI')
+            if (-not (Test-FederationRequestUri $requestUri)) {
+                $problems.Add('ACTIONS_ID_TOKEN_REQUEST_URL is not an absolute https URI')
             }
             if (-not $values.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
                 $problems.Add("ACTIONS_ID_TOKEN_REQUEST_TOKEN is not set; give the job 'permissions: id-token: write'")
@@ -294,6 +312,24 @@ function Get-FederationErrorDetail {
 }
 
 
+function Get-FederationRetryDelay {
+    param([Parameter(Mandatory)]$ErrorRecord, [Parameter(Mandatory)][int]$Attempt)
+
+    $delay = [math]::Pow(2, $Attempt)
+    $responseProperty = $ErrorRecord.Exception.PSObject.Properties['Response']
+    $response = if ($responseProperty) { $responseProperty.Value } else { $null }
+    $retryAfter = if ($response -and $response.PSObject.Properties['Headers'] -and $response.Headers.PSObject.Properties['RetryAfter']) { $response.Headers.RetryAfter }
+    if ($retryAfter) {
+        if ($null -ne $retryAfter.Delta) {
+            $delay = $retryAfter.Delta.TotalSeconds
+        } elseif ($null -ne $retryAfter.Date) {
+            $delay = ($retryAfter.Date - [datetimeoffset]::UtcNow).TotalSeconds
+        }
+    }
+    return [int][math]::Ceiling([math]::Min([math]::Max($delay, 1), $script:FederationMaxRetryDelaySeconds))
+}
+
+
 function Invoke-FederationRestMethod {
     # Invoke-RestMethod with retries for transient failures. Non-transient failures
     # and exhausted retries rethrow the original error record.
@@ -312,7 +348,7 @@ function Invoke-FederationRestMethod {
             $status = Get-FederationErrorStatusCode -ErrorRecord $_
             $transient = ($null -eq $status) -or ($status -in 408, 429) -or ($status -ge 500 -and $status -le 599)
             if (-not $transient -or $attempt -ge $script:FederationMaxAttempts) { throw }
-            Start-Sleep -Seconds ([math]::Pow(2, $attempt))
+            Start-Sleep -Seconds (Get-FederationRetryDelay -ErrorRecord $_ -Attempt $attempt)
         }
     }
 }

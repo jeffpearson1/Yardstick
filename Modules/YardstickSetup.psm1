@@ -14,6 +14,7 @@
 Import-Module (Join-Path $PSScriptRoot 'YardstickConfig.psm1')
 Import-Module (Join-Path $PSScriptRoot 'YardstickGraph.psm1')
 Import-Module (Join-Path $PSScriptRoot 'YardstickCredential.psm1')
+Import-Module (Join-Path $PSScriptRoot 'YardstickFederation.psm1')
 
 # Microsoft Graph's well-known application ID; the same in every tenant.
 $Script:GraphResourceAppId = '00000003-0000-0000-c000-000000000000'
@@ -967,7 +968,11 @@ function Get-YardstickAppTokenRoles {
     )
 
     $connect = @{ TenantID = $TenantId; ClientID = $ClientId }
-    if ($ClientSecret) { $connect.ClientSecret = $ClientSecret }
+    if ($ClientSecret) {
+        $connect.ClientSecret = $ClientSecret
+    } elseif (-not (Get-YardstickFederatedIdentity)) {
+        throw 'A client secret is required when workload identity federation is not configured.'
+    }
     $token = Connect-YardstickGraph @connect -Force -PassThru
     $claims = ConvertFrom-YardstickJwt -Token $token.AccessToken
     if ($claims.PSObject.Properties['roles']) { return @($claims.roles) }

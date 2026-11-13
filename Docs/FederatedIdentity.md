@@ -60,7 +60,7 @@ Once federated runs work, the app registration needs no client secret.
 | `YARDSTICK_TENANT_ID` | Tenant ID |
 | `YARDSTICK_CLIENT_ID` | The app registration's client (application) ID |
 | `YARDSTICK_SERVICE_CONNECTION_ID` | Azure DevOps only: the service connection's ID |
-| `YARDSTICK_FEDERATED_TOKEN_FILE` | File only: path to the file holding the ID token |
+| `YARDSTICK_FEDERATED_TOKEN_FILE` | File only: full path to the file holding the ID token |
 
 Setting any of these turns federated mode on. From then on the tenant, the client
 and one ID token source are required, and a missing, malformed or conflicting input
@@ -142,13 +142,13 @@ connection's ID:
 ```
 
 Use an inline script as shown: with `ScriptType: FilePath` the task drops the
-script's exit code, so a run in which an app failed would still pass.
+script's exit code, so a failed run would still pass.
 
 ### A token file
 
 On any other platform, write an ID token whose audience is
-`api://AzureADTokenExchange` to a file and point `YARDSTICK_FEDERATED_TOKEN_FILE`
-at it. Yardstick reads the file every time it signs in, so a platform that refreshes
+`api://AzureADTokenExchange` to a file and set `YARDSTICK_FEDERATED_TOKEN_FILE` to
+its full path. Yardstick reads the file every time it signs in, so a platform that refreshes
 the file (such as a Kubernetes projected service account token) keeps a long run
 going. A token written once is used until it expires, so the run must finish within
 its lifetime.
@@ -160,7 +160,10 @@ Every federated failure starts with `Workload identity federation`.
 | Message contains | Cause |
 |---|---|
 | `is not configured correctly: ... is not set` | A variable is missing. For Azure DevOps, `SYSTEM_OIDCREQUESTURI` is missing when Yardstick isn't running in a pipeline job |
+| `is set but blank` | A variable holds only spaces, often an empty pipeline variable |
 | `no ID token source is set` | The tenant or client is set, but there is no token file, no service connection and no GitHub Actions ID token |
+| `is not an absolute https URI` | The platform's ID token endpoint isn't HTTPS. Plain HTTP is accepted only to this machine |
+| `is not a full path` | `YARDSTICK_FEDERATED_TOKEN_FILE` is relative; Yardstick changes directory during a run |
 | `give the job 'permissions: id-token: write'` | GitHub Actions isn't offering the job an ID token |
 | `is the unresolved pipeline variable '$(...)'` | The Azure DevOps variable named in the macro doesn't exist (usually a typo) |
 | `SYSTEM_ACCESSTOKEN is not available` | The step doesn't map `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` |

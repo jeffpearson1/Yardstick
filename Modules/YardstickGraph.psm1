@@ -66,10 +66,12 @@ function Connect-YardstickGraph {
         throw 'Required Graph credentials are not set: TenantID, ClientID, and ClientSecret are required.'
     }
 
+    $context = '{0}|{1}|{2}' -f $TenantID, $ClientID, $(if ($federatedIdentity) { 'federated' } else { 'secret' })
     $expiresOn = Get-YardstickGraphTokenExpiry
     $authenticationHeader = Get-YardstickGlobalValue -Name AuthenticationHeader
     if (-not $Force -and $authenticationHeader -and $authenticationHeader.Authorization -and
-        $expiresOn -and $expiresOn -gt [datetimeoffset]::UtcNow.AddMinutes(30)) {
+        $expiresOn -and $expiresOn -gt [datetimeoffset]::UtcNow.AddMinutes(30) -and
+        (-not $script:AccessToken -or $script:AccessToken.Context -eq $context)) {
         if ($PassThru) { return $script:AccessToken }
         return
     }
@@ -97,6 +99,7 @@ function Connect-YardstickGraph {
         AccessToken = [string]$tokenResponse.access_token
         TokenType   = if ($tokenResponse.token_type) { [string]$tokenResponse.token_type } else { 'Bearer' }
         ExpiresOn   = $expiresOn
+        Context     = $context
     }
 
     # Keep these globals during the migration because credential and reporting
