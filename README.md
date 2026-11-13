@@ -92,6 +92,7 @@ Many recipes check GitHub for their latest release. GitHub allows 60 anonymous c
 ```powershell
 .\Yardstick.ps1 -AppId googlechrome
 ```
+* When any application fails, Yardstick still processes the rest, then exits with code **40** so a scheduled task or pipeline shows the run as failed. In Azure DevOps and GitHub Actions each failed application is also listed as an error in the run summary. Codes 1 and 3 mean the run stopped before processing any application (bad parameters, prerequisites, sign-in, or an unreadable recipe group).
 
 ### Version Locking
 

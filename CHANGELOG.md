@@ -130,6 +130,12 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Changed
 
+- **A run in which any application failed exits with code 40.** Each app's failure
+  is still caught so the rest of the run carries on, but the run used to exit 0, so
+  a scheduled task or pipeline showed it as a success. In Azure DevOps and GitHub
+  Actions each failed application is also listed as an error in the run summary, and
+  `Invoke-Yardstick` throws saying the run finished with failed applications.
+
 - **Shared icons and recipe overrides sync in both directions.** Icons and override
   fields added or changed on this machine are now written to the share, as well as
   taken from it, and the recipe harness scripts (`Invoke-RecipeLab.ps1`,

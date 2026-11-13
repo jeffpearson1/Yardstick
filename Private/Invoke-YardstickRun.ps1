@@ -2159,6 +2159,22 @@ if ($sendReport) {
 # Clean up
 Invoke-Cleanup
 
+$failedApplications = @(Get-FailedApplication)
+if ($failedApplications.Count -gt 0) {
+    foreach ($app in $failedApplications) {
+        # Pipeline annotations are one line; a multi-line error would be cut off.
+        $message = "$($app.ApplicationId) failed at $($app.FailureStage): $($app.ErrorMessage)" -replace '\r?\n', ' '
+        if ($env:TF_BUILD) {
+            Write-Host "##vso[task.logissue type=error]$message"
+        } elseif ($env:GITHUB_ACTIONS -eq 'true') {
+            Write-Host "::error::$($message.Replace('%', '%25'))"
+        }
+    }
+    Write-Log "$($failedApplications.Count) application(s) failed: $(($failedApplications.ApplicationId) -join ', ')"
+    # Not a low code: Task Scheduler shows those as Windows errors, e.g. 2 as "cannot find the file".
+    exit 40
+}
+
 # Explicit, so Invoke-Yardstick reads a success code rather than whatever the last
 # native command in the run happened to leave in $LASTEXITCODE.
 exit 0

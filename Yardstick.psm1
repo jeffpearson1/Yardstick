@@ -213,6 +213,9 @@ function Invoke-Yardstick {
         # Yardstick.ps1 hands this on as the process exit code.
         $global:LASTEXITCODE = $exitCode
         $log = Join-Path $Global:LogLocation $Global:LogFile
+        if ($exitCode -eq 40) {
+            throw "The Yardstick run finished, but at least one application failed (exit code 40). See $log for details."
+        }
         throw "The Yardstick run stopped with exit code $exitCode. See $log for details."
     }
 }
