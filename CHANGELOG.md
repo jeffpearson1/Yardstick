@@ -7,6 +7,21 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Added
 
+- **Workload identity federation.** In a CI/CD pipeline, Yardstick can sign in to
+  Microsoft Graph with the pipeline's short-lived ID token instead of a client
+  secret, so no secret is stored anywhere. Set `YARDSTICK_TENANT_ID` and
+  `YARDSTICK_CLIENT_ID`, and the ID token comes from:
+  - **GitHub Actions**, when the job has `id-token: write`;
+  - **Azure DevOps**, through the workload identity federation service connection
+    named by `YARDSTICK_SERVICE_CONNECTION_ID`;
+  - **a file** named by `YARDSTICK_FEDERATED_TOKEN_FILE`, for any other platform.
+
+  A fresh ID token is used for every Graph token, so long runs keep going. Once any
+  of these variables is set, a missing or wrong one stops the run; Yardstick never
+  falls back to a stored secret. Credential Manager, the secret-expiry check and its
+  email are skipped, and `Test-YardstickSetup.ps1` checks the federated sign-in
+  instead. See [Workload identity federation](Docs/FederatedIdentity.md).
+
 - **Company Portal categories and featured apps.** Two optional recipe fields,
   usually set in `Local\recipeOverrides.yaml`:
   - **`categories`** links each new app version to existing Intune app categories,
