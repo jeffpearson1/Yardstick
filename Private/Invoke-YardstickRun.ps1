@@ -2169,7 +2169,8 @@ if ($failedApplications.Count -gt 0) {
         }
     }
     Write-Log "$($failedApplications.Count) application(s) failed: $(($failedApplications.ApplicationId) -join ', ')"
-    exit 2
+    # Not a low code: Task Scheduler shows those as Windows errors, e.g. 2 as "cannot find the file".
+    exit 40
 }
 
 # Explicit, so Invoke-Yardstick reads a success code rather than whatever the last

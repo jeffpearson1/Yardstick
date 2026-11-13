@@ -104,7 +104,7 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Changed
 
-- **A run in which any application failed exits with code 2.** Each app's failure
+- **A run in which any application failed exits with code 40.** Each app's failure
   is still caught so the rest of the run carries on, but the run used to exit 0, so
   a scheduled task or pipeline showed it as a success. In Azure DevOps and GitHub
   Actions each failed application is also listed as an error in the run summary, and
