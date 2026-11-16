@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "hlm",
+  "recipePath": "Recipes/hlm.yaml",
+  "recipeSha256": "626db4b9d9bf0b6c08a9c2638f788c596d78ed67b1884a5a2ab8f9b8c692b0e9",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-13T21:02:36Z",
+  "studioVersion": "none (assembled from Invoke-RecipeInstallTest.ps1 summary.json)",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "HLMInstaller.exe",
+    "version": "8.2",
+    "sha256": "1c08c4a3b71f432327390c0586dd93ebf424fe32751283f688deb1bb4313b738",
+    "signer": "Scientific Software International, Inc."
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "HLMInstaller.exe v8.2 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (script: exit=1 stdout='Not Detected')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='HLMInstaller.exe /quiet /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout='Not Detected'"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
