@@ -18,7 +18,7 @@ publisher: GitHub, Inc.
 description: GitHub Copilot CLI brings the Copilot coding agent to the terminal, so you can build, debug, and understand code using natural language without leaving the command line.
 fileType: msi
 detectionType: msi
-installExperience: system
+installExperience: user
 restartBehavior: suppress
 minOSVersion: W10_20H2
 architecture: x64
