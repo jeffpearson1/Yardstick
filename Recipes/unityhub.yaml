@@ -25,6 +25,11 @@ postRunScript: |
 fileName: UnityHubSetup-x64.msix
 powerShellInstallScript: |
   $ErrorActionPreference = 'Stop'
+  $legacyUninstaller = Join-Path $env:ProgramFiles 'Unity Hub\Uninstall Unity Hub.exe'
+  if (Test-Path -LiteralPath $legacyUninstaller -PathType Leaf) {
+    $legacyUninstall = Start-Process -FilePath $legacyUninstaller -ArgumentList '/S' -Wait -PassThru
+    if ($legacyUninstall.ExitCode -ne 0) { throw "Legacy Unity Hub uninstall failed with exit code $($legacyUninstall.ExitCode)." }
+  }
   Add-AppxProvisionedPackage -Online -PackagePath (Join-Path $PSScriptRoot '<filename>') -SkipLicense -Regions 'all' | Out-Null
   exit 0
 powerShellUninstallScript: |
