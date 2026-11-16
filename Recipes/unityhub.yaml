@@ -1,26 +1,60 @@
-url: https://public-cdn.cloud.unity3d.com/hub/prod/UnityHubSetup-x64.exe
+url: https://public-cdn.cloud.unity3d.com/hub/prod/UnityHubSetup-x64.msix
 urlRedirects: false
 preDownloadScript: |
-  using module .\Modules\VersionPro.psm1
-  $vURL = "https://unity.com/unity-hub/release-notes"
-  $content = Invoke-WebRequest $vURL
-  $content.content -match '(?<=mango:text-heading-xl mango:m-0 mango:text-balance\">)([0-9]{1,3}\.{0,1}){3}' | Out-Null
-  $version = $matches[0]
-  $fileDetectionVersion = ([VersionPro]$Version).ToString(4)
-fileName: UnityHubSetup.exe
-installScript: UnityHubSetup.exe /S
-uninstallScript: |
- "C:\Program Files\Unity Hub\Uninstall Unity Hub.exe" /S
+  # Read the identity from the actual downloaded package, not a separate release feed.
+  $fileName = 'UnityHubSetup-x64.msix'
+  $unityHubStaged = Join-Path $env:TEMP "UnityHub-$([guid]::NewGuid().ToString('N')).msix"
+  Invoke-YardstickBitsDownload -Source $url -Destination $unityHubStaged
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $unityHubArchive = [System.IO.Compression.ZipFile]::OpenRead($unityHubStaged)
+  try {
+    $unityHubEntry = $unityHubArchive.GetEntry('AppxManifest.xml')
+    if (-not $unityHubEntry) { throw 'Unity Hub MSIX has no AppxManifest.xml.' }
+    $unityHubReader = [System.IO.StreamReader]::new($unityHubEntry.Open())
+    try { [xml]$unityHubManifest = $unityHubReader.ReadToEnd() } finally { $unityHubReader.Dispose() }
+    $unityHubIdentity = $unityHubManifest.Package.Identity
+    if ($unityHubIdentity.Name -ne 'UnityTechnologies.UnityHub' -or $unityHubIdentity.ProcessorArchitecture -ne 'x64' -or $unityHubIdentity.Version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+      throw 'Unexpected Unity Hub MSIX identity, architecture, or version.'
+    }
+    $version = [string]$unityHubIdentity.Version
+  } finally { $unityHubArchive.Dispose() }
+downloadScript: |
+  Move-Item -LiteralPath $unityHubStaged -Destination (Join-Path (Get-Location) $fileName) -Force
+postRunScript: |
+  if ($unityHubStaged -and (Test-Path -LiteralPath $unityHubStaged)) { Remove-Item -LiteralPath $unityHubStaged -Force }
+fileName: UnityHubSetup-x64.msix
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  Add-AppxProvisionedPackage -Online -PackagePath (Join-Path $PSScriptRoot '<filename>') -SkipLicense -Regions 'all' | Out-Null
+  exit 0
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'Stop'
+  Get-Process -Name 'Unity Hub' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  foreach ($package in @(Get-AppxPackage -AllUsers -Name 'UnityTechnologies.UnityHub')) {
+    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+  }
+  foreach ($package in @(Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq 'UnityTechnologies.UnityHub')) {
+    Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -AllUsers -ErrorAction Stop | Out-Null
+  }
+  exit 0
 iconFile: unityhub.png
 id: unityhub
 displayName: Unity Hub
 publisher: Unity
-description:  The world's most popular development platform for creating 2D and 3D multiplatform games and interactive experiences.
-detectionType: file
-fileDetectionPath: 'C:\Program Files\Unity Hub'
-fileDetectionName: 'Unity Hub.exe'
-fileDetectionMethod: version
-fileDetectionOperator: greaterThanOrEqual
+description: The Unity Hub manages Unity projects and Editor installations.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  foreach ($package in @(Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq 'UnityTechnologies.UnityHub')) {
+    $found = $null
+    if ([version]::TryParse([string]$package.Version, [ref]$found) -and $found -ge $expected) {
+      Write-Output 'Detected'
+      exit 0
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
 installExperience: system
 restartBehavior: suppress
-minOSVersion: W10_20H2
+minOSVersion: W10_21H1
