@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "unityhub",
+  "recipePath": "Recipes/unityhub.yaml",
+  "recipeSha256": "0ca4dc9f518164f1ab107c1d2bc0782ce92094d88972b59f2d1e6f5cace9b806",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-16T20:22:05Z",
+  "studioVersion": "0.6.1",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "UnityHubSetup-x64.msix",
+    "version": "4.0.1.65535",
+    "sha256": "18EADB4B68330E4CFF7B8E8241E3713A6B7FAFE112AB51D7A24F086BDD35F18F",
+    "signer": "CN=Unity Technologies SF, O=Unity Technologies SF, L=San Francisco, S=California, C=US, SERIALNUMBER=3183233, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=California, OID.1.3.6.1.4.1.311.60.2.1.3=US"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "UnityHubSetup-x64.msix v4.0.1.65535 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (script: exit=1 stdout='Not Detected')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout='Not Detected'"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
