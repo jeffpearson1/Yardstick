@@ -1153,6 +1153,13 @@ if ($Prefs.syncRecipes -eq $true) {
 }
 $RecipeSearchPaths = @(Get-YardstickRecipeSearchPath -Preferences $Prefs -ProjectRoot $ProjectRoot)
 
+# An override keyed by anything but a recipe id is never applied, and the app
+# uploads with the default scope tags instead.
+$unmatchedOverrides = @(Get-UnmatchedRecipeOverride -Overrides $RecipeOverrides -RecipesPath $RecipeSearchPaths)
+if ($unmatchedOverrides) {
+    Write-Log "$($unmatchedOverrides.Count) recipe override(s) name no recipe, so they are never applied: $($unmatchedOverrides -join ', '). Key each by its recipe's file name." -Level Warning
+}
+
 # Validate ApplicationId parameter. A variant's id, from the overrides file, is
 # valid when the recipe it is built from is.
 if ($ApplicationId) {
@@ -1963,6 +1970,11 @@ while ($RecipePass.Count -gt 0) {
 
             # Create the Intune App
             Write-Log "Uploading $Script:DisplayName $Script:Version to Intune..."
+            $scopeTagSource = if ($null -eq $Parameters.scopeTags) { 'defaultScopeTags in preferences' }
+                elseif (@($VariantOf, $AppId_Processing) | Where-Object { $_ -and $RecipeOverrides.ContainsKey($_) -and $RecipeOverrides[$_].Contains('scopeTags') }) { 'recipe overrides' }
+                else { 'recipe' }
+            $scopeTagList = if ($Script:ScopeTags) { @($Script:ScopeTags) -join ', ' } else { 'Default' }
+            Write-Log "Scope tags: $scopeTagList (from $scopeTagSource)." -Level Detail
             Set-YardstickWatchdogStage -Stage 'Upload'
             Connect-YardstickGraph
             try {

@@ -136,6 +136,13 @@ All notable changes to Yardstick are recorded here. Versions follow
   Actions each failed application is also listed as an error in the run summary, and
   `Invoke-Yardstick` throws saying the run finished with failed applications.
 
+- **Runs flag recipe overrides that match no recipe, and log scope tags.** An
+  override keyed by anything but a recipe's file name (for example `gitforwindows`
+  for `Git.yaml`) is never applied, so the app uploads with `defaultScopeTags`. Each
+  run now warns about such entries at the start, as `Test-YardstickSetup.ps1`
+  already did, and YLog records the scope tags of every upload and where they came
+  from (recipe, recipe overrides or `defaultScopeTags`).
+
 - **Shared icons and recipe overrides sync in both directions.** Icons and override
   fields added or changed on this machine are now written to the share, as well as
   taken from it, and the recipe harness scripts (`Invoke-RecipeLab.ps1`,

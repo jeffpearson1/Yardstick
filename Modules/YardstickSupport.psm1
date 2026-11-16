@@ -4188,6 +4188,38 @@ function Get-RecipeVariant {
     }
 }
 
+function Get-UnmatchedRecipeOverride {
+    <#
+    .SYNOPSIS
+    Lists the overrides entries that name no recipe.
+
+    .DESCRIPTION
+    An entry applies only to the recipe whose id (file name) it matches, so one
+    keyed by anything else, such as the app's display name, is never applied and
+    the recipe uploads with its own or the default scope tags. A variant counts
+    as matched. Recipes in a Disabled folder count too, since their entries are
+    waiting for them.
+
+    .PARAMETER Overrides
+    The effective overrides, from Import-YardstickEffectiveRecipeOverrides.
+
+    .PARAMETER RecipesPath
+    The recipe folders, from Get-YardstickRecipeSearchPath.
+
+    .OUTPUTS
+    System.String. The unmatched ids, sorted.
+    #>
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Overrides,
+        [Parameter(Mandatory)][string[]]$RecipesPath
+    )
+
+    $known = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    Get-YardstickRecipeFile -RecipesPath $RecipesPath -IncludeDisabled | ForEach-Object { [void]$known.Add($_.BaseName) }
+    Get-RecipeVariant -Overrides $Overrides | ForEach-Object { [void]$known.Add($_.Id) }
+    @($Overrides.Keys | Where-Object { -not $known.Contains([string]$_) } | Sort-Object)
+}
+
 
 function Resolve-RecipeOverride {
     <#

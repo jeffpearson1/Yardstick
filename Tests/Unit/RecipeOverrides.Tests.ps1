@@ -220,6 +220,32 @@ Describe "Get-RecipePlaceholder" {
     }
 }
 
+Describe "Get-UnmatchedRecipeOverride" {
+    BeforeAll {
+        $script:recipes = Join-Path $TestDrive 'UnmatchedRecipes'
+        New-Item -ItemType Directory -Path (Join-Path $script:recipes 'Disabled') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:recipes 'Git.yaml') -Value 'id: Git'
+        Set-Content -LiteralPath (Join-Path $script:recipes 'Disabled\oldapp.yaml') -Value 'id: oldapp'
+    }
+
+    It "Lists an entry keyed by something other than a recipe id" {
+        $overrides = @{ gitforwindows = @{ scopeTags = @('Labs') }; Git = @{ scopeTags = @('Labs') } }
+        Get-UnmatchedRecipeOverride -Overrides $overrides -RecipesPath $script:recipes | Should -Be @('gitforwindows')
+    }
+
+    It "Matches recipe ids case-insensitively" {
+        Get-UnmatchedRecipeOverride -Overrides @{ git = @{ scopeTags = @('Labs') } } -RecipesPath $script:recipes | Should -BeNullOrEmpty
+    }
+
+    It "Counts variants and disabled recipes as matched" {
+        $overrides = @{
+            'git.labs' = @{ variantOf = 'Git'; displayName = 'Git (Labs)' }
+            oldapp     = @{ scopeTags = @('Labs') }
+        }
+        Get-UnmatchedRecipeOverride -Overrides $overrides -RecipesPath $script:recipes | Should -BeNullOrEmpty
+    }
+}
+
 Describe "Get-YardstickRecipeOverridesPath" {
     It "Uses the RecipeOverrides entry of the project manifest" {
         $root = Join-Path $TestDrive 'WithEntry'

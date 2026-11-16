@@ -308,7 +308,10 @@ try {
             $recipeIds = @(Get-YardstickRecipeFile -RecipesPath $recipeSearchPaths -IncludeDisabled | ForEach-Object BaseName)
         }
         $variants = @(Get-RecipeVariant -Overrides $overrides)
-        $unmatched = @($overrides.Keys | Where-Object { $_ -notin $recipeIds -and $_ -notin $variants.Id } | Sort-Object)
+        $unmatched = @()
+        if ($recipeFolder -and (Test-Path -LiteralPath $recipeFolder -PathType Container)) {
+            $unmatched = @(Get-UnmatchedRecipeOverride -Overrides $overrides -RecipesPath $recipeSearchPaths)
+        }
         if ($unmatched.Count -gt 0) {
             Add-Check 'Recipe overrides' Warn "$($unmatched.Count) override(s) in $overrideSources name no recipe, so they are never applied: $($unmatched -join ', ')"
         } else {
