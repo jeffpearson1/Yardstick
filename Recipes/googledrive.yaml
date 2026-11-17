@@ -1,26 +1,36 @@
 url: https://dl.google.com/drive-file-stream/GoogleDriveSetup.exe
 urlRedirects: false
 preDownloadScript: |
-  $VURL = "https://support.google.com/a/answer/7577057"
-  $Content = Invoke-WebRequest -Uri $VURL
-  $Content.content -match "(?<=<em>Version\ )[0-9]{2,3}\.[0-9]{1,4}(?=</em>)" | Out-Null
-  $Version = $matches[0]
-postDownloadScript:
-  $fileDetectionVersion = (Get-Item $filename).VersionInfo.FileVersion;
-  $fileDetectionPath = "C:\Program Files\Google\Drive File Stream\$fileDetectionVersion"
+  # The CDN installer can lag the version listed on the release notes page, so the version comes from the installer itself.
+  $tempInstaller = Join-Path $env:TEMP "GoogleDriveSetup-$([guid]::NewGuid().ToString('N')).exe"
+  try {
+    Invoke-YardstickBitsDownload -Source $url -Destination $tempInstaller -ErrorAction Stop
+    $version = (Get-Item $tempInstaller).VersionInfo.FileVersion
+  } finally {
+    Remove-Item $tempInstaller -Force -ErrorAction SilentlyContinue
+  }
+  if ($version -notmatch '^\d+\.\d+(\.\d+){0,2}$') { throw "Unexpected Google Drive installer version '$version'" }
 installScript: <filename> --silent --skip_launch_new --gsuite_shortcuts=false
-uninstallScript: '"C:\Program Files\Google\Drive File Stream\<version>\uninstall.exe" --silent'
-version:
+powerShellUninstallScript: |
+  $root = 'C:\Program Files\Google\Drive File Stream'
+  $uninstaller = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d+(\.\d+)+$' -and (Test-Path (Join-Path $_.FullName 'uninstall.exe')) } |
+    Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+  if (-not $uninstaller) { exit 0 }
+  $p = Start-Process (Join-Path $uninstaller.FullName 'uninstall.exe') -ArgumentList '--silent' -Wait -PassThru
+  exit $p.ExitCode
 fileName: GoogleDriveSetup.exe
 iconFile: googledrive.png
-id: GoogleDrive
+id: googledrive
 displayName: Google Drive for Desktop
 publisher: Google
 description: Google Drive for Desktop lets you sync your Google Drive files to your computer so that you can work with files offline and in the cloud.
 softwareName: Google Drive
-detectionType: file
-fileDetectionPath: 
-fileDetectionName: GoogleDriveFS.exe
-fileDetectionMethod: version
-fileDetectionVersion:
-fileDetectionOperator: equal
+detectionType: script
+detectionScript: |
+  $root = 'C:\Program Files\Google\Drive File Stream'
+  $min = [version]'<version>'
+  $found = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d+(\.\d+)+$' -and [version]$_.Name -ge $min -and (Test-Path (Join-Path $_.FullName 'GoogleDriveFS.exe')) }
+  if ($found) { Write-Output 'Detected'; exit 0 }
+  exit 1
