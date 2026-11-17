@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "googledrive",
+  "recipePath": "Recipes/googledrive.yaml",
+  "recipeSha256": "927ba1a9520d87f4419398edd9808119509e7e5c69aaf02d77f52ffd954cc4a1",
+  "validated": true,
+  "verdict": "ValidatedWithWarnings",
+  "reason": "",
+  "testedAt": "2026-11-13T23:09:40Z",
+  "studioVersion": "0.6.1",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "GoogleDriveSetup.exe",
+    "version": "133.0.2.0",
+    "sha256": "0B05CAFC98A7E360ADD5E9B0B5911B11AF535256FA4E350EF880FDDF3CE4454C",
+    "signer": "CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US, SERIALNUMBER=3582691, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "GoogleDriveSetup.exe v133.0.2.0 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (script: exit=1 stdout='')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='GoogleDriveSetup.exe --silent --skip_launch_new --gsuite_shortcuts=false'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=3010 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout=''"
+    },
+    {
+      "name": "Residue",
+      "status": "Warn",
+      "detail": "0 ARP entries and 2 directories remain"
+    }
+  ]
+}
