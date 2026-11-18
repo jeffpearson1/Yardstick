@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "eclipsetemurin17",
+  "recipePath": "Recipes/eclipsetemurin17.yaml",
+  "recipeSha256": "6fbf094258323ff65ef59fabc3a519f5d51314f59729a8ffd08e82ed2a9ebe03",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-18T20:01:17Z",
+  "studioVersion": "0.7.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "OpenJDK17U-jdk_x64_windows_hotspot_17.0.21_9.msi",
+    "version": "17.0.21.9",
+    "sha256": "9F06B736EF2BD07AAF82F1BD575DC92108B442B97F5D4308EB3816613C086977",
+    "signer": "CN=Eclipse Foundation, O=Eclipse Foundation, L=Bruxelles, C=BE"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "OpenJDK17U-jdk_x64_windows_hotspot_17.0.21_9.msi v17.0.21.9 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{FBF4C8AA-8099-4F4C-BD10-CCD06B0B01D3}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i OpenJDK17U-jdk_x64_windows_hotspot_17.0.21_9.msi /qn /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{FBF4C8AA-8099-4F4C-BD10-CCD06B0B01D3}' version '17.0.21.9' >= '17.0.21.9'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {FBF4C8AA-8099-4F4C-BD10-CCD06B0B01D3} /qn /norestart'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{FBF4C8AA-8099-4F4C-BD10-CCD06B0B01D3}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
