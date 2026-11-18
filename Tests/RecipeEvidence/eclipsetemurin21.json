@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "eclipsetemurin21",
+  "recipePath": "Recipes/eclipsetemurin21.yaml",
+  "recipeSha256": "0906854eafdbb481e75df5a4f3257960b60c6f6516f33e7013263ca2a66b5add",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-18T20:05:39Z",
+  "studioVersion": "0.7.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi",
+    "version": "21.0.13.9",
+    "sha256": "9DCBB8EBE24AA9EE5A47A7FAB2106A7C8988D7ACEE461260FEF107411DF91DC5",
+    "signer": "CN=Eclipse Foundation, O=Eclipse Foundation, L=Bruxelles, C=BE"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi v21.0.13.9 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.msi /qn /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}' version '21.0.13.9' >= '21.0.13.9'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {CE89C965-83BD-413A-9EF6-7F5F0B3E741E} /qn /norestart'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{CE89C965-83BD-413A-9EF6-7F5F0B3E741E}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
