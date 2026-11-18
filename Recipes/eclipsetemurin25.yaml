@@ -1,0 +1,33 @@
+# Eclipse Temurin JDK 25 LTS, Windows x64 MSI, with the vendor's default MSI features.
+# Source: Adoptium API (Eclipse Foundation), latest GA 25 release. The MSI SHA256 comes from the same API response.
+# Version is release + build, e.g. jdk-25.0.1+8 -> 25.0.1.8 (padded to 3 release parts when the release name has fewer).
+url: 'https://api.adoptium.net/v3/assets/latest/25/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse'
+preDownloadScript: |
+  $assets = @(Invoke-RestMethod -Uri $url -ErrorAction Stop)
+  $asset = @($assets | Where-Object { $_.binary.installer.link -and $_.binary.installer.name -match '\.msi$' }) | Select-Object -First 1
+  if (-not $asset) { throw 'Adoptium returned no Temurin 25 Windows x64 MSI.' }
+  $parsed = [regex]::Match([string]$asset.release_name, '^jdk-(\d+(?:\.\d+){0,3})\+(\d+)$')
+  if (-not $parsed.Success) { throw "Adoptium release name '$($asset.release_name)' is not in the expected jdk-<version>+<build> form." }
+  $releaseParts = @($parsed.Groups[1].Value -split '\.')
+  while ($releaseParts.Count -lt 3) { $releaseParts += '0' }
+  $version = (($releaseParts -join '.') + '.' + $parsed.Groups[2].Value)
+  $fileName = $asset.binary.installer.name
+  $expectedChecksum = $asset.binary.installer.checksum
+  $url = $asset.binary.installer.link
+  if ($expectedChecksum -notmatch '^[a-fA-F0-9]{64}$') { throw 'Adoptium did not provide a valid MSI SHA256 checksum.' }
+postDownloadScript: |
+  $actualChecksum = (Get-FileHash -LiteralPath (Join-Path $PWD $fileName) -Algorithm SHA256).Hash
+  if ($actualChecksum -ne $expectedChecksum) { throw 'The Temurin MSI SHA256 does not match Adoptium metadata.' }
+installScript: msiexec /i <filename> /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: eclipsetemurin.png
+id: eclipsetemurin25
+displayName: Eclipse Temurin JDK 25 (x64)
+publisher: Eclipse Foundation
+description: Eclipse Temurin OpenJDK 25 LTS development kit for Windows x64.
+fileType: msi
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+architecture: x64
