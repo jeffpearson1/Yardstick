@@ -1,0 +1,40 @@
+# Azul Zulu Community JDK 17 LTS, Windows x64. The MSI marks "Add to PATH" (FeatureEnvironment) and "JavaSoft (Oracle)
+# registry keys" (FeatureOracleJavaSoft) as Level 1 (FeatureJavaHome is Level 2, off), so a bare msiexec /i would
+# modify the system PATH and HKLM\SOFTWARE\JavaSoft. ADDLOCAL=ZuluInstallation installs only the JDK core to
+# C:\Program Files\Zulu\zulu-17 and leaves PATH, JAVA_HOME and the JavaSoft keys unchanged
+# (docs.azul.com/core/install/windows; same switch as azulzulu21). The core feature still registers HKCR .jar ->
+# Zulu.jarfile and HKLM\SOFTWARE\Azul Systems\Zulu\zulu-17; there is no separate feature to suppress the .jar mapping.
+# Source: Azul Metadata API v1 (docs.azul.com/core/install/metadata-api). arch=x64 is the documented 64-bit selector.
+# latest=true returns one package per release line (for example 17.70.201 / jdk 17.0.21.1 and 17.66.19 / jdk 17.0.19),
+# so the script sorts by distro_version and takes the highest. distro_version is four integers; the fourth is padding
+# and the MSI ProductVersion is the first three (17.70.201 verified in the MSI Property table). Reject a nonzero fourth
+# part rather than silently treating a distinct distribution as the same version.
+# Every 17.x MSI shares UpgradeCode {0EFBE51F-F003-4A7D-8CFF-2055F4F401ED} and major-upgrades older 17.x builds
+# (RemoveExistingProducts before InstallInitialize); the ProductCode changes per release, so msi detection/uninstall
+# use the extracted <productcode>. No ScheduleReboot/ForceReboot in the execute sequence.
+url: 'https://api.azul.com/metadata/v1/zulu/packages/?java_version=17&os=windows&arch=x64&java_package_type=jdk&javafx_bundled=false&archive_type=msi&release_status=ga&availability_types=CA&latest=true'
+preDownloadScript: |
+  $packages = @(Invoke-RestMethod -Uri $url -ErrorAction Stop | ForEach-Object { $_ })
+  $package = $packages | Where-Object { $_.name -match '^zulu[\d.]+-ca-jdk17[\d.]*-win_x64\.msi$' -and $_.distro_version.Count -eq 4 } | Sort-Object { [version]($_.distro_version -join '.') } -Descending | Select-Object -First 1
+  if (-not $package -or -not $package.download_url) { throw 'Azul Metadata API returned no matching Zulu 17 Windows x64 JDK MSI.' }
+  if ($package.distro_version[3] -ne 0) { throw 'Azul returned a nonzero fourth distribution version component; review the MSI version scheme.' }
+  $version = ($package.distro_version | Select-Object -First 3) -join '.'
+  $fileName = $package.name
+  $url = $package.download_url
+downloadScript: |
+  # cdn.azul.com (Cloudflare) sends Last-Modified as a Unix epoch number, not an HTTP date.
+  # BITS rejects that in normal mode ("job is not making progress"); -Dynamic works.
+  Invoke-YardstickBitsDownload -Source $url -Destination (Join-Path (Get-Location).Path $fileName) -Dynamic
+installScript: msiexec /i <filename> ADDLOCAL=ZuluInstallation /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: azulzulu.png
+id: azulzulu17
+displayName: Azul Zulu JDK 17 (x64)
+publisher: Azul Systems, Inc.
+description: Azul Zulu Community build of OpenJDK 17 LTS for 64-bit Windows.
+fileType: msi
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+architecture: x64
+minOSVersion: W10_20H2
