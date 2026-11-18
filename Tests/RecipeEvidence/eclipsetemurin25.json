@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "eclipsetemurin25",
+  "recipePath": "Recipes/eclipsetemurin25.yaml",
+  "recipeSha256": "e064577eda8165d38ac114e0be81e10be4498a5acd03a25cab663cbbff1b5bbf",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-18T20:09:45Z",
+  "studioVersion": "0.7.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_8.msi",
+    "version": "25.0.5.8",
+    "sha256": "E1D3C94032579DC16AF9ABB311F4552BA271466B74C8767E8CE39585A4C64D40",
+    "signer": "CN=Eclipse Foundation, O=Eclipse Foundation, L=Bruxelles, C=BE"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_8.msi v25.0.5.8 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{29B39904-60DD-4EAE-8133-81A25A5F0618}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_8.msi /qn /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{29B39904-60DD-4EAE-8133-81A25A5F0618}' version '25.0.5.8' >= '25.0.5.8'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {29B39904-60DD-4EAE-8133-81A25A5F0618} /qn /norestart'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{29B39904-60DD-4EAE-8133-81A25A5F0618}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
