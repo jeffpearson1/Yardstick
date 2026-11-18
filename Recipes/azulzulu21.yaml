@@ -1,0 +1,32 @@
+# Azul Zulu Community JDK 21 LTS, Windows x64. The MSI marks "Add to PATH" (FeatureEnvironment) as Level 1, so a bare
+# msiexec /i would modify the system PATH. ADDLOCAL=ZuluInstallation installs only the JDK core and leaves PATH and
+# JAVA_HOME unchanged (per Azul's documented ADDLOCAL usage at docs.azul.com/core/install/windows).
+# Azul's Metadata API supplies a four-part distro_version; the MSI ProductVersion uses its first three parts.
+# Reject a nonzero fourth part rather than silently treating a distinct distribution as the same version.
+url: 'https://api.azul.com/metadata/v1/zulu/packages/?java_version=21&os=windows&arch=x86&hw_bitness=64&java_package_type=jdk&javafx_bundled=false&archive_type=msi&release_status=ga&availability_types=CA&latest=true'
+preDownloadScript: |
+  $packages = @(Invoke-RestMethod -Uri $url -ErrorAction Stop | ForEach-Object { $_ })
+  $package = $packages | Where-Object { $_.name -match '^zulu[\d.]+-ca-jdk21[\d.]*-win_x64\.msi$' -and $_.distro_version.Count -eq 4 } | Sort-Object { [version]($_.distro_version -join '.') } -Descending | Select-Object -First 1
+  if (-not $package -or -not $package.download_url) { throw 'Azul Metadata API returned no matching Zulu 21 Windows x64 JDK MSI.' }
+  if ($package.distro_version[3] -ne 0) { throw 'Azul returned a nonzero fourth distribution version component; review the MSI version scheme.' }
+  $version = ($package.distro_version | Select-Object -First 3) -join '.'
+  $fileName = $package.name
+  $url = $package.download_url
+downloadScript: |
+  # cdn.azul.com (Cloudflare) sends Last-Modified as a Unix epoch number, not an HTTP date.
+  # BITS rejects that in normal mode ("job is not making progress"); -Dynamic works.
+  Invoke-YardstickBitsDownload -Source $url -Destination (Join-Path (Get-Location).Path $fileName) -Dynamic
+installScript: msiexec /i <filename> ADDLOCAL=ZuluInstallation /qn /norestart
+uninstallScript: msiexec /x <productcode> /qn /norestart
+iconFile: azulzulu21.png
+id: azulzulu21
+displayName: Azul Zulu JDK 21 (x64)
+publisher: Azul Systems, Inc.
+description: Azul Zulu Community build of OpenJDK 21 for 64-bit Windows.
+fileType: msi
+detectionType: msi
+installExperience: system
+restartBehavior: suppress
+architecture: x64
+minOSVersion: W10_20H2
+

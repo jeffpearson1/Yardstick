@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "azulzulu21",
+  "recipePath": "Recipes/azulzulu21.yaml",
+  "recipeSha256": "aba5f914c84cb7b78b50ec2b826b04894ab87764daa313509153e249da190611",
+  "validated": false,
+  "verdict": "NotValidated",
+  "reason": "no live install test of this recipe has passed; the latest install test was: Dry run passed - live test still required",
+  "testedAt": "2026-11-18T17:57:08Z",
+  "studioVersion": "0.6.1",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "zulu21.54.201-ca-jdk21.0.13.1-win_x64.msi",
+    "version": "21.54.201",
+    "sha256": "7A519262E5B850C57241A71C189972B86FA188B393D52B6045C8941B860857D0",
+    "signer": "CN=\"Azul Systems, Inc.\", O=\"Azul Systems, Inc.\", L=Sunnyvale, S=California, C=US, SERIALNUMBER=3500498, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "zulu21.54.201-ca-jdk21.0.13.1-win_x64.msi v21.54.201 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{C2D501C4-A527-4F14-9914-8BB258D2832E}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Skip",
+      "detail": "WhatIf: would run 'msiexec /i zulu21.54.201-ca-jdk21.0.13.1-win_x64.msi ADDLOCAL=ZuluInstallation /qn /norestart' via x86 cmd.exe"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Skip",
+      "detail": "WhatIf: would run 'msiexec /x {C2D501C4-A527-4F14-9914-8BB258D2832E} /qn /norestart' via x86 cmd.exe"
+    }
+  ]
+}
