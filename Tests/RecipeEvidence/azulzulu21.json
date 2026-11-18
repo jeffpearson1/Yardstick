@@ -2,12 +2,12 @@
   "schemaVersion": 1,
   "recipeId": "azulzulu21",
   "recipePath": "Recipes/azulzulu21.yaml",
-  "recipeSha256": "aba5f914c84cb7b78b50ec2b826b04894ab87764daa313509153e249da190611",
-  "validated": false,
-  "verdict": "NotValidated",
-  "reason": "no live install test of this recipe has passed; the latest install test was: Dry run passed - live test still required",
-  "testedAt": "2026-11-18T17:57:08Z",
-  "studioVersion": "0.6.1",
+  "recipeSha256": "0e8449fb8b13edee08be78d948e108255600218cb4e2394a7647ffb4684288a5",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-18T19:56:36Z",
+  "studioVersion": "0.7.0",
   "installExperience": "system",
   "installer": {
     "fileName": "zulu21.54.201-ca-jdk21.0.13.1-win_x64.msi",
@@ -33,13 +33,28 @@
     },
     {
       "name": "Install",
-      "status": "Skip",
-      "detail": "WhatIf: would run 'msiexec /i zulu21.54.201-ca-jdk21.0.13.1-win_x64.msi ADDLOCAL=ZuluInstallation /qn /norestart' via x86 cmd.exe"
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i zulu21.54.201-ca-jdk21.0.13.1-win_x64.msi ADDLOCAL=ZuluInstallation /qn /norestart'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{C2D501C4-A527-4F14-9914-8BB258D2832E}' version '21.54.201' >= '21.54.201'"
     },
     {
       "name": "Uninstall",
-      "status": "Skip",
-      "detail": "WhatIf: would run 'msiexec /x {C2D501C4-A527-4F14-9914-8BB258D2832E} /qn /norestart' via x86 cmd.exe"
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {C2D501C4-A527-4F14-9914-8BB258D2832E} /qn /norestart'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{C2D501C4-A527-4F14-9914-8BB258D2832E}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
     }
   ]
 }
