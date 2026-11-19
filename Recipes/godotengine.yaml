@@ -1,0 +1,53 @@
+# NOTE: Recipes\godot.yaml already packages Godot Engine. This recipe (id godotengine) uses the same
+# portable-ZIP pattern (no vendor installer exists; Godot ships a standalone exe in a ZIP on GitHub releases).
+url: https://github.com/godotengine/godot
+urlRedirects: false
+preDownloadScript: |
+  # Godot publishes 3.x maintenance releases after 4.x ones, so "most recently published" is not
+  # "newest". Pick the highest stable version instead.
+  $godotReleases = @(Invoke-YardstickGitHubApi 'repos/godotengine/godot/releases' |
+    Where-Object { -not $_.prerelease -and -not $_.draft -and $_.tag_name -match '^([0-9]+(?:\.[0-9]+){1,2})-stable$' } |
+    ForEach-Object {
+      $text = ($_.tag_name -replace '-stable$', '')
+      $parts = @($text -split '\.')
+      if ($parts.Count -lt 3) { $parts += '0' }
+      [pscustomobject]@{ Release = $_; Ver = [version]($parts -join '.'); Text = $text }
+    } | Sort-Object Ver -Descending)
+  if (-not $godotReleases) { throw 'No stable Godot release found.' }
+  $godotAsset = @($godotReleases[0].Release.assets | Where-Object { $_.name -match '^Godot_v.*_win64\.exe\.zip$' })
+  if ($godotAsset.Count -ne 1) { throw "Release $($godotReleases[0].Text) must have exactly one win64 exe zip; found $($godotAsset.Count)." }
+  $version = $godotReleases[0].Text
+  $url = $godotAsset[0].browser_download_url
+  $fileName = $godotAsset[0].name
+  $fileDetectionPath = "C:\Program Files\Godot\$version"
+  # fileDetectionName is NOT placeholder-expanded by Yardstick, so derive it here.
+  # The release asset is <exe>.zip, so the packaged exe is the filename minus .zip.
+  $fileDetectionName = $fileName -replace '\.zip$', ''
+powerShellInstallScript: |
+  $target = 'C:\Program Files\Godot\<version>'
+  # Extract with .NET directly: Expand-Archive in Windows PowerShell 5.1 can bind to the PowerShell 7
+  # Archive module via an inherited PSModulePath and fail with "Cannot find an overload for ExtractToDirectory".
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+  New-Item -ItemType Directory -Path $target -Force | Out-Null
+  [System.IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $PWD '<filename>'), $target)
+powerShellUninstallScript: |
+  Remove-Item -LiteralPath 'C:\Program Files\Godot\<version>' -Recurse -Force -ErrorAction SilentlyContinue
+  # Remove the shared parent only once the last version has been uninstalled.
+  $root = 'C:\Program Files\Godot'
+  if ((Test-Path -LiteralPath $root) -and -not (Get-ChildItem -LiteralPath $root -Force)) {
+    Remove-Item -LiteralPath $root -Force -ErrorAction SilentlyContinue
+  }
+iconFile: godot.png
+id: godotengine
+displayName: Godot Engine
+publisher: Godot Engine
+description: Godot is a free and open-source game engine for creating 2D and 3D applications.
+detectionType: file
+fileDetectionPath:
+fileDetectionName:
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
