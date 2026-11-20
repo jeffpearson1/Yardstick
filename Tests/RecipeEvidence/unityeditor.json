@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "unityeditor",
+  "recipePath": "Recipes/unityeditor.yaml",
+  "recipeSha256": "0c1f5742774a853fd5855671ca61fb69769d494fa3048af19a1c5cd05e8854f5",
+  "validated": true,
+  "verdict": "ValidatedWithWarnings",
+  "reason": "",
+  "testedAt": "2026-11-19T20:23:47Z",
+  "studioVersion": "0.9.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "UnitySetup64-6000.3.29f1.exe",
+    "version": "6000.3.29.1",
+    "sha256": "92BAD851DB29DBA31D1B14D691AE1D11B564CC564DDF635A2B33E8EBF12E61D3",
+    "signer": "CN=Unity Technologies SF, O=Unity Technologies SF, L=San Francisco, S=California, C=US, SERIALNUMBER=3183233, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=California, OID.1.3.6.1.4.1.311.60.2.1.3=US"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "UnitySetup64-6000.3.29f1.exe v6000.3.29.1 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (script: exit=1 stdout='Not Detected')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout='Not Detected'"
+    },
+    {
+      "name": "Residue",
+      "status": "Warn",
+      "detail": "1 ARP entries and 1 directories remain"
+    }
+  ]
+}
