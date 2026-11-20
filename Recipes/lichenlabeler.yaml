@@ -1,0 +1,122 @@
+# LichenLabeler prints herbarium specimen labels (regular labels or folded packets, with optional
+# barcodes) from CSV files exported from a Symbiota portal. It is a standalone Delphi/VCL program
+# by Daryl Lafferty (scopeTag1), distributed by the Consortium of Lichen Herbaria
+# as a ZIP from its help site. There is no installer: the ZIP holds LichenLabeler.exe, a
+# LichenLabelConfig.txt the program aborts without, and a ReadMe.txt.
+#
+# Source: https://help.lichenportal.org/index.php/en/resources/printing-labels/
+# The versioned ZIP link lives under a month-based WordPress upload folder (wp-content/uploads/
+# 2026/11/...), so it goes stale; this recipe scrapes the landing page for the current link
+# instead of hard-coding it. The version is the one in the ZIP file name (1.12.7 when written):
+# the EXE's own version resource says 1.0.0.0 and cannot be used. The vendor publishes no hash
+# and the EXE is not code-signed, so the origin is the vendor's HTTPS site and nothing stronger.
+#
+# The EXE inside the 1.12.7 ZIP is byte-identical (SHA256 421e9b28...89eb) to the requester's
+# Dropbox copy, so the Dropbox link is not needed and manual media is not used.
+#
+# Deployed like sysinternals/ffmpeg: expand to Program Files, add an all-users Start Menu
+# shortcut and publish our own ARP entry. The config file is opened by bare name, so the shortcut
+# starts in the install folder. The program saves nothing beside itself, so a read-only Program
+# Files folder is fine. A site-specific LichenLabelConfig.txt means a repackage, not an edit in place.
+#
+# Architecture: the EXE is a 32-bit (PE32) binary. It runs on x64 Windows under WOW64, so the
+# app targets x64 like the rest of the fleet. is32BitApp is not set: it only changes the
+# registry/file detection rules, and this recipe uses a script rule over native 64-bit paths.
+url: https://help.lichenportal.org/index.php/en/resources/printing-labels/
+urlRedirects: false
+preDownloadScript: |
+  $landing = 'https://help.lichenportal.org/index.php/en/resources/printing-labels/'
+  $page = Invoke-WebRequest -Uri $landing -UseBasicParsing -ErrorAction Stop
+
+  $pattern = '(?i)href\s*=\s*["'']([^"'']*?/LichenLabeler[._-]?(\d+(?:\.\d+){1,3})\.zip)["'']'
+  $candidates = foreach ($link in [regex]::Matches([string]$page.Content, $pattern)) {
+    [PSCustomObject]@{ Version = [version]$link.Groups[2].Value; Text = $link.Groups[2].Value; Href = $link.Groups[1].Value }
+  }
+  $latest = $candidates | Sort-Object Version -Descending | Select-Object -First 1
+  if (-not $latest) { throw "No LichenLabeler.<version>.zip download link was found on $landing. The page layout may have changed." }
+
+  $version = $latest.Text
+  $url = ([Uri]::new([Uri]$landing, [System.Net.WebUtility]::HtmlDecode($latest.Href))).AbsoluteUri
+  $fileName = [IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+fileType: zip
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $installDir = Join-Path $env:ProgramFiles 'LichenLabeler'
+  $extractDir = Join-Path ([IO.Path]::GetTempPath()) ('lichenlabeler-' + [guid]::NewGuid().ToString('N'))
+  try {
+    # Extract with .NET directly: Expand-Archive in Windows PowerShell 5.1 can bind to the PowerShell 7
+    # Archive module via an inherited PSModulePath and fail with "Cannot find an overload for
+    # ExtractToDirectory" (the same workaround godotengine uses). $extractDir is new, so nothing to overwrite.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+    [System.IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $PSScriptRoot '<filename>'), $extractDir)
+
+    # The ZIP is flat today; locate the EXE so a wrapper folder in a later release still works.
+    $exe = Get-ChildItem -LiteralPath $extractDir -Filter 'LichenLabeler.exe' -Recurse -File | Select-Object -First 1
+    if (-not $exe) { throw 'The downloaded ZIP does not contain LichenLabeler.exe.' }
+    $sourceRoot = $exe.DirectoryName
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'LichenLabelConfig.txt'))) {
+      throw 'The downloaded ZIP does not contain LichenLabelConfig.txt, which LichenLabeler needs beside its EXE.'
+    }
+
+    Get-Process -Name 'LichenLabeler' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $installDir -Recurse -Force
+  } finally {
+    Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $exePath = Join-Path $installDir 'LichenLabeler.exe'
+  if (-not (Test-Path -LiteralPath $exePath) -or -not (Test-Path -LiteralPath (Join-Path $installDir 'LichenLabelConfig.txt'))) {
+    throw 'LichenLabeler.exe and LichenLabelConfig.txt were not copied to the install directory.'
+  }
+
+  # The config is opened by bare name, so the shortcut must start in the install folder.
+  $shell = New-Object -ComObject WScript.Shell
+  $lnk = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'LichenLabeler.lnk'))
+  $lnk.TargetPath = $exePath
+  $lnk.WorkingDirectory = $installDir
+  $lnk.Description = 'LichenLabeler'
+  $lnk.Save()
+
+  $arpKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\LichenLabeler'
+  New-Item -Path $arpKey -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayName' -Value 'LichenLabeler' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayVersion' -Value '<version>' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'Publisher' -Value 'Consortium of Lichen Herbaria' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'InstallLocation' -Value $installDir -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayIcon' -Value $exePath -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'URLInfoAbout' -Value 'https://help.lichenportal.org/index.php/en/resources/printing-labels/' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoModify' -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoRepair' -Value 1 -PropertyType DWord -Force | Out-Null
+powerShellUninstallScript: |
+  Get-Process -Name 'LichenLabeler' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 1
+  $installDir = Join-Path $env:ProgramFiles 'LichenLabeler'
+  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+  Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'LichenLabeler.lnk') -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\LichenLabeler' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: lichenlabeler.png
+id: lichenlabeler
+displayName: LichenLabeler
+publisher: Consortium of Lichen Herbaria
+description: LichenLabeler prints herbarium specimen labels, either as regular labels or as folded packets with an optional barcode, from CSV files exported from a Symbiota portal such as the Consortium of Lichen Herbaria. It is a standalone program developed by Daryl Lafferty (scopeTag1) and distributed by the Consortium.
+detectionType: script
+detectionScript: |
+  $expected = $null
+  if (-not [version]::TryParse('<version>', [ref]$expected)) { Write-Output 'Not Detected'; exit 1 }
+  $installDir = Join-Path $env:ProgramFiles 'LichenLabeler'
+  $props = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\LichenLabeler' -ErrorAction SilentlyContinue
+  if (-not $props) { Write-Output 'Not Detected'; exit 1 }
+  # LichenLabeler aborts without its config file, so a missing config counts as not installed.
+  if (-not (Test-Path -LiteralPath (Join-Path $installDir 'LichenLabeler.exe')) -or -not (Test-Path -LiteralPath (Join-Path $installDir 'LichenLabelConfig.txt'))) { Write-Output 'Not Detected'; exit 1 }
+  $found = $null
+  if ([version]::TryParse([string]$props.DisplayVersion, [ref]$found) -and $found -ge $expected) { Write-Output 'Detected'; exit 0 }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

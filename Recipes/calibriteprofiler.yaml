@@ -1,0 +1,65 @@
+# Calibrite PROFILER - electron-builder NSIS installer (Nullsoft v3.04, requireAdministrator).
+# Vendor download page https://calibrite.com/software-downloads links to the vendor's official
+# GitHub release repo LUMESCA/calibrite-profiler-releases (also the app's auto-update feed).
+# Silent switches are the electron-builder defaults: /S for silent, /allusers for per-machine.
+# Vendor notes X-Rite i1Profiler/Studio should be uninstalled before installing PROFILER.
+url: https://github.com/LUMESCA/calibrite-profiler-releases
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $downloadFileRegex = "calibrite-PROFILER-Setup-.*\.exe$"
+  $versionRegex = "(\.{0,1}[0-9]{1,2}){3}"
+  $Script:downloader = [GithubDownloader]::new($url, $downloadFileRegex, $versionRegex)
+  # Vendor tags its current releases (3.0.4, 3.1.2, 3.1.3) as GitHub prereleases; the download page lists 3.1.3 as current.
+  $downloader.Prerelease = $true
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.filename
+postDownloadScript:
+powerShellInstallScript: |
+  $process = Start-Process -FilePath (Join-Path $PSScriptRoot '<filename>') -ArgumentList '/S','/allusers' -Wait -PassThru
+  if ($process.ExitCode -notin 0, 1641, 3010) { throw "Installer exited with $($process.ExitCode)." }
+powerShellUninstallScript: |
+  Get-Process -Name 'calibrite PROFILER' -ErrorAction SilentlyContinue | Stop-Process -Force
+  $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+  $entry = Get-ItemProperty -Path $keys -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like 'calibrite PROFILER*' } | Select-Object -First 1
+  $exe = $null
+  if ($entry) {
+    $raw = if ($entry.QuietUninstallString) { $entry.QuietUninstallString } else { $entry.UninstallString }
+    if ($raw -match '^\s*"([^"]+)"') { $exe = $Matches[1] }
+    elseif ($raw -match '^\s*(.+?\.exe)(\s|$)') { $exe = $Matches[1] }
+  }
+  if (-not $exe) { $exe = Join-Path ${env:ProgramFiles} 'calibrite PROFILER\Uninstall calibrite PROFILER.exe' }
+  if (Test-Path -LiteralPath $exe) {
+    $process = Start-Process -FilePath $exe -ArgumentList '/allusers','/S' -Wait -PassThru
+    if ($process.ExitCode -notin 0, 1605, 1641, 3010) { throw "Uninstaller exited with $($process.ExitCode)." }
+    # NSIS uninstallers relaunch from %TEMP% and return early; wait for the install folder to go.
+    $dir = Join-Path ${env:ProgramFiles} 'calibrite PROFILER'
+    $deadline = (Get-Date).AddMinutes(3)
+    while ((Test-Path -LiteralPath (Join-Path $dir 'calibrite PROFILER.exe')) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+  }
+version:
+fileName:
+iconFile: calibriteprofiler.png
+id: calibriteprofiler
+displayName: Calibrite PROFILER
+publisher: Calibrite LLC
+description: Calibrite PROFILER is colour management software for calibrating and profiling displays and projectors with Calibrite colorimeters and spectrophotometers (ColorChecker Display, Display Pro, Display Plus, Studio).
+softwareName: "calibrite PROFILER*"
+fileType: exe
+detectionType: script
+detectionScript: |
+  $exe = Join-Path ${env:ProgramFiles} 'calibrite PROFILER\calibrite PROFILER.exe'
+  if (Test-Path -LiteralPath $exe) {
+    $v = [version](Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+    if ($v -ge [version]'<version>.0' -or $v -ge [version]'<version>') { Write-Output 'Detected'; exit 0 }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
+maximumInstallationTimeInMinutes: 60

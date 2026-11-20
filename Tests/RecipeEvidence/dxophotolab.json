@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "dxophotolab",
+  "recipePath": "Recipes/dxophotolab.yaml",
+  "recipeSha256": "a2dd4e4ea42d05c20addbe24637cf66e07373e5039c5c2835808c30163afd176",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-20T17:52:13Z",
+  "studioVersion": "0.9.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "WiXInstaller_photolab4.msi",
+    "version": "4.3.6",
+    "sha256": "4819E0DBFDD419CBC7644023C6866813E9BC912B3063C7130A85395A95BDC054",
+    "signer": "CN=DxO Labs S.A.S., O=DxO Labs S.A.S., L=Boulogne-Billancourt, C=FR"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "WiXInstaller_photolab4.msi v4.3.6 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (msi: Product code '{8353E026-0C7A-4FD0-B746-16FE748FAD4D}' is not registered)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /i WiXInstaller_photolab4.msi /qn /norestart /l*v \"%windir%\\Temp\\DxOPhotoLab4-install.log\"'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{8353E026-0C7A-4FD0-B746-16FE748FAD4D}' version '4.3.6' >= '4.3.6'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='msiexec /x {8353E026-0C7A-4FD0-B746-16FE748FAD4D} /qn /norestart /l*v \"%windir%\\Temp\\DxOPhotoLab4-uninstall.log\"'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "msi: Product code '{8353E026-0C7A-4FD0-B746-16FE748FAD4D}' is not registered"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
