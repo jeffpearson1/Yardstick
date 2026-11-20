@@ -3,7 +3,7 @@
 All notable changes to Yardstick are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-20
 
 ### Added
 
@@ -381,6 +381,6 @@ The first versioned release. Earlier builds were unversioned (the module manifes
   that set them. Use `defaultDeploymentGroups` for available assignments; add required
   assignments in Intune.
 
-[Unreleased]: https://github.com/jeffpearson1/Yardstick/compare/v1.1.0...HEAD
+[1.2.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.2.0
 [1.1.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.1.0
 [1.0.0]: https://github.com/jeffpearson1/Yardstick/releases/tag/v1.0.0
