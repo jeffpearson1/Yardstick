@@ -423,7 +423,8 @@ function Invoke-YardstickAppMaintenance {
     where the newest version already in Intune takes its place.
 
     .OUTPUTS
-    A summary object, or $null when a sweep could not read the app list.
+    A summary object, or $null when a sweep could not read the app list. Throws
+    when the app list cannot be read after an upload, so the caller fails the recipe.
     #>
     param(
         [string]$NewAppId
@@ -459,11 +460,12 @@ function Invoke-YardstickAppMaintenance {
             Write-Log "Could not fetch the existing versions of $($Script:DisplayName) for the maintenance sweep: $_" -Level Error
             return $null
         }
-        Write-Log "Could not fetch the existing versions of $($Script:DisplayName) after uploading $NewAppId. Exiting: $_" -Level Error
-        # exit does not wait for background threads, so drain the backup queued
-        # by the caller before tearing the process down.
-        Wait-YardstickBackup -TimeoutSeconds 120 | Out-Null
-        Exit 4
+        # Fail this recipe, not the run: every recipe shares one process, so an
+        # exit here would skip every recipe after this one. The new app is left
+        # without the old version's assignments or supersedence, and a normal run
+        # will see its version as already published, so the message says how to
+        # finish the job. The caller's finally drains the queued backup.
+        throw "Uploaded $($Script:DisplayName) as $NewAppId, but could not fetch its existing versions to move assignments and supersedence: $_ Run .\Yardstick.ps1 -AppId $AppId_Processing -Repair to finish."
     }
 
     if ($NewAppId) {
@@ -1754,7 +1756,13 @@ while ($RecipePass.Count -gt 0) {
             }
 
             # Validate the extracted version before proceeding
-            $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
+            try {
+                $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
+            } catch {
+                Write-Log "$_" -Level Error
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
+                continue
+            }
 
             # Get-SameAppAllVersions returns newest first, but do not reach for
             # $ExistingVersions.displayVersion[0]: PowerShell unrolls a single-element
@@ -2046,7 +2054,13 @@ while ($RecipePass.Count -gt 0) {
             # SUPERSEDENCE, RETENTION, AUTO-UPDATE
             ###################################################
 
-            $Maintenance = Invoke-YardstickAppMaintenance -NewAppId $Win32App.id
+            try {
+                $Maintenance = Invoke-YardstickAppMaintenance -NewAppId $Win32App.id
+            } catch {
+                Write-Log "$_" -Level Error
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
+                continue
+            }
             $CurrentApp        = $Maintenance.CurrentApp
             $supersededCount   = $Maintenance.SupersededCount
             $autoUpdateApplied = $Maintenance.AutoUpdateApplied

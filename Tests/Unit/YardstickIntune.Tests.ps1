@@ -223,6 +223,70 @@ Describe 'Yardstick Intune assignments' {
     }
 }
 
+Describe 'Yardstick Intune app lookup by name' {
+    BeforeEach {
+        Mock Write-YardstickIntuneLog -ModuleName YardstickIntune {}
+        $script:fullList = "deviceAppManagement/mobileApps?`$filter=isof('microsoft.graph.win32LobApp')"
+    }
+
+    It 'filters by name in Graph and makes one request when it finds the app' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
+            @(
+                [pscustomobject]@{ id = '1'; displayName = 'Discord' },
+                [pscustomobject]@{ id = '2'; displayName = 'Discord (N-1)' },
+                [pscustomobject]@{ id = '3'; displayName = 'Ω DETECT - Discord' }
+            )
+        }
+        $apps = @(Get-YardstickWin32App -DisplayName 'Discord')
+        $apps.id | Should -Be @('1', '2', '3')
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter {
+            $Resource -eq "$script:fullList and contains(displayName,'Discord')"
+        }
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly
+    }
+
+    It 'escapes quotes and URL characters in the name' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune { @([pscustomobject]@{ id = '1'; displayName = "Notepad++ & O'Brien #1" }) }
+        $null = Get-YardstickWin32App -DisplayName "Notepad++ & O'Brien #1"
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter {
+            $Resource -eq "$script:fullList and contains(displayName,'Notepad%2B%2B%20%26%20O%27%27Brien%20%231')"
+        }
+    }
+
+    It 'falls back to the full list when the case-sensitive filter finds nothing' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune { @() } -ParameterFilter { $Resource -like '*contains(*' }
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
+            @(
+                [pscustomobject]@{ id = '1'; displayName = 'DJI TERRA' },
+                [pscustomobject]@{ id = '2'; displayName = 'Discord' }
+            )
+        } -ParameterFilter { $Resource -eq $script:fullList }
+        $apps = @(Get-YardstickWin32App -DisplayName 'DJI Terra')
+        $apps.id | Should -Be @('1')
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter { $Resource -eq $script:fullList }
+    }
+
+    It 'still drops results that do not contain the name' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune {
+            @([pscustomobject]@{ id = '1'; displayName = 'App' }, [pscustomobject]@{ id = '2'; displayName = 'Other' })
+        }
+        @(Get-YardstickWin32App -DisplayName 'App').id | Should -Be @('1')
+    }
+
+    It 'returns an empty array when no app has the name' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune { @() }
+        $apps = Get-YardstickWin32App -DisplayName 'Nothing'
+        @($apps).Count | Should -Be 0
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 2 -Exactly
+    }
+
+    It 'lists every Win32 app when no name or id is given' {
+        Mock Invoke-YardstickGraphRequest -ModuleName YardstickIntune { @([pscustomobject]@{ id = '1'; displayName = 'A' }, [pscustomobject]@{ id = '2'; displayName = 'B' }) }
+        @(Get-YardstickWin32App).Count | Should -Be 2
+        Should -Invoke Invoke-YardstickGraphRequest -ModuleName YardstickIntune -Times 1 -Exactly -ParameterFilter { $Resource -eq $script:fullList }
+    }
+}
+
 Describe 'Yardstick Intune install time settings' {
     # An 11:00 PM deployment moved forward 14 days came back as 4:00 AM the next
     # day, because the wall clock Intune stores was being treated as an instant

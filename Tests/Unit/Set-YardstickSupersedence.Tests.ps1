@@ -756,7 +756,7 @@ Describe "Get-YardstickSupersedenceRelationship" {
 
 Describe "Get-SameAppAllVersions" {
     BeforeEach {
-        Mock -ModuleName YardstickSupport Invoke-WithRetry {
+        Mock -ModuleName YardstickSupport Get-YardstickWin32App {
             @(
                 [PSCustomObject]@{ id = '1'; DisplayName = 'App';           displayVersion = '3.0'; createdDateTime = (Get-Date) },
                 [PSCustomObject]@{ id = '2'; DisplayName = 'App (N-1)';     displayVersion = '2.0'; createdDateTime = (Get-Date) },
@@ -778,12 +778,22 @@ Describe "Get-SameAppAllVersions" {
     }
 
     It "always returns an array even for a single match" {
-        Mock -ModuleName YardstickSupport Invoke-WithRetry {
+        Mock -ModuleName YardstickSupport Get-YardstickWin32App {
             @([PSCustomObject]@{ id = '1'; DisplayName = 'App'; displayVersion = '3.0'; createdDateTime = (Get-Date) })
         }
         $all = Get-SameAppAllVersions 'App'
         $all -is [array] | Should -BeTrue
         $all[0].displayVersion | Should -Be '3.0'
+    }
+
+    It "queries Intune once, without a second retry layer" {
+        $null = Get-SameAppAllVersions 'App'
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly
+    }
+
+    It "throws instead of exiting when Intune cannot be reached" {
+        Mock -ModuleName YardstickSupport Get-YardstickWin32App { throw 'Response status code does not indicate success: 504 (Gateway Timeout).' }
+        { Get-SameAppAllVersions 'App' } | Should -Throw '*Could not retrieve the versions of App from Intune*504*'
     }
 }
 

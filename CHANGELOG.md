@@ -200,6 +200,19 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Fixed
 
+- **An Intune lookup failure fails one recipe instead of ending the run.** When
+  Graph timed out (504) reading an app's versions, Yardstick exited, and every recipe
+  after it was skipped with no summary. The recipe is now reported as failed at the
+  new **Intune Lookup** stage and the run carries on. If the lookup fails right after
+  an upload, the message names the new app and says to run
+  `.\Yardstick.ps1 -AppId <id> -Repair` to move its assignments and supersedence.
+- **App lookups ask Intune only for the app being processed.** Each lookup
+  downloaded every Win32 app in the tenant (about 3 MB for ~1000 apps) and filtered
+  it locally, which made 504 timeouts likely when Intune was slow. Graph now filters
+  by name. Because that filter is case-sensitive, a lookup that finds nothing checks
+  the full list before treating the app as new. The extra retry loop around the
+  lookup is gone too: Graph requests already retry timeouts, and the two layers
+  together turned one timeout into as many as 18 slow requests.
 - **Moved group assignments are removed from the old version again.** Removing a migrated group
   assignment from the previous version failed whenever that app also had an All
   Devices or All Users assignment, leaving the group assigned to both versions.

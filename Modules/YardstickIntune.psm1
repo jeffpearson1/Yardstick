@@ -252,11 +252,23 @@ function Get-YardstickWin32App {
     if ($PSCmdlet.ParameterSetName -eq 'ID') {
         return Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$ID"
     }
-    $apps = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=isof('microsoft.graph.win32LobApp')")
+    $win32Filter = "isof('microsoft.graph.win32LobApp')"
     if ($PSCmdlet.ParameterSetName -eq 'DisplayName') {
-        $apps = @($apps | Where-Object { $_.displayName -like "*$DisplayName*" })
+        # Filter by name in Graph rather than downloading every Win32 app in the
+        # tenant (about 3 MB of icons and scripts for ~1000 apps) on each lookup.
+        # contains() also returns the (N-x) renames and the Ω DETECT - anchor.
+        $quotedName = [uri]::EscapeDataString($DisplayName.Replace("'", "''"))
+        $apps = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter and contains(displayName,'$quotedName')")
+        if ($apps.Count -eq 0) {
+            # Graph's contains() is case-sensitive, unlike the -like below. Before
+            # reporting that no version exists - which leads to a fresh upload -
+            # make sure an app cased differently from the recipe is not missed.
+            Write-YardstickIntuneLog "No application name in Intune contains '$DisplayName' with that exact casing. Checking the full application list." -Level Detail
+            $apps = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter")
+        }
+        return @($apps | Where-Object { $_.displayName -like "*$DisplayName*" })
     }
-    return $apps
+    return @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter")
 }
 
 function Set-YardstickWin32App {
