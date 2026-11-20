@@ -47,6 +47,7 @@ if ($Stage -eq 'Schema') {
     return
 }
 
+Import-Module (Join-Path $PSScriptRoot 'RecipeTestSupport.psm1') -Force -ErrorAction Stop
 Import-Module powershell-yaml -MinimumVersion 0.4.12 -ErrorAction Stop
 Import-Module (Join-Path $YardstickDevPath 'Yardstick.psd1') -Force -ErrorAction Stop
 Import-Module BitsTransfer -ErrorAction Stop
@@ -88,6 +89,28 @@ foreach ($key in $recipe.Keys) {
 }
 $id = $recipeId
 
+# Manual-download recipes package media an operator staged in SoftwareDropbox,
+# exactly as Invoke-RecipeInstallTest.ps1 does. Resolve it before
+# preDownloadScript, matching production ordering, so the recipe can inspect
+# $dropboxPath/$dropboxFiles. The lab only reads and copies staged media.
+$dropboxPath = $null
+$dropboxFiles = @()
+$isManualDownload = $recipe.ContainsKey('manualDownload') -and [bool]$recipe['manualDownload']
+if ($isManualDownload) {
+    $softwareDropbox = Get-RecipeHarnessSoftwareDropbox -YardstickDevPath $YardstickDevPath
+    $manualFolder = if ($recipe.ContainsKey('manualDownloadFolder') -and $recipe['manualDownloadFolder']) {
+        [string]$recipe['manualDownloadFolder']
+    } else {
+        $recipeId
+    }
+    $dropboxPayload = Get-YardstickDropboxPayload -DropboxRoot $softwareDropbox -Folder $manualFolder
+    if (-not $dropboxPayload) {
+        throw "Nothing is staged in the software dropbox for '$recipeId' (folder '$manualFolder')."
+    }
+    $dropboxPath = $dropboxPayload.Path
+    $dropboxFiles = $dropboxPayload.Files
+}
+
 if ($recipe.ContainsKey('urlRedirects') -and $recipe['urlRedirects'] -eq $true -and $url) {
     $response = Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 10
     $url = $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
@@ -109,7 +132,9 @@ $harnessBuildDirectory = Join-Path (Join-Path $BuildSpace $id) ([string]$version
 New-Item -ItemType Directory -Path $harnessBuildDirectory -Force | Out-Null
 Push-Location $harnessBuildDirectory
 try {
-    if ($recipe.ContainsKey('downloadScript') -and $recipe['downloadScript']) {
+    if ($isManualDownload) {
+        Copy-Item -Path (Join-Path $dropboxPath '*') -Destination $harnessBuildDirectory -Recurse -Force
+    } elseif ($recipe.ContainsKey('downloadScript') -and $recipe['downloadScript']) {
         . ([ScriptBlock]::Create([string]$recipe['downloadScript']))
     } else {
         if ([string]::IsNullOrWhiteSpace([string]$url)) {
