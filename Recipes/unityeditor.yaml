@@ -1,0 +1,62 @@
+# Unity Editor (current LTS stream, Windows x64). Source: Unity's release API
+# (services.api.unity.com), which lists the official download.unity3d.com installer.
+# Installer is NSIS: /S silent, /D= sets the install dir (must be last, unquoted).
+# Installed to the Unity Hub default Editor path so Hub discovers it. No modules are installed.
+url: https://services.api.unity.com/unity/editor/release/v1/releases?stream=LTS&platform=WINDOWS&architecture=X86_64&limit=1
+urlRedirects: false
+preDownloadScript: |
+  $unityRelease = (Invoke-RestMethod -Uri $url -UseBasicParsing).results | Select-Object -First 1
+  if (-not $unityRelease -or $unityRelease.version -notmatch '^(\d+)\.(\d+)\.(\d+)f(\d+)$') { throw "Unexpected Unity release version '$($unityRelease.version)'." }
+  $unityParts = @($Matches[1], $Matches[2], $Matches[3], $Matches[4])
+  $unityDownload = $unityRelease.downloads | Where-Object { $_.platform -eq 'WINDOWS' -and $_.architecture -eq 'X86_64' -and $_.type -eq 'EXE' } | Select-Object -First 1
+  if (-not $unityDownload -or $unityDownload.url -notmatch '^https://download\.unity3d\.com/') { throw 'No official Windows x64 Unity Editor installer in release feed.' }
+  # Unity versions look like 6000.3.29f1; Yardstick uses 4-part 6000.3.29.1.
+  $version = $unityParts -join '.'
+  $url = $unityDownload.url
+  $fileName = [System.IO.Path]::GetFileName(([uri]$url).AbsolutePath)
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $raw = '<version>' -replace '^(\d+\.\d+\.\d+)\.(\d+)$', '$1f$2'
+  $dir = Join-Path $env:ProgramFiles "Unity\Hub\Editor\$raw"
+  $process = Start-Process -FilePath (Join-Path $PSScriptRoot '<filename>') -ArgumentList '/S', "/D=$dir" -Wait -PassThru
+  if ($process.ExitCode -notin 0, 1641, 3010) { throw "Unity Editor installer exited with $($process.ExitCode)." }
+  if (-not (Test-Path -LiteralPath (Join-Path $dir 'Editor\Unity.exe'))) { throw "Unity.exe not found in $dir after install." }
+  exit 0
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $raw = '<version>' -replace '^(\d+\.\d+\.\d+)\.(\d+)$', '$1f$2'
+  $dir = Join-Path $env:ProgramFiles "Unity\Hub\Editor\$raw"
+  Get-Process -Name 'Unity' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+  $uninstaller = Join-Path $dir 'Editor\Uninstall.exe'
+  if (Test-Path -LiteralPath $uninstaller) {
+    # _?= makes the NSIS uninstaller run in place so -Wait really waits.
+    $process = Start-Process -FilePath $uninstaller -ArgumentList '/S', "_?=$(Join-Path $dir 'Editor')" -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw "Unity Editor uninstaller exited with $($process.ExitCode)." }
+  }
+  if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+  exit 0
+fileType: exe
+iconFile: unityeditor.png
+id: unityeditor
+displayName: Unity Editor
+publisher: Unity
+description: The Unity Editor is the development environment for creating 2D, 3D, AR, and VR games and interactive content. Installs the current LTS Editor without optional modules.
+detectionType: script
+detectionScript: |
+  $expected = [version]'<version>'
+  $root = Join-Path $env:ProgramFiles 'Unity\Hub\Editor'
+  foreach ($folder in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
+    $found = $null
+    $text = $folder.Name -replace '^(\d+\.\d+\.\d+)f(\d+)$', '$1.$2'
+    if ([version]::TryParse($text, [ref]$found) -and $found -ge $expected -and (Test-Path -LiteralPath (Join-Path $folder.FullName 'Editor\Unity.exe'))) {
+      Write-Output 'Detected'
+      exit 0
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+maximumInstallationTimeInMinutes: 90
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_21H1
