@@ -1008,3 +1008,64 @@ Describe 'Yardstick Intune blob upload timeout' {
         }
     }
 }
+
+Describe 'Yardstick leftover packager cleanup' {
+    BeforeAll {
+        $Global:CleanupTemp = Join-Path ([IO.Path]::GetTempPath()) ("ys-cleanup-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $Global:CleanupTemp | Out-Null
+    }
+    AfterAll { Remove-Item -LiteralPath $Global:CleanupTemp -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'removes only GUID folders holding nothing but IntuneWinPackage' {
+        InModuleScope YardstickIntune {
+            $saved = $env:TEMP; $env:TEMP = $Global:CleanupTemp
+            try {
+                $orphan = Join-Path $env:TEMP ([guid]::NewGuid().ToString())
+                $other  = Join-Path $env:TEMP ([guid]::NewGuid().ToString())
+                New-Item -ItemType Directory -Path (Join-Path $orphan 'IntuneWinPackage') -Force | Out-Null
+                New-Item -ItemType Directory -Path (Join-Path $other 'IntuneWinPackage') -Force | Out-Null
+                New-Item -ItemType File -Path (Join-Path $other 'unrelated.txt') | Out-Null
+                (Get-Item $orphan).LastWriteTime = (Get-Date).AddHours(-2)
+                Remove-YardstickIntuneWinTemp -OlderThanMinutes 60 | Should -Be 1
+                Test-Path $orphan | Should -BeFalse
+                Test-Path $other | Should -BeTrue
+            } finally { $env:TEMP = $saved }
+        }
+    }
+}
+
+Describe 'Yardstick packager diagnostics' {
+    It 'decodes HRESULT and Win32 exit codes' {
+        InModuleScope YardstickIntune {
+            ConvertTo-YardstickExitCodeText -ExitCode -2147024891 | Should -Match '0x80070005'
+            ConvertTo-YardstickExitCodeText -ExitCode -2147024891 | Should -Match '^-2147024891 \('
+            ConvertTo-YardstickExitCodeText -ExitCode 5 | Should -Match '0x00000005'
+            ConvertTo-YardstickExitCodeText -ExitCode 0 | Should -Be '0 (0x00000000)'
+        }
+    }
+
+    It 'writes the packager output and launch context to the log and quotes it in the failure' {
+        InModuleScope YardstickIntune {
+            $dir = Join-Path ([IO.Path]::GetTempPath()) ("ys-diag-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path "$dir\src", "$dir\out" -Force | Out-Null
+            Set-Content "$dir\src\setup.exe" 'x'
+            Set-Content "$dir\tool.exe" 'x'
+            Mock Start-Process {
+                Set-Content -LiteralPath $RedirectStandardOutput -Value @('INFO   Compressed ok', 'ERROR  Unexpected error occurred while creating package.')
+                Set-Content -LiteralPath $RedirectStandardError -Value ''
+                $p = [pscustomobject]@{ Id = 1; ExitCode = -2147024891 }
+                $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) $true }
+                $p
+            }
+            try {
+                { New-YardstickWin32AppPackage -SourceFolder "$dir\src" -SetupFile setup.exe -OutputFolder "$dir\out" `
+                    -IntuneWinAppUtilPath "$dir\tool.exe" -Force -LogPath "$dir\packager.log" } |
+                    Should -Throw '*0x80070005*Unexpected error occurred while creating package*packager.log*'
+                $log = Get-Content -LiteralPath "$dir\packager.log" -Raw
+                $log | Should -Match 'FAILED'
+                $log | Should -Match 'session \d+'
+                $log | Should -Match 'Compressed ok'
+            } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}
