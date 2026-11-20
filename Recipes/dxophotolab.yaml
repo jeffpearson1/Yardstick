@@ -1,0 +1,177 @@
+# DxO PhotoLab 4 (4.3.6 = build 32) - licensed media staged in the software dropbox.
+#
+# Why manual media (sources tried 2026-11-20): DxO offers no unattended download for this build.
+#  - www.dxo.com and support.dxo.com answer non-browser clients with a Cloudflare managed challenge
+#    (HTTP 403, Cf-Mitigated: challenge); download-center.dxo.com returns 403 for its root.
+#  - DxO hands installers out per customer (account "My Software" page / order e-mail). Its user forum
+#    reports no official route to a specific older build. winget-pkgs and Chocolatey have no DxO package.
+#  - Third-party mirrors (FileHorse etc.) are not vendor sources and were not used.
+# Stage the DxO-signed DxOPhotoLab_<version>_build<N>_Setup.exe in <SoftwareDropbox>\dxophotolab.
+# The license key that ships with the media must NOT be staged with it or stored here; activate separately.
+# postDownloadScript drops everything except the extracted MSI and cab, so a stray key file never ships.
+#
+# Installer anatomy (static analysis only, never executed): the EXE is an MFC bootstrapper
+# (DxO.PhotoLab.Installer.Bootstrapper) with no documented silent switch - it is NOT Inno Setup.
+# It carries three resources: BIN/5100 = WiX MSI (WiXInstaller_photolab4.msi, DxO-signed), BIN/5200 =
+# its external cab (resources4.cab) and EXE/141 = the .NET Framework 4.8 offline installer.
+# We lift the MSI + cab out at build time and install the MSI directly (msiexec /qn). .NET 4.8 is not
+# packaged: it is in-box on Windows 10 1903+, and minOSVersion is W10_20H2. English UI is the default;
+# the MSI's 1031/1036/1041.mst language transforms are not applied.
+manualDownload: true
+manualDownloadFolder: dxophotolab
+preDownloadScript: |
+  $pattern = '^DxOPhotoLab_(?<version>\d+(?:\.\d+){1,3})_build\d+_Setup\.exe$'
+  $candidates = foreach ($staged in $dropboxFiles) {
+    $parsed = [regex]::Match($staged.Name, $pattern)
+    if ($parsed.Success) { [pscustomobject]@{ File = $staged; Version = [version]$parsed.Groups['version'].Value } }
+  }
+  $best = $candidates | Sort-Object Version -Descending | Select-Object -First 1
+  if (-not $best) {
+    throw "No DxO PhotoLab installer was found in $dropboxPath. Stage DxOPhotoLab_<version>_build<N>_Setup.exe there."
+  }
+  $version = $best.Version.ToString()
+  $fileName = $best.File.Name
+  $url = $best.File.FullName
+postDownloadScript: |
+  # Runs in the per-recipe build folder, which is named after the version. Scripts share the runner's
+  # scope, so errors are made terminating per command rather than by changing $ErrorActionPreference.
+  $work = $PWD.Path
+  if ((Split-Path -Leaf $work) -ne [string]$version) { throw "Unexpected working folder '$work'; refusing to unpack here." }
+  $wrapper = Join-Path $work $fileName
+  if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { throw "The staged installer '$fileName' was not copied into $work." }
+
+  # The bootstrapper has no extract switch, so read its embedded resources straight out of the PE file
+  # (kernel32 resource APIs on a data-file mapping; nothing in the EXE is executed).
+  if (-not ('DxOBootstrapperPayload' -as [type])) {
+    Add-Type -Language CSharp -TypeDefinition @'
+  using System;
+  using System.Collections.Generic;
+  using System.ComponentModel;
+  using System.IO;
+  using System.Runtime.InteropServices;
+
+  public static class DxOBootstrapperPayload
+  {
+      private delegate bool EnumResNameProc(IntPtr hModule, IntPtr lpszType, IntPtr lpszName, IntPtr lParam);
+
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+      private static extern IntPtr LoadLibraryEx(string lpFileName, IntPtr hFile, uint dwFlags);
+      [DllImport("kernel32.dll", SetLastError = true)]
+      private static extern bool FreeLibrary(IntPtr hModule);
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+      private static extern bool EnumResourceNames(IntPtr hModule, string lpszType, EnumResNameProc lpEnumFunc, IntPtr lParam);
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+      private static extern IntPtr FindResource(IntPtr hModule, IntPtr lpName, string lpType);
+      [DllImport("kernel32.dll", SetLastError = true)]
+      private static extern IntPtr LoadResource(IntPtr hModule, IntPtr hResInfo);
+      [DllImport("kernel32.dll")]
+      private static extern IntPtr LockResource(IntPtr hResData);
+      [DllImport("kernel32.dll", SetLastError = true)]
+      private static extern uint SizeofResource(IntPtr hModule, IntPtr hResInfo);
+
+      // Writes the one resource of the given type whose first bytes equal 'signature' to 'destination'.
+      public static long ExtractBySignature(string exePath, string resourceType, byte[] signature, string destination)
+      {
+          const uint AsDataFile = 0x2;
+          const uint AsImageResource = 0x20;
+          IntPtr module = LoadLibraryEx(exePath, IntPtr.Zero, AsDataFile | AsImageResource);
+          if (module == IntPtr.Zero)
+              throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open '" + exePath + "' to read its resources.");
+          try
+          {
+              int matches = 0;
+              long written = 0;
+              Exception failure = null;
+              EnumResNameProc callback = delegate (IntPtr hModule, IntPtr type, IntPtr name, IntPtr lParam)
+              {
+                  try
+                  {
+                      IntPtr info = FindResource(hModule, name, resourceType);
+                      if (info == IntPtr.Zero) return true;
+                      uint size = SizeofResource(hModule, info);
+                      IntPtr handle = LoadResource(hModule, info);
+                      if (handle == IntPtr.Zero || size < signature.Length) return true;
+                      IntPtr data = LockResource(handle);
+                      if (data == IntPtr.Zero) return true;
+                      byte[] head = new byte[signature.Length];
+                      Marshal.Copy(data, head, 0, head.Length);
+                      for (int i = 0; i < head.Length; i++) { if (head[i] != signature[i]) return true; }
+                      matches++;
+                      if (matches > 1) return false;
+                      written = CopyOut(data, size, destination);
+                      return true;
+                  }
+                  catch (Exception ex) { failure = ex; return false; }
+              };
+              EnumResourceNames(module, resourceType, callback, IntPtr.Zero);
+              int lastError = Marshal.GetLastWin32Error();
+              GC.KeepAlive(callback);
+              if (failure != null) throw new InvalidOperationException("Resource extraction failed: " + failure.Message, failure);
+              if (matches != 1)
+              {
+                  if (File.Exists(destination)) File.Delete(destination);
+                  throw new InvalidOperationException("Expected exactly one '" + resourceType + "' resource with the requested signature in '" + exePath + "' but found " + matches + " (last Win32 error " + lastError + ").");
+              }
+              return written;
+          }
+          finally { FreeLibrary(module); }
+      }
+
+      private static long CopyOut(IntPtr data, uint size, string destination)
+      {
+          using (FileStream stream = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20))
+          {
+              byte[] buffer = new byte[4 * 1024 * 1024];
+              long offset = 0;
+              while (offset < size)
+              {
+                  int count = (int)Math.Min((long)buffer.Length, size - offset);
+                  Marshal.Copy(new IntPtr(data.ToInt64() + offset), buffer, 0, count);
+                  stream.Write(buffer, 0, count);
+                  offset += count;
+              }
+              return offset;
+          }
+      }
+  }
+  '@
+  }
+
+  $msiPath = Join-Path $work 'WiXInstaller_photolab4.msi'
+  $cabPath = Join-Path $work 'resources4.cab'
+  $msiBytes = [DxOBootstrapperPayload]::ExtractBySignature($wrapper, 'BIN', [byte[]](0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1), $msiPath)
+  $cabBytes = [DxOBootstrapperPayload]::ExtractBySignature($wrapper, 'BIN', [byte[]](0x4D, 0x53, 0x43, 0x46), $cabPath)
+  if ($msiBytes -le 0 -or $cabBytes -le 0) { throw 'The DxO PhotoLab bootstrapper yielded an empty MSI or cab.' }
+
+  # The extracted MSI must be the PhotoLab product, match the version parsed from the file name,
+  # and still carry DxO's own signature.
+  $msiName = ([string](Get-MsiProperty -Path $msiPath -PropertyName 'ProductName')).Trim()
+  $msiVersion = ([string](Get-MsiProperty -Path $msiPath -PropertyName 'ProductVersion')).Trim()
+  if ($msiName -notlike 'DxO PhotoLab*') { throw "The extracted MSI is '$msiName', not DxO PhotoLab." }
+  if ([version]$msiVersion -ne [version]$version) { throw "The extracted MSI is version $msiVersion but the file name says $version." }
+  $msiSignature = Get-AuthenticodeSignature -LiteralPath $msiPath
+  if ($msiSignature.Status -ne 'Valid' -or $msiSignature.SignerCertificate.Subject -notmatch 'O=DxO Labs S\.A\.S\.') {
+    throw "The extracted MSI is not validly signed by DxO Labs (status $($msiSignature.Status))."
+  }
+
+  # Ship only the MSI and its external cab (drops the 760 MB wrapper and any stray license-key file).
+  Get-ChildItem -LiteralPath $work -Force -ErrorAction Stop |
+    Where-Object { $_.FullName -ne $msiPath -and $_.FullName -ne $cabPath } |
+    Remove-Item -Recurse -Force -ErrorAction Stop
+  $fileName = 'WiXInstaller_photolab4.msi'
+installScript: msiexec /i <filename> /qn /norestart /l*v "%windir%\Temp\DxOPhotoLab4-install.log"
+uninstallScript: msiexec /x <productcode> /qn /norestart /l*v "%windir%\Temp\DxOPhotoLab4-uninstall.log"
+version:
+fileName:
+iconFile: dxophotolab.png
+id: dxophotolab
+displayName: DxO PhotoLab
+publisher: DxO Labs
+description: DxO PhotoLab 4 is RAW photo editing software with optical corrections and DeepPRIME noise reduction. This recipe packages the licensed PhotoLab 4 installer staged in the software dropbox; the license key is applied separately.
+fileType: msi
+detectionType: msi
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+maximumInstallationTimeInMinutes: 60
+minOSVersion: W10_20H2

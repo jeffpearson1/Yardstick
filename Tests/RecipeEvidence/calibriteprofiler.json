@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "calibriteprofiler",
+  "recipePath": "Recipes/calibriteprofiler.yaml",
+  "recipeSha256": "45f5edda39b59b7f39e37bdc6db2e9bbaaa53159209363b7c41705ddac3cf3ff",
+  "validated": true,
+  "verdict": "Validated",
+  "reason": "",
+  "testedAt": "2026-11-19T23:05:08Z",
+  "studioVersion": "0.9.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "calibrite-PROFILER-Setup-3.1.3.exe",
+    "version": "3.1.3",
+    "sha256": "190F2473D5D9547FF4B533C95F84F54159F451F6EE931A94978C980C0DB4E6A9",
+    "signer": "CN=Calibrite LLC, O=Calibrite LLC, L=Wilmington, S=Delaware, C=US"
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Pass",
+      "detail": "calibrite-PROFILER-Setup-3.1.3.exe v3.1.3 signature=Valid"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (script: exit=1 stdout='Not Detected')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout='Not Detected'"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
