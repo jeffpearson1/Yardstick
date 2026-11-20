@@ -1,25 +1,149 @@
+# PowerShell 7.7.0 and later ship for Windows only as an MSIX bundle - Microsoft dropped the MSI
+# (https://devblogs.microsoft.com/powershell/powershell-msi-deprecation/). This recipe therefore
+# deploys the MSIX, provisioned machine-wide, from the official PowerShell/PowerShell GitHub release.
+#
+# Why the x64 .msix is extracted from the bundle instead of provisioning the .msixbundle itself:
+# DISM records a provisioned bundle under the *bundle* identity, whose version is a build timestamp
+# (2026.1110.418.0 for 7.7.0), not the product version (7.7.0.0). A version-gated detection rule would
+# then match every PowerShell release ever built and Intune would never roll out an update. The
+# bundle's inner x64 package is a standalone, Microsoft-signed MSIX that is recorded as 7.7.0.0.
+# (This also shrinks the package from ~369 MB to ~128 MB.)
+#
+# Behaviour change from the old MSI that device owners should know about: the MSIX registers pwsh.exe
+# through a per-user app execution alias, so it is not on the machine PATH and SYSTEM services,
+# scheduled tasks and PowerShell remoting cannot use it (PowerShell/PowerShell#27562, #27563).
 url: https://github.com/powershell/powershell
 urlRedirects: false
 preDownloadScript: |
-  # PowerShell 7.7 and later ship no Windows MSI (only ZIPs and an msixbundle), so take the
-  # newest stable release that still has one - the 7.6 LTS line keeps getting MSI servicing builds.
+  # Stable releases only: the pattern excludes PowerShell-LTS-* (package Microsoft.PowerShell-LTS) and
+  # PowerShellPreview-*. Older servicing lines (7.4, 7.5, 7.6) also publish bundles, so sort by version
+  # rather than publish date.
   $releases = Invoke-YardstickGitHubApi 'https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=30'
-  # Older lines (7.4, 7.5) get servicing builds too, so sort by version rather than publish date.
+  $pwshBundlePattern = '^PowerShell-[0-9.]+\.msixbundle$'
   $release = $releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v[0-9]+\.[0-9]+\.[0-9]+$' } |
-    Where-Object { @($_.assets | Where-Object name -match '^PowerShell-[0-9.]+-win-x64\.msi$').Count -eq 1 } |
+    Where-Object { @($_.assets | Where-Object name -match $pwshBundlePattern).Count -eq 1 } |
     Sort-Object { [version]$_.tag_name.TrimStart('v') } -Descending | Select-Object -First 1
-  if (-not $release) { throw 'No stable PowerShell release with a single x64 MSI was found.' }
-  $asset = $release.assets | Where-Object name -match '^PowerShell-[0-9.]+-win-x64\.msi$'
+  if (-not $release) { throw 'No stable PowerShell release with a single MSIX bundle was found.' }
+  $asset = $release.assets | Where-Object name -match $pwshBundlePattern
   $version = ([string]$release.tag_name).TrimStart('v')
   if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw "Unexpected PowerShell version '$version'." }
   $url = [string]$asset.browser_download_url
   $fileName = [string]$asset.name
-installScript: msiexec /i <filename> /qn /norestart
-uninstallScript: msiexec /x <productcode> /qn /norestart
+  $pwshBundleDigest = [string]$asset.digest
+postDownloadScript: |
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $pwshBundlePath = Join-Path $PWD $fileName
+  if (-not (Test-Path -LiteralPath $pwshBundlePath)) { throw "The PowerShell bundle was not found at '$pwshBundlePath'." }
+
+  # GitHub publishes a SHA-256 digest for each release asset.
+  if ($pwshBundleDigest -match '^sha256:(?<hash>[0-9a-fA-F]{64})$') {
+    $pwshBundleHash = (Get-FileHash -LiteralPath $pwshBundlePath -Algorithm SHA256).Hash
+    if ($pwshBundleHash -ne $Matches['hash']) { throw "The PowerShell bundle SHA-256 $pwshBundleHash does not match GitHub's digest." }
+  } else {
+    Write-Warning 'GitHub published no SHA-256 digest for the PowerShell bundle; relying on the Authenticode check of the extracted package.'
+  }
+
+  $pwshBundleZip = [System.IO.Compression.ZipFile]::OpenRead($pwshBundlePath)
+  try {
+    # Find the x64 application package through the bundle manifest rather than guessing its name.
+    $pwshBundleManifestEntry = $pwshBundleZip.GetEntry('AppxMetadata/AppxBundleManifest.xml')
+    if (-not $pwshBundleManifestEntry) { throw 'The PowerShell bundle has no AppxMetadata/AppxBundleManifest.xml.' }
+    $pwshBundleReader = [System.IO.StreamReader]::new($pwshBundleManifestEntry.Open())
+    try { [xml]$pwshBundleManifest = $pwshBundleReader.ReadToEnd() } finally { $pwshBundleReader.Dispose() }
+    if ($pwshBundleManifest.Bundle.Identity.GetAttribute('Name') -ne 'Microsoft.PowerShell') {
+      throw "Unexpected PowerShell bundle identity '$($pwshBundleManifest.Bundle.Identity.GetAttribute('Name'))'."
+    }
+    $pwshX64Packages = @($pwshBundleManifest.Bundle.Packages.Package |
+      Where-Object { $_.GetAttribute('Type') -eq 'application' -and $_.GetAttribute('Architecture') -eq 'x64' })
+    if ($pwshX64Packages.Count -ne 1) { throw "Expected exactly one x64 application package in the bundle, found $($pwshX64Packages.Count)." }
+    $pwshMsixName = [string]$pwshX64Packages[0].GetAttribute('FileName')
+    if ($pwshMsixName -notmatch '^PowerShell-[0-9.]+-win-x64\.msix$') { throw "Unexpected x64 package name '$pwshMsixName'." }
+    $pwshMsixEntry = $pwshBundleZip.GetEntry($pwshMsixName)
+    if (-not $pwshMsixEntry) { throw "The bundle manifest lists '$pwshMsixName' but the bundle does not contain it." }
+    $pwshMsixPath = Join-Path $PWD $pwshMsixName
+    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($pwshMsixEntry, $pwshMsixPath, $true)
+  } finally { $pwshBundleZip.Dispose() }
+
+  # The extracted package must be Microsoft-signed and carry the identity and version we expect.
+  $pwshSignature = Get-AuthenticodeSignature -LiteralPath $pwshMsixPath
+  if ($pwshSignature.Status -ne 'Valid' -or $pwshSignature.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+    throw "The extracted PowerShell MSIX is not validly signed by Microsoft (status $($pwshSignature.Status))."
+  }
+  $pwshMsixZip = [System.IO.Compression.ZipFile]::OpenRead($pwshMsixPath)
+  try {
+    $pwshAppxEntry = $pwshMsixZip.GetEntry('AppxManifest.xml')
+    if (-not $pwshAppxEntry) { throw 'The extracted PowerShell MSIX has no AppxManifest.xml.' }
+    $pwshAppxReader = [System.IO.StreamReader]::new($pwshAppxEntry.Open())
+    try { [xml]$pwshAppxManifest = $pwshAppxReader.ReadToEnd() } finally { $pwshAppxReader.Dispose() }
+    $pwshIdentity = $pwshAppxManifest.Package.Identity
+    if ($pwshIdentity.GetAttribute('Name') -ne 'Microsoft.PowerShell' -or
+        $pwshIdentity.GetAttribute('ProcessorArchitecture') -ne 'x64' -or
+        $pwshIdentity.GetAttribute('Version') -ne "$version.0") {
+      throw "Unexpected PowerShell MSIX identity: $($pwshIdentity.GetAttribute('Name')) $($pwshIdentity.GetAttribute('Version')) $($pwshIdentity.GetAttribute('ProcessorArchitecture')); expected Microsoft.PowerShell $version.0 x64."
+    }
+  } finally { $pwshMsixZip.Dispose() }
+
+  # Ship only the standalone x64 package.
+  $fileName = $pwshMsixName
+  Remove-Item -LiteralPath $pwshBundlePath -Force
+powerShellInstallScript: |
+  $ErrorActionPreference = 'Stop'
+  $package = Join-Path $PSScriptRoot '<filename>'
+  if (-not (Test-Path -LiteralPath $package)) {
+    throw "The PowerShell MSIX was not found at '$package'."
+  }
+
+  # Provision machine-wide rather than registering only the SYSTEM account, so every
+  # user, including those who sign in later, receives PowerShell.
+  Add-AppxProvisionedPackage -Online -PackagePath $package -SkipLicense -Regions 'all' | Out-Null
+  exit 0
+powerShellUninstallScript: |
+  $ErrorActionPreference = 'Stop'
+
+  # Stop only processes running from this MSIX; an MSI or portable pwsh is left alone.
+  Get-Process -Name 'pwsh' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like '*\WindowsApps\Microsoft.PowerShell_*' } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+  # Remove registered copies first, then the machine-wide provisioning so Windows does
+  # not register PowerShell again for users who sign in later. The exact package name
+  # keeps Microsoft.PowerShell-LTS and Microsoft.PowerShellPreview untouched.
+  foreach ($package in @(Get-AppxPackage -AllUsers -Name 'Microsoft.PowerShell')) {
+    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+  }
+  foreach ($package in @(Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq 'Microsoft.PowerShell')) {
+    Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -AllUsers -ErrorAction Stop | Out-Null
+  }
+  exit 0
 iconFile: powershell7.png
 id: powershell7
 displayName: PowerShell 7
 publisher: Microsoft Corporation
-description: A free, cross-platform, open-source shell and scripting language.
-fileType: msi
-detectionType: msi
+description: |
+  A free, cross-platform, open-source shell and scripting language.
+
+  Installed machine-wide from Microsoft's MSIX package (Microsoft dropped the MSI in PowerShell 7.7). pwsh.exe is available to signed-in users through an app execution alias; unlike the former MSI it is not on the machine PATH and cannot be run by SYSTEM services, scheduled tasks or PowerShell remoting.
+detectionType: script
+detectionScript: |
+  # Provisioned packages and registered packages both report the package's own version
+  # (7.7.0.0). A registered copy counts too, so a machine where a user already installed
+  # PowerShell from the Store or winget is not reinstalled over or removed by this app.
+  $expected = [version]'<version>'
+  $installed = @(
+    Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq 'Microsoft.PowerShell' | ForEach-Object { $_.Version }
+    Get-AppxPackage -AllUsers -Name 'Microsoft.PowerShell' | ForEach-Object { $_.Version }
+  )
+  foreach ($candidate in $installed) {
+    $found = $null
+    # A provisioned msixbundle reports its build-timestamp version (2026.x), which says nothing
+    # about the PowerShell release, so only product-style versions are compared.
+    if ([version]::TryParse([string]$candidate, [ref]$found) -and $found.Major -lt 100 -and $found -ge $expected) {
+      Write-Output 'Detected'
+      exit 0
+    }
+  }
+  Write-Output 'Not Detected'
+  exit 1
+# Replace (not in-place Update): devices still on the 7.6.x MSI have it uninstalled first, so they
+# do not end up with an MSI and an MSIX copy side by side, and MSIX-to-MSIX upgrades start clean.
+uninstallPreviousVersion: true
