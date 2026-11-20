@@ -257,7 +257,8 @@ switch ($PSCmdlet.ParameterSetName) {
                 $Global:TenantID = $credential.TenantID
             $Global:ClientID = $credential.ClientID
             $Global:ClientSecret = $credential.ClientSecret
-            Connect-YardstickGraph -Force
+            # Explicit, so a configured workload identity federation is not validated instead.
+            Connect-YardstickGraph -TenantID $credential.TenantID -ClientID $credential.ClientID -ClientSecret $credential.ClientSecret -Force
             Write-Host "Authentication succeeded." -ForegroundColor Green
             $credential = Update-YardstickSecretExpiration -Credential $credential
             Test-YardstickSecretExpiration -Credential $credential -Preferences $Prefs -NoEmail | Out-Null

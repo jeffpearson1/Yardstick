@@ -16,6 +16,7 @@ access token. YardstickLog has no dependencies and loads first.
 
 $script:ComponentModules = @(
     'YardstickLog'
+    'YardstickFederation'
     'YardstickGraph'
     'YardstickIntune'
     'YardstickSupport'
