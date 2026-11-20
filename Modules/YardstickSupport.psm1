@@ -2672,14 +2672,17 @@ function Get-SameAppAllVersions {
     # The log report reads the display name from this line; keep its wording.
     Write-Log "Retrieving all versions of application with display name: $DisplayName" -Level Detail
 
-    # Attempt to retrieve applications with retry logic
-    $AllSimilarApps = Invoke-WithRetry -Label "Retrieve applications for $DisplayName" -MaxRetries 3 -DelaySeconds 5 -ScriptBlock {
-        Get-YardstickWin32App -DisplayName "$DisplayName" -ErrorAction Stop
-    } -OnFailure {
-        Write-Log "Could not retrieve the versions of $DisplayName from Intune after 3 attempts. Exiting." -Level Error
-        exit 1001
+    # Invoke-YardstickGraphRequest already retries transient failures (5xx, 429,
+    # timeouts) with backoff, so this call is not wrapped in another retry layer:
+    # nesting the two multiplied a gateway timeout into up to 18 slow requests.
+    # A failure throws so the caller fails this recipe and the run carries on;
+    # all recipes share one process, so exiting here would end the whole run.
+    try {
+        $AllSimilarApps = Get-YardstickWin32App -DisplayName "$DisplayName" -ErrorAction Stop
+    } catch {
+        throw "Could not retrieve the versions of $DisplayName from Intune: $($_.Exception.Message)"
     }
-    
+
     if (-not $AllSimilarApps) {
         Write-Log "No applications found with the name $DisplayName." -Level Detail
         return , @()
