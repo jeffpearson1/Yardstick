@@ -22,6 +22,12 @@ All notable changes to Yardstick are recorded here. Versions follow
   email are skipped, and `Test-YardstickSetup.ps1` checks the federated sign-in
   instead. See [Workload identity federation](Docs/FederatedIdentity.md).
 
+- **Packager diagnostics.** A failed `.intunewin` build now reports the decoded exit code
+  (for example `0x80070005: Access is denied`) and the packager's own error lines instead of
+  a bare number. Each run also keeps the packager output and launch context (session, TEMP,
+  tool hash, launch mode) in `PackagerLogs\<id>.log` beside `YLog.log`, and leftover
+  `%TEMP%\<guid>\IntuneWinPackage` folders from failed runs are removed automatically.
+
 - **Company Portal categories and featured apps.** Two optional recipe fields,
   usually set in `Local\recipeOverrides.yaml`:
   - **`categories`** links each new app version to existing Intune app categories,
@@ -214,6 +220,11 @@ All notable changes to Yardstick are recorded here. Versions follow
   about a synchronous `Start-BitsTransfer` in a recipe script.
 
 ### Fixed
+
+- **Recipe lab Package stage.** `Invoke-RecipeLab.ps1 -Stage Package` now packages with
+  Yardstick's own packager. The IntuneWin32App module launched the tool through
+  `ShellExecute`, which fails with Access denied in some sessions even though packaging
+  works. It also writes `summary.json` and `packager.log` into the run folder.
 
 - **An Intune lookup failure fails one recipe instead of ending the run.** When
   Graph timed out (504) reading an app's versions, Yardstick exited, and every recipe

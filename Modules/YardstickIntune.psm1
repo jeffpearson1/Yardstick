@@ -642,6 +642,56 @@ function Resolve-YardstickIntuneWinAppUtil {
     return $toolPath
 }
 
+function ConvertTo-YardstickExitCodeText {
+    <#
+    .SYNOPSIS
+        Renders a process exit code as decimal plus hex and, for Win32 or HRESULT
+        values, the Windows message: -2147024891 -> "-2147024891 (0x80070005: Access is denied)".
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][int]$ExitCode)
+    $hex = '0x{0:X8}' -f $ExitCode
+    $win32 = if (($ExitCode -band 0xFFFF0000) -eq 0x80070000) { $ExitCode -band 0xFFFF } elseif ($ExitCode -ge 0 -and $ExitCode -lt 65536) { $ExitCode } else { $null }
+    $message = $null
+    if ($null -ne $win32 -and $win32 -ne 0) {
+        $text = ([ComponentModel.Win32Exception]::new([int]$win32)).Message
+        if ($text -and $text -notmatch '^Unknown error') { $message = $text }
+    }
+    if ($message) { return "$ExitCode ($hex`: $message)" }
+    return "$ExitCode ($hex)"
+}
+
+function Remove-YardstickIntuneWinTemp {
+    <#
+    .SYNOPSIS
+        Deletes the %TEMP%\<guid>\IntuneWinPackage staging folders IntuneWinAppUtil.exe
+        leaves behind when it fails (each is the full, encrypted payload).
+    .DESCRIPTION
+        Only folders named like a GUID whose sole child is IntuneWinPackage are touched.
+        Select them with -OlderThanMinutes (stale orphans, safe while another packager
+        runs) and/or -CreatedAfter (everything one failed run just made).
+    #>
+    [CmdletBinding()]
+    param(
+        [int]$OlderThanMinutes = -1,
+        [datetime]$CreatedAfter
+    )
+    $guid = '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+    $removed = 0
+    foreach ($dir in @(Get-ChildItem -LiteralPath $env:TEMP -Directory -ErrorAction SilentlyContinue | Where-Object Name -match $guid)) {
+        $children = @(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)
+        if ($children.Count -ne 1 -or $children[0].Name -ne 'IntuneWinPackage') { continue }
+        $selected = $false
+        if ($OlderThanMinutes -ge 0 -and $dir.LastWriteTime -lt (Get-Date).AddMinutes(-$OlderThanMinutes)) { $selected = $true }
+        if ($PSBoundParameters.ContainsKey('CreatedAfter') -and $dir.CreationTime -ge $CreatedAfter) { $selected = $true }
+        if (-not $selected) { continue }
+        try { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop; $removed++ } catch {
+            Write-YardstickIntuneLog "Could not remove leftover packager folder '$($dir.FullName)': $($_.Exception.Message)" -Level Warning
+        }
+    }
+    return $removed
+}
+
 function New-YardstickWin32AppPackage {
     [CmdletBinding()]
     param(
@@ -653,7 +703,10 @@ function New-YardstickWin32AppPackage {
         # 0 waits indefinitely, which is what -Wait used to do. Callers should pass
         # the packagingTimeoutMinutes preference instead.
         [ValidateRange(0, 1440)]
-        [int]$TimeoutMinutes = 30
+        [int]$TimeoutMinutes = 30,
+        # Where to keep the packager's own output plus the launch context. Failures
+        # always quote the tail of the output in the exception; this keeps the whole thing.
+        [string]$LogPath
     )
     if (-not (Test-Path -LiteralPath $SourceFolder -PathType Container)) { throw "Source folder does not exist: $SourceFolder" }
     if (-not (Test-Path -LiteralPath (Join-Path $SourceFolder $SetupFile) -PathType Leaf)) { throw "Setup file '$SetupFile' does not exist in '$SourceFolder'." }
@@ -672,19 +725,69 @@ function New-YardstickWin32AppPackage {
     # -PassThru without -Wait, then an explicit bounded WaitForExit: IntuneWinAppUtil
     # compresses large payloads and has been seen to sit on a locked source file, and
     # a plain -Wait gives the runner no way out of that.
-    $process = Start-Process -FilePath $IntuneWinAppUtilPath -ArgumentList $arguments -PassThru -WindowStyle Hidden
+    $launchedAt = (Get-Date).AddSeconds(-5)
+    $stdoutPath = Join-Path $env:TEMP "iwau-$([guid]::NewGuid().ToString('N')).out.txt"
+    $stderrPath = Join-Path $env:TEMP "iwau-$([guid]::NewGuid().ToString('N')).err.txt"
+    # Launch context, so a failure that only happens in some sessions or launch modes
+    # can be told apart from a bad payload without reproducing it by hand.
+    $toolHash = try { (Get-FileHash -LiteralPath $IntuneWinAppUtilPath -Algorithm SHA256 -ErrorAction Stop).Hash } catch { 'unavailable' }
+    $context = @(
+        "Started   : $((Get-Date).ToString('o'))"
+        "Tool      : $IntuneWinAppUtilPath (SHA256 $toolHash)"
+        "Arguments : $($arguments -join ' ')"
+        "Launch    : Start-Process -WindowStyle Hidden, output redirected (UseShellExecute=false)"
+        "User      : $env:USERDOMAIN\$env:USERNAME, session $([Diagnostics.Process]::GetCurrentProcess().SessionId), PID $PID"
+        "TEMP      : $env:TEMP"
+        "Source    : $SourceFolder"
+        "Output    : $OutputFolder"
+    )
+    $process = Start-Process -FilePath $IntuneWinAppUtilPath -ArgumentList $arguments -PassThru -WindowStyle Hidden `
+        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $failure = $null
+    $exitCode = $null
     if ($TimeoutMinutes -gt 0) {
         if (-not $process.WaitForExit($TimeoutMinutes * 60 * 1000)) {
             try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch {
                 Write-YardstickIntuneLog "Could not kill the stalled IntuneWinAppUtil.exe (PID $($process.Id)): $($_.Exception.Message)" -Level Warning
             }
-            throw "IntuneWinAppUtil.exe did not finish within $TimeoutMinutes minute(s) and was terminated."
+            $failure = "IntuneWinAppUtil.exe did not finish within $TimeoutMinutes minute(s) and was terminated."
         }
     } else {
         $process.WaitForExit()
     }
-    if ($process.ExitCode -ne 0) { throw "IntuneWinAppUtil.exe exited with code $($process.ExitCode)." }
-    if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw "IntuneWinAppUtil.exe did not create the expected package: $packagePath" }
+    if (-not $failure) {
+        $exitCode = $process.ExitCode
+        if ($exitCode -ne 0) {
+            $failure = "IntuneWinAppUtil.exe exited with code $(ConvertTo-YardstickExitCodeText -ExitCode $exitCode)."
+        } elseif (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+            $failure = "IntuneWinAppUtil.exe did not create the expected package: $packagePath"
+        }
+    }
+    $output = @(
+        foreach ($file in $stdoutPath, $stderrPath) {
+            if (Test-Path -LiteralPath $file -PathType Leaf) { Get-Content -LiteralPath $file -ErrorAction SilentlyContinue }
+        }
+    ) | Where-Object { $_ -and $_.ToString().Trim() }
+    Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    if ($LogPath) {
+        try {
+            $resultLine = if ($failure) { "Result    : FAILED - $failure" } else { 'Result    : succeeded' }
+            $logParent = Split-Path -Parent $LogPath
+            if ($logParent -and -not (Test-Path -LiteralPath $logParent)) { New-Item -ItemType Directory -Path $logParent -Force | Out-Null }
+            Set-Content -LiteralPath $LogPath -Value (@($context) + $resultLine + '' + '--- IntuneWinAppUtil.exe output ---' + $output) -Encoding UTF8
+        } catch {
+            Write-YardstickIntuneLog "Could not write the packager log '$LogPath': $($_.Exception.Message)" -Level Warning
+        }
+    }
+    if ($failure) {
+        Remove-YardstickIntuneWinTemp -CreatedAfter $launchedAt | Out-Null
+        # Lead with the tool's own error and exception lines; stack frames alone say little.
+        $keyLines = @($output | Where-Object { $_ -match '^ERROR\s+[A-Za-z]' -or $_ -match 'Exception' } | Where-Object { $_ -notmatch 'FATAL ERROR' } | Select-Object -First 5)
+        $tail = $(if ($keyLines.Count) { $keyLines } else { @($output | Select-Object -Last 8) }) -join [Environment]::NewLine
+        $detail = if ($tail) { "$failure Last tool output:$([Environment]::NewLine)$tail" } else { "$failure The tool wrote no output." }
+        if ($LogPath) { $detail += "$([Environment]::NewLine)Full packager log: $LogPath" }
+        throw $detail
+    }
     return [pscustomobject]@{ Name = [io.path]::GetFileName($packagePath); Path = $packagePath }
 }
 
@@ -1280,6 +1383,8 @@ Export-ModuleMember -Function @(
     'New-YardstickWin32AppRequirementRule',
     'New-YardstickWin32AppIcon',
     'New-YardstickWin32AppPackage',
+    'ConvertTo-YardstickExitCodeText',
+    'Remove-YardstickIntuneWinTemp',
     'Get-YardstickWin32App',
     'Add-YardstickWin32App',
     'Set-YardstickWin32App',

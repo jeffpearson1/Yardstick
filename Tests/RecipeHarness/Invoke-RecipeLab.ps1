@@ -187,15 +187,30 @@ if ($installer.Extension -ieq '.msi') {
 }
 
 if ($Stage -eq 'Package') {
-    Import-Module IntuneWin32App -MinimumVersion 1.5.0 -MaximumVersion 1.5.2 -ErrorAction Stop
     if ($recipe.ContainsKey('powerShellInstallScript') -and $recipe['powerShellInstallScript']) {
         Set-Content -LiteralPath (Join-Path $harnessBuildDirectory 'install.ps1') -Value $recipe['powerShellInstallScript']
     }
     if ($recipe.ContainsKey('powerShellUninstallScript') -and $recipe['powerShellUninstallScript']) {
         Set-Content -LiteralPath (Join-Path $harnessBuildDirectory 'uninstall.ps1') -Value $recipe['powerShellUninstallScript']
     }
-    $package = New-IntuneWin32AppPackage -SourceFolder $harnessBuildDirectory -SetupFile $fileName -OutputFolder $Published -Force -Verbose
-    $summary['Package'] = $package.Path
+    # Yardstick's own packager, not IntuneWin32App's New-IntuneWin32AppPackage: that one
+    # starts IntuneWinAppUtil.exe with UseShellExecute=$true, which fails with 0x80070005
+    # (Access denied) in some sessions even though the tool itself is fine.
+    Remove-YardstickIntuneWinTemp -OlderThanMinutes 60 | Out-Null   # stale orphans from earlier failures
+    $packagerLog = Join-Path $runRoot 'packager.log'
+    $summary['PackagerLog'] = $packagerLog
+    try {
+        $package = New-YardstickWin32AppPackage -SourceFolder $harnessBuildDirectory -SetupFile $fileName -OutputFolder $Published -Force -LogPath $packagerLog -IntuneWinAppUtilPath (Resolve-YardstickIntuneWinAppUtil -ToolsPath $Tools)
+        $summary['Package'] = $package.Path
+    } catch {
+        # Leave evidence next to the run: the exact error, the packager's own output and
+        # launch context (packager.log). Read these before calling a failure environmental.
+        $summary['Package'] = $null
+        $summary['PackageError'] = $_.Exception.Message
+        $summary | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot 'summary.json') -Encoding UTF8
+        throw "Package stage failed. $($_.Exception.Message)"
+    }
 }
 
+$summary | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot 'summary.json') -Encoding UTF8
 [PSCustomObject]$summary

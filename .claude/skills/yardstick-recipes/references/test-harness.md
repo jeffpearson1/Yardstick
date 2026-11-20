@@ -4,8 +4,7 @@
 Defaults resolve from `Yardstick.Project.psd1`, so `-Id <id>` alone works against
 `Recipes\Development\`; override roots only when deliberately testing elsewhere.
 
-Requirements: `powershell-yaml` ≥ 0.4.12, `BitsTransfer`, and — only for
-`Invoke-RecipeLab.ps1 -Stage Package` — `IntuneWin32App` 1.5.x.
+Requirements: `powershell-yaml` ≥ 0.4.12 and `BitsTransfer`.
 
 ## The three scripts
 
@@ -103,6 +102,13 @@ temporary analysis copies you created yourself.
   verbose MSI log, and the MSI's `LaunchCondition`, `Property`, `CustomAction`, and
   `InstallExecuteSequence` tables. Advanced Installer payloads extracted from a
   bootstrapper commonly need `SETUPEXEDIR`.
+- **Package stage fails (`IntuneWinAppUtil.exe exited with code …`)** — do not call
+  it environmental yet. Read `Artifacts\RecipeHarness\<id>\<timestamp>\packager.log`
+  first: it holds the tool's own output (which step failed) and the launch context
+  (session, TEMP, tool hash, launch mode). `summary.json` in the same folder carries
+  `PackageError` and the log path. Exit codes are decoded, e.g. `0x80070005` is Access
+  denied. Only a failure that reproduces for a different recipe with the same log
+  signature is environmental; a missing or unreadable payload file is recipe-side.
 - **Signature `UnknownError` on a ZIP or wrapper** — often expected; the inner
   EXE/MSI may be correctly signed. Record the warning and validate the real payload.
 - **PostDetect fails but the app is clearly installed** — usually a version-format

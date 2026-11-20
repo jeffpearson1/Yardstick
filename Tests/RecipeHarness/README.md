@@ -17,7 +17,6 @@ Defaults are resolved from `Yardstick.Project.psd1`. Every path can still be ove
 
 - Windows PowerShell or PowerShell 7.
 - `powershell-yaml` version 0.4.12 or newer.
-- `IntuneWin32App` version 1.5.x only for `Invoke-RecipeLab.ps1 -Stage Package`.
 - `BitsTransfer`.
 - The project runtime with `Modules\YardstickSupport.psm1`.
 

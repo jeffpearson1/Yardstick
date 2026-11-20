@@ -1955,7 +1955,10 @@ while ($RecipePass.Count -gt 0) {
             Set-Location $YardstickModuleRoot
             Write-Log "Packaging the .intunewin file..." -Level Detail
             Set-YardstickWatchdogStage -Stage 'Packaging'
-            $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force -TimeoutMinutes $Script:PackagingTimeoutMinutes
+            # The packager's own output and launch context, kept per app (last run wins) beside YLog.log.
+            # It is not under $Published, which is emptied after every run.
+            $packagerLog = Join-Path (Join-Path $Global:LogLocation 'PackagerLogs') "$($Script:Id).log"
+            $App = New-YardstickWin32AppPackage -SourceFolder $BuildSpace\$Script:Id\$Script:Version -SetupFile $Script:FileName -OutputFolder $Published -Force -TimeoutMinutes $Script:PackagingTimeoutMinutes -LogPath $packagerLog
 
             # Upload .intunewin file to Intune
             # Detection Types
