@@ -210,7 +210,12 @@ try {
         Assert-Smoke (@($entraCalls | Where-Object { 'client_secret' -in $_.keys }).Count -eq 0) "[$source] no Entra request sent client_secret"
         Assert-Smoke (@($entraCalls | Where-Object { $_.assertion -ne $idToken }).Count -eq 0) "[$source] every Entra request presented the ID token"
         Assert-Smoke (@($graphCalls | Where-Object { $_.uri -match '/applications' }).Count -eq 0) "[$source] did not look up the app registration for secret expiry"
-        Assert-Smoke (@($graphCalls | Where-Object { $_.authorization -ne 'Bearer smoke-graph-token' }).Count -eq 0) "[$source] Graph calls used the federated token ($($graphCalls.Count) call(s))"
+        if ($graphCalls.Count -gt 0) {
+            Assert-Smoke (@($graphCalls | Where-Object { $_.authorization -ne 'Bearer smoke-graph-token' }).Count -eq 0) "[$source] Graph calls used the federated token ($($graphCalls.Count) call(s))"
+        } else {
+            # The recipe folder is empty, so a run may make no Graph call at all.
+            Write-Host "  SKIP  [$source] made no Graph call, so the token Graph received is not checked" -ForegroundColor Yellow
+        }
         Assert-Smoke ($outputText -notmatch 'Credential Manager under target') "[$source] did not look for a stored credential"
         Assert-Smoke ($outputText -notmatch [regex]::Escape($jobToken) -and $outputText -notmatch [regex]::Escape($idToken)) "[$source] no token appeared in the output"
 

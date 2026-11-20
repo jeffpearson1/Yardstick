@@ -39,11 +39,14 @@ federated identity instead of a stored credential and signs in with it.
 Use the same app registration and Graph permissions as a secret-based install (see
 [Microsoft Graph permissions](Installation.md#microsoft-graph-permissions)). On the
 app registration, open **Certificates & secrets > Federated credentials** and add a
-credential that matches the pipeline's ID token:
+credential that matches the pipeline's ID token. Anything that can present a matching
+ID token signs in as Yardstick, so read
+[Who can sign in as Yardstick](#who-can-sign-in-as-yardstick) before you choose the
+subject.
 
 | Source | Issuer | Subject |
 |---|---|---|
-| GitHub Actions | `https://token.actions.githubusercontent.com` | Depends on the trigger, e.g. `repo:<owner>/<repo>:ref:refs/heads/main` or `repo:<owner>/<repo>:environment:<name>` |
+| GitHub Actions | `https://token.actions.githubusercontent.com` | `repo:<owner>/<repo>:environment:<name>` for a job that uses a protected environment (recommended). Without an environment it depends on the trigger, e.g. `repo:<owner>/<repo>:ref:refs/heads/main` |
 | Azure DevOps | Shown on the service connection (`https://vstoken.dev.azure.com/<organization id>`) | Shown on the service connection (`sc://<organization>/<project>/<connection>`) |
 | File | The issuer of the token you supply | The subject of the token you supply |
 
@@ -82,12 +85,14 @@ earlier step provides them.
 
 ### GitHub Actions
 
-Give the job `id-token: write` and set the tenant and client:
+Give the job `id-token: write`, run it in a protected environment, and set the tenant
+and client:
 
 ```yaml
 jobs:
   yardstick:
     runs-on: windows-latest
+    environment: intune
     permissions:
       id-token: write
       contents: read
@@ -103,7 +108,8 @@ jobs:
 ```
 
 Yardstick requests each ID token from `ACTIONS_ID_TOKEN_REQUEST_URL` with the
-audience `api://AzureADTokenExchange`, so no Azure login action is needed.
+audience `api://AzureADTokenExchange`, so no Azure login action is needed. With
+`environment: intune`, the token's subject is `repo:<owner>/<repo>:environment:intune`.
 
 ### Azure DevOps
 
@@ -153,6 +159,42 @@ the file (such as a Kubernetes projected service account token) keeps a long run
 going. A token written once is used until it expires, so the run must finish within
 its lifetime.
 
+## Who can sign in as Yardstick
+
+Yardstick's app registration can create and assign Win32 apps, and Intune installs
+those as SYSTEM on every device they are assigned to. Anything that can present an ID
+token matching the federated credential gets the same power. Decide who can do that
+as carefully as you would decide who may read a client secret.
+
+**GitHub Actions**
+
+- Match an environment, and protect it with required reviewers and a deployment
+  branch rule that allows only your default branch. A branch subject such as
+  `ref:refs/heads/main` trusts every workflow that anyone who can push to that branch
+  can run.
+- Never add a federated credential for the `pull_request` subject. It would let
+  workflow changes that nobody has reviewed or merged sign in as Yardstick.
+- Every step in a job with `id-token: write`, and every program those steps start,
+  can request ID tokens. Run Yardstick in a job of its own and keep third-party
+  actions out of it.
+
+**Azure DevOps**
+
+- The subject names the service connection, so every pipeline allowed to use the
+  connection can sign in as Yardstick. Don't grant the connection to all pipelines
+  (**Grant access permission to all pipelines** when you create it, **Open access**
+  in its security settings later); allow only the Yardstick pipeline.
+- Under the connection's **Approvals and checks**, add **Branch control** to allow
+  only your default branch, and **Approvals** if a person should confirm each run.
+- Map `SYSTEM_ACCESSTOKEN` on the Yardstick step only, as the example does, not for
+  the whole job.
+
+**A token file**
+
+- Anyone who can write the file, and anyone the issuer will give a token with that
+  subject, can sign in as Yardstick. Let only the account that runs Yardstick read
+  and write the file.
+
 ## Errors and what they mean
 
 Every federated failure starts with `Workload identity federation`.
@@ -166,6 +208,7 @@ Every federated failure starts with `Workload identity federation`.
 | `is not a full path` | `YARDSTICK_FEDERATED_TOKEN_FILE` is relative; Yardstick changes directory during a run |
 | `give the job 'permissions: id-token: write'` | GitHub Actions isn't offering the job an ID token |
 | `is the unresolved pipeline variable '$(...)'` | The Azure DevOps variable named in the macro doesn't exist (usually a typo) |
+| `looks like an ID token instead of ...` | The token itself was put in a `YARDSTICK_*` variable, most often in `YARDSTICK_FEDERATED_TOKEN_FILE` instead of the file's path. The value is not shown |
 | `SYSTEM_ACCESSTOKEN is not available` | The step doesn't map `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` |
 | `requesting an ID token from Azure DevOps failed (HTTP 401)` | The job access token was rejected |
 | `There is no explicit reference to service connection ...` (HTTP 400) | No task in the stage names the service connection; run Yardstick inside `AzurePowerShell@5` as above |

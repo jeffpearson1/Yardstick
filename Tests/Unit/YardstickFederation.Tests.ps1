@@ -218,6 +218,24 @@ Describe 'Get-YardstickFederatedIdentity' {
             Pop-Location
         }
     }
+
+    It 'names <Name> without quoting it when it holds an ID token' -TestCases @(
+        @{ Name = 'YARDSTICK_FEDERATED_TOKEN_FILE'; Expected = 'the full path to a file holding the ID token' }
+        @{ Name = 'YARDSTICK_CLIENT_ID'; Expected = "the app registration's client ID" }
+        @{ Name = 'YARDSTICK_SERVICE_CONNECTION_ID'; Expected = "the service connection's ID" }
+        @{ Name = 'YARDSTICK_TENANT_ID'; Expected = 'the tenant ID' }
+    ) {
+        $jwt = New-TestJwt
+        $override = @{ $Name = $jwt }
+        # A token file and a service connection together would be a second error.
+        if ($Name -eq 'YARDSTICK_FEDERATED_TOKEN_FILE') { $override.YARDSTICK_SERVICE_CONNECTION_ID = $null }
+        Set-FederationEnvironment -Override $override
+        $message = $null
+        try { Get-YardstickFederatedIdentity } catch { $message = $_.Exception.Message }
+        $message | Should -Match "$Name looks like an ID token instead of $([regex]::Escape($Expected)) \(the value is not shown\)"
+        $message | Should -Not -Match ([regex]::Escape($jwt))
+        $message | Should -Not -Match 'eyJ'
+    }
 }
 
 Describe 'Retry delay' {

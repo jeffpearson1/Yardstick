@@ -35,6 +35,13 @@ $script:FederationTriggerVariables = @(
     'YARDSTICK_SERVICE_CONNECTION_ID',
     'YARDSTICK_FEDERATED_TOKEN_FILE'
 )
+# What each variable should hold, for the error when it holds an ID token instead.
+$script:FederationVariableContent = @{
+    YARDSTICK_TENANT_ID             = 'the tenant ID'
+    YARDSTICK_CLIENT_ID             = "the app registration's client ID"
+    YARDSTICK_SERVICE_CONNECTION_ID = "the service connection's ID"
+    YARDSTICK_FEDERATED_TOKEN_FILE  = 'the full path to a file holding the ID token'
+}
 $script:AzureDevOpsOidcApiVersion = '7.1'
 $script:EntraTokenExchangeAudience = 'api://AzureADTokenExchange'
 $script:FederationMaxAttempts = 3
@@ -66,6 +73,16 @@ function Test-UnresolvedPipelineMacro {
     # which is the usual symptom of a typo or of System.AccessToken not being mapped.
     param([string]$Value)
     return [bool]($Value -match '^\$\([^)]+\)$')
+}
+
+
+function Test-FederationIdTokenShape {
+    # A JWT starts with a base64url '{"' header and has dot-separated parts. Such a
+    # value in a YARDSTICK_* variable is almost certainly the ID token itself (for
+    # example the token rather than its path in YARDSTICK_FEDERATED_TOKEN_FILE), so
+    # error messages must name the variable without quoting its value.
+    param([string]$Value)
+    return [bool]($Value -match '^eyJ[\w-]*\.[\w-]*\.')
 }
 
 
@@ -109,6 +126,8 @@ function Get-YardstickFederatedIdentity {
     foreach ($name in $script:FederationTriggerVariables) {
         if ($name -in $triggered -and -not $values[$name]) {
             $problems.Add("$name is set but blank")
+        } elseif ($values[$name] -and (Test-FederationIdTokenShape $values[$name])) {
+            $problems.Add("$name looks like an ID token instead of $($script:FederationVariableContent[$name]) (the value is not shown)")
         } elseif ($values[$name] -and (Test-UnresolvedPipelineMacro $values[$name])) {
             $problems.Add("$name is the unresolved pipeline variable '$($values[$name])'")
         }
@@ -120,7 +139,8 @@ function Get-YardstickFederatedIdentity {
     $guid = [guid]::Empty
     foreach ($name in 'YARDSTICK_CLIENT_ID', 'YARDSTICK_SERVICE_CONNECTION_ID') {
         $value = $values[$name]
-        if ($value -and -not (Test-UnresolvedPipelineMacro $value) -and -not [guid]::TryParse($value, [ref]$guid)) {
+        if ($value -and -not (Test-UnresolvedPipelineMacro $value) -and -not (Test-FederationIdTokenShape $value) -and
+            -not [guid]::TryParse($value, [ref]$guid)) {
             $problems.Add("$name '$value' is not a GUID")
         }
     }
@@ -145,7 +165,7 @@ function Get-YardstickFederatedIdentity {
     switch ($provider) {
         'File' {
             $tokenFile = $values.YARDSTICK_FEDERATED_TOKEN_FILE
-            if (-not (Test-UnresolvedPipelineMacro $tokenFile)) {
+            if (-not (Test-UnresolvedPipelineMacro $tokenFile) -and -not (Test-FederationIdTokenShape $tokenFile)) {
                 if (-not [IO.Path]::IsPathFullyQualified($tokenFile)) {
                     # Yardstick changes directory during a run, so a relative path would move.
                     $problems.Add("YARDSTICK_FEDERATED_TOKEN_FILE '$tokenFile' is not a full path")
