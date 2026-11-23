@@ -1,6 +1,6 @@
 # LichenLabeler prints herbarium specimen labels (regular labels or folded packets, with optional
 # barcodes) from CSV files exported from a Symbiota portal. It is a standalone Delphi/VCL program
-# by Daryl Lafferty (scopeTag1), distributed by the Consortium of Lichen Herbaria
+# by Daryl Lafferty, distributed by the Consortium of Lichen Herbaria
 # as a ZIP from its help site. There is no installer: the ZIP holds LichenLabeler.exe, a
 # LichenLabelConfig.txt the program aborts without, and a ReadMe.txt.
 #
@@ -102,7 +102,7 @@ iconFile: lichenlabeler.png
 id: lichenlabeler
 displayName: LichenLabeler
 publisher: Consortium of Lichen Herbaria
-description: LichenLabeler prints herbarium specimen labels, either as regular labels or as folded packets with an optional barcode, from CSV files exported from a Symbiota portal such as the Consortium of Lichen Herbaria. It is a standalone program developed by Daryl Lafferty (scopeTag1) and distributed by the Consortium.
+description: LichenLabeler prints herbarium specimen labels, either as regular labels or as folded packets with an optional barcode, from CSV files exported from a Symbiota portal such as the Consortium of Lichen Herbaria. It is a standalone program developed by Daryl Lafferty and distributed by the Consortium.
 detectionType: script
 detectionScript: |
   $expected = $null
