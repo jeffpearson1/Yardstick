@@ -5,6 +5,27 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- **A normal run finishes an upload an earlier run left half-done.** When the run
+  that uploaded a version failed before renaming the old version, moving its
+  assignments and attaching supersedence, two published apps hold the same display
+  name and every later run used to skip the version as already published - until
+  someone ran `-Repair`. The next run that finds that same version upstream now
+  runs the `-Repair` sweep for it, as long as the stranded app is unassigned or was
+  created by Yardstick, and reports it (as **Updated** when the version reaches
+  users for the first time). Anything else - a newer build someone uploaded by
+  hand, or a version a lock rejects - is left alone with a warning. Turn it off
+  with `autoHealInterruptedUploads: false`.
+- **New failure stages separate "Intune changed" from "nothing changed".**
+  **Intune Lookup** means Intune did not answer and nothing was changed.
+  **Post-Upload Maintenance** means the new version is in Intune but its
+  follow-up did not finish; the message names the `-Repair` command. **Duplicate
+  Versions** means two published apps share the app's name and version (ActiLife
+  7.3.3, for one), which a person has to resolve. Log replay files old orphan
+  lines under Post-Upload Maintenance and shows `incomplete: ...` and `finished an
+  interrupted upload` in the details.
+
 ### Fixed
 
 - **Intune lookups no longer time out while Intune is slow.** Each lookup asked
@@ -74,6 +95,11 @@ All notable changes to Yardstick are recorded here. Versions follow
 
 ### Changed
 
+- An upload whose follow-up fails is reported at the new **Post-Upload
+  Maintenance** stage instead of **Intune Lookup**. Anything filtering the report
+  on "Intune Lookup" should include it.
+- Failure stages are logged once; the duplicate `ERROR:` line before an Intune
+  failure is gone.
 - A recipe's `displayName` must match the Intune app name exactly, including
   capitalisation. All shipped recipes already do. A mismatch still works (it is
   found through the full list and logged as a warning), but costs a full-list read

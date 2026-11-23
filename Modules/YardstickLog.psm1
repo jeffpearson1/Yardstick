@@ -187,7 +187,8 @@ $script:FailureStages = @(
     'Configuration', 'Recipe Validation', 'Manual Drop', 'Pre-Download Script',
     'Version Validation', 'Download', 'Download Script', 'Post-Download Script',
     'MSI Product Code Retrieval', 'Placeholder Replacement', 'Intune Upload',
-    'Intune Lookup', 'Post-Run Script', 'General Processing', 'Processing'
+    'Intune Lookup', 'Post-Upload Maintenance', 'Duplicate Versions',
+    'Post-Run Script', 'General Processing', 'Processing'
 )
 $script:FailureLinePattern = '^ERROR: (' + (($script:FailureStages | ForEach-Object { [regex]::Escape($_) }) -join '|') + ') failed: ([\s\S]+)$'
 
@@ -293,8 +294,10 @@ function Get-YardstickFailureStage {
         'Unable to open parameters file|Failed to resolve base recipe' { return 'Configuration' }
         'Recipe validation failed|schema'                              { return 'Recipe Validation' }
         'pre-download PowerShell script'                               { return 'Pre-Download Script' }
-        # Ahead of the 'version' row, which would otherwise claim these.
-        'Could not retrieve the versions of|Could not fetch the existing versions of' { return 'Intune Lookup' }
+        # Ahead of the 'version' row, which would otherwise claim these. An upload
+        # that could not be finished changed Intune; a failed lookup did not.
+        'Could not fetch the existing versions of .+ after uploading|^Uploaded .+ as [0-9a-f-]{36}, but' { return 'Post-Upload Maintenance' }
+        'Could not retrieve the versions of'                           { return 'Intune Lookup' }
         'Version validation failed|Version contains|version'           { return 'Version Validation' }
         'staged payload|dropbox'                                       { return 'Manual Drop' }
         'post download PowerShell script'                              { return 'Post-Download Script' }
@@ -399,7 +402,13 @@ function ConvertFrom-YardstickLog {
                 $current.Failures.Add([PSCustomObject]@{ Id = $Matches[1]; ErrorMessage = $Matches[2] })
             }
             ($script:FailureLinePattern) {
-                $current.Failures.Add([PSCustomObject]@{ Id = $current.Id; ErrorMessage = $Matches[2]; Stage = $Matches[1] })
+                $stage = $Matches[1]
+                $message = $Matches[2]
+                # Runs before 2026-11 filed an unfinished upload as an Intune Lookup.
+                if ($stage -eq 'Intune Lookup' -and $message -match '^Uploaded .+ as [0-9a-f-]{36}, but') {
+                    $stage = 'Post-Upload Maintenance'
+                }
+                $current.Failures.Add([PSCustomObject]@{ Id = $current.Id; ErrorMessage = $message; Stage = $stage })
             }
             '^ERROR: ([\s\S]+)$' {
                 $current.ErrorLines.Add($Matches[1])
@@ -409,6 +418,12 @@ function ConvertFrom-YardstickLog {
             }
             '^Auto-update \(.+\) is set on (\d+) assignment\(s\)' {
                 $current.AutoParts.Add("auto-update on $($Matches[1]) assignment(s)")
+            }
+            '^WARNING: Maintenance of [\s\S]+ is incomplete \(([^)]+)\)\.' {
+                $current.AutoParts.Add("incomplete: $($Matches[1])")
+            }
+            'an earlier update did not finish\. Running maintenance sweep\.$' {
+                $current.AutoParts.Add('finished an interrupted upload')
             }
             '^Pinning .+ anchor for ' {
                 $current.AutoParts.Add('anchor: pinned')
