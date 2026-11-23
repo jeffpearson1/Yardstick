@@ -177,6 +177,41 @@ function Get-YardstickOptionalModule {
 
 
 
+function Format-YardstickErrorRecord {
+    <#
+    .SYNOPSIS
+    One readable line for a failure: the status first, then the server's answer.
+
+    .DESCRIPTION
+    "$_" on a failed web request renders only the response body. When a vendor's
+    site is down that body is an HTML error page whose text starts with blank
+    lines, so the report showed hxd's failure on 2026-11-23 as an empty message
+    and dropped the "502 (Bad Gateway)" that explained it. This puts the
+    exception message (which carries the status) first, adds the body with tags
+    stripped and whitespace collapsed, and caps the length.
+    #>
+    param(
+        [AllowNull()]$ErrorRecord,
+        [int]$MaxBodyLength = 200
+    )
+    if ($null -eq $ErrorRecord) { return '' }
+    if ($ErrorRecord -isnot [System.Management.Automation.ErrorRecord]) { return ("$ErrorRecord" -replace '\s+', ' ').Trim() }
+
+    $message = ([string]$ErrorRecord.Exception.Message -replace '\s+', ' ').Trim()
+    $body = if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) { [string]$ErrorRecord.ErrorDetails.Message } else { '' }
+    if ($body) {
+        $body = $body -replace '(?is)<(script|style)[^>]*>.*?</\1>', ' '
+        $body = $body -replace '<[^>]+>', ' '
+        $body = [System.Net.WebUtility]::HtmlDecode($body)
+        $body = ($body -replace '\s+', ' ').Trim([char]0xFEFF, ' ')
+        if ($body.Length -gt $MaxBodyLength) { $body = $body.Substring(0, $MaxBodyLength - 3) + '...' }
+    }
+    if (-not $message) { return $body }
+    if (-not $body -or $message.Contains($body)) { return $message }
+    return "$message $body"
+}
+
+
 function Test-YardstickTransientNetworkError {
     <#
     .SYNOPSIS

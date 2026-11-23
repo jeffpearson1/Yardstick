@@ -1914,7 +1914,7 @@ while ($RecipePass.Count -gt 0) {
             try {
                 $Parameters = Resolve-RecipeOverride -Recipe $Parameters -Id $AppId_Processing -Overrides $RecipeOverrides
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage "$_" -FailureStage "Configuration"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $AppId_Processing -Version "Unknown" -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Configuration"
                 continue
             }
             if ($VariantOf) {
@@ -2009,7 +2009,7 @@ while ($RecipePass.Count -gt 0) {
                 try {
                     $DropboxPayload = Get-YardstickDropboxPayload -DropboxRoot $Script:SoftwareDropbox -Folder $Script:ManualDownloadFolder
                 } catch {
-                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage "$_" -FailureStage "Manual Drop"
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Manual Drop"
                     continue
                 }
                 if (-not $DropboxPayload) {
@@ -2072,15 +2072,23 @@ while ($RecipePass.Count -gt 0) {
                             Invoke-Command -ScriptBlock $Script:PreDownloadScript -NoNewScope
                             break
                         } catch {
-                            if ($preDownloadAttempt -ge $preDownloadAttempts -or -not (Test-YardstickTransientNetworkError -ErrorRecord $_)) { throw }
-                            Write-Log "Pre-download script failed (attempt $preDownloadAttempt/$preDownloadAttempts) on a transient network error: $($_.Exception.Message)" -Level Warning
-                            Start-Sleep -Seconds ([math]::Pow(2, $preDownloadAttempt))
+                            # A vendor site that is overloaded or mid-deploy answers 502, 503
+                            # or 504 (or 408) for a while; give it longer than a dropped
+                            # connection. Other HTTP errors (404, 403) are real and fail at once.
+                            $vendorStatus = $null
+                            try { $vendorStatus = [int]$_.Exception.Response.StatusCode } catch { $vendorStatus = $null }
+                            $vendorBusy = $vendorStatus -in 408, 502, 503, 504
+                            if ($preDownloadAttempt -ge $preDownloadAttempts -or -not ($vendorBusy -or (Test-YardstickTransientNetworkError -ErrorRecord $_))) { throw }
+                            $preDownloadDelay = if ($vendorBusy) { @(5, 15, 30)[[math]::Min(2, $preDownloadAttempt - 1)] } else { [math]::Pow(2, $preDownloadAttempt) }
+                            $faultText = if ($vendorBusy) { "the vendor answered HTTP $vendorStatus" } else { 'a transient network error' }
+                            Write-Log "Pre-download script failed (attempt $preDownloadAttempt/$preDownloadAttempts) because $faultText`: $($_.Exception.Message) Retrying in $preDownloadDelay s." -Level Warning
+                            Start-Sleep -Seconds $preDownloadDelay
                         }
                     }
                     Write-Log "Ran the pre-download script." -Level Detail
                 } catch {
                     if (Add-YardstickGitHubDeferral -Stage "Pre-Download Script" -ErrorRecord $_) { continue }
-                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Pre-Download Script"
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Pre-Download Script"
                     continue
                 }
             } else {
@@ -2231,7 +2239,7 @@ while ($RecipePass.Count -gt 0) {
                     Write-Log "Ran the download script." -Level Detail
                 } catch {
                     if (Add-YardstickGitHubDeferral -Stage "Download Script" -ErrorRecord $_) { continue }
-                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download Script"
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Download Script"
                     Write-Log "Download script contents: $Script:DownloadScript" -Level Detail
                     continue
                 } finally {
@@ -2246,7 +2254,7 @@ while ($RecipePass.Count -gt 0) {
                         -StallTimeoutMinutes $Script:BitsStallTimeoutMinutes
                     Write-Log "Downloaded via BITS." -Level Detail
                 } catch {
-                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Download"
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Download"
                     continue
                 }
             }
@@ -2262,7 +2270,7 @@ while ($RecipePass.Count -gt 0) {
                     Write-Log "Ran the post-download script." -Level Detail
                 } catch {
                     if (Add-YardstickGitHubDeferral -Stage "Post-Download Script" -ErrorRecord $_) { continue }
-                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Download Script"
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Post-Download Script"
                     continue
                 } finally {
                     Pop-Location
@@ -2359,7 +2367,7 @@ while ($RecipePass.Count -gt 0) {
                 } while ($LiveWin32App.publishingState -ne "published")
                 $UploadedAt = Get-Date
             } catch {
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Upload"
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Intune Upload"
                 continue
             }
 
@@ -2448,7 +2456,7 @@ while ($RecipePass.Count -gt 0) {
 
         } catch {
             # Catch any unexpected errors during processing
-            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "General Processing"
+            Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "General Processing"
             if (-not((Get-Location).ProviderPath -eq $YardstickModuleRoot)) {
                 Set-Location $YardstickModuleRoot
             }
@@ -2470,7 +2478,7 @@ while ($RecipePass.Count -gt 0) {
                 } catch {
                     # Not Write-Error: $ErrorActionPreference is 'Stop', so a Write-Error
                     # here would throw out of the finally and kill the run.
-                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Post-Run Script"
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage (Format-YardstickErrorRecord $_) -FailureStage "Post-Run Script"
                 }
             }
 
