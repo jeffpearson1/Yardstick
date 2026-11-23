@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "recipeId": "powershell7",
   "recipePath": "Recipes/powershell7.yaml",
-  "recipeSha256": "2e921ccfa2fcd5550b14cb68e4eb715e50e4ccf572ad489c6984cd026cdd0c70",
+  "recipeSha256": "b4c243bf60ac2718390a7615960d8c5e71dd4e0a74bde45bb61530b8686b8d8b",
   "validated": false,
   "verdict": "NotValidated",
-  "reason": "no live install test of this recipe has passed; the latest install test was: Dry run passed - live test still required",
-  "testedAt": "2026-11-20T21:42:45Z",
+  "reason": "no live install test of this recipe has passed; the latest install test was: Validated",
+  "testedAt": "2026-11-23T22:41:36Z",
   "studioVersion": "0.9.0",
   "installExperience": "system",
   "installer": {
@@ -33,13 +33,28 @@
     },
     {
       "name": "Install",
-      "status": "Skip",
-      "detail": "WhatIf: would run 'powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1' via x86 cmd.exe"
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
     },
     {
       "name": "Uninstall",
-      "status": "Skip",
-      "detail": "WhatIf: would run 'powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1' via x86 cmd.exe"
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout='Not Detected'"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
     }
   ]
 }
