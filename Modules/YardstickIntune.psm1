@@ -243,14 +243,32 @@ function New-YardstickWin32AppIcon {
     }
 }
 
+function Get-YardstickHttpStatusCode {
+    param([Parameter(Mandatory)]$ErrorRecord)
+    try {
+        $response = $ErrorRecord.Exception.Response
+        if ($null -eq $response) { return $null }
+        return [int]$response.StatusCode
+    } catch {
+        return $null
+    }
+}
+
 function Get-YardstickWin32App {
     [CmdletBinding(DefaultParameterSetName = 'Default')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'DisplayName')][string]$DisplayName,
-        [Parameter(Mandatory, ParameterSetName = 'ID')][string]$ID
+        [Parameter(Mandatory, ParameterSetName = 'ID')][string]$ID,
+        # Return $null instead of throwing when the app does not exist (404).
+        [Parameter(ParameterSetName = 'ID')][switch]$AllowMissing
     )
     if ($PSCmdlet.ParameterSetName -eq 'ID') {
-        return Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$ID"
+        try {
+            return Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$ID"
+        } catch {
+            if ($AllowMissing -and (Get-YardstickHttpStatusCode -ErrorRecord $_) -eq 404) { return $null }
+            throw
+        }
     }
     $win32Filter = "isof('microsoft.graph.win32LobApp')"
     if ($PSCmdlet.ParameterSetName -eq 'DisplayName') {
@@ -568,14 +586,14 @@ function Get-YardstickWin32AppSupersedence { [CmdletBinding()] param([Parameter(
 function New-YardstickWin32AppDependency {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ID, [Parameter(Mandatory)][ValidateSet('AutoInstall', 'Detect')][string]$DependencyType)
-    if (-not (Get-YardstickWin32App -ID $ID)) { return $null }
+    if (-not (Get-YardstickWin32App -ID $ID -AllowMissing)) { return $null }
     return [ordered]@{ '@odata.type' = '#microsoft.graph.mobileAppDependency'; dependencyType = $DependencyType.ToLowerInvariant(); targetId = $ID }
 }
 
 function New-YardstickWin32AppSupersedence {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ID, [Parameter(Mandatory)][ValidateSet('Replace', 'Update')][string]$SupersedenceType)
-    if (-not (Get-YardstickWin32App -ID $ID)) { return $null }
+    if (-not (Get-YardstickWin32App -ID $ID -AllowMissing)) { return $null }
     return [ordered]@{ '@odata.type' = '#microsoft.graph.mobileAppSupersedence'; supersedenceType = $SupersedenceType.ToLowerInvariant(); targetId = $ID }
 }
 
@@ -1267,6 +1285,40 @@ function New-YardstickWin32AppBody {
     return $body
 }
 
+function New-YardstickUploadToken {
+    # Stored in the app's notes. Identifies one upload attempt.
+    return "Created by Yardstick, upload $([datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) $([guid]::NewGuid().ToString('N').Substring(0, 8))"
+}
+
+function Remove-YardstickUnfinishedApp {
+    <#
+    .SYNOPSIS
+    Deletes an app a failed create left behind, identified by its upload token.
+
+    .DESCRIPTION
+    Only an app whose notes carry exactly this attempt's token is removed, so
+    nothing else with the same name is touched. Best effort: a failure is logged.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$DisplayName,
+        [AllowNull()][AllowEmptyString()][string]$UploadToken
+    )
+    if (-not $UploadToken) { return }
+    try {
+        $orphans = @(Get-YardstickWin32App -DisplayName $DisplayName | Where-Object { [string]$_.notes -ceq $UploadToken })
+        if ($orphans.Count -eq 0) {
+            Write-YardstickIntuneLog "Intune may have created $DisplayName before the create request failed. If an unpublished copy appears, delete it." -Level Warning
+            return
+        }
+        foreach ($orphan in $orphans) {
+            Write-YardstickIntuneLog "Removing $DisplayName ($($orphan.id)), which Intune created even though the create request failed." -Level Warning
+            Remove-YardstickWin32App -ID $orphan.id -ErrorAction Stop
+        }
+    } catch {
+        Write-YardstickIntuneLog "Could not check for an app left behind by the failed create of ${DisplayName}: $($_.Exception.Message)" -Level Warning
+    }
+}
+
 function Add-YardstickWin32App {
     [CmdletBinding()]
     param(
@@ -1335,7 +1387,14 @@ function Add-YardstickWin32App {
         for ($uploadAttempt = 1; ; $uploadAttempt++) {
             $app = $null
             try {
-                $app = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource 'deviceAppManagement/mobileApps' -Body $body
+                # Every app Yardstick creates carries a token naming this attempt, so a
+                # copy a failed attempt left behind can be told apart from anything else
+                # with the same name. The create is not resent after a server error: a
+                # 5xx or a timeout can arrive after Intune made the app, and resending it
+                # makes a second one.
+                $uploadToken = New-YardstickUploadToken
+                $body.notes = $uploadToken
+                $app = Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource 'deviceAppManagement/mobileApps' -Body $body -NoRetryOnServerError
                 # Categories are a navigation property, so Graph ignores them on the create body.
                 foreach ($categoryId in $categoryIds) {
                     Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)/categories/`$ref" `
@@ -1350,16 +1409,31 @@ function Add-YardstickWin32App {
                 Invoke-YardstickGraphRequest -Method Post -ApiVersion beta -Resource "$contentFileResource/commit" -Body $commitBody | Out-Null
                 Wait-YardstickIntuneFileProcessing -Resource $contentFileResource -Stage 'commitFile' | Out-Null
                 Invoke-YardstickGraphRequest -Method Patch -ApiVersion beta -Resource "deviceAppManagement/mobileApps/$($app.id)" -Body ([ordered]@{ '@odata.type' = '#microsoft.graph.win32LobApp'; committedContentVersion = [string]$contentVersion.id }) | Out-Null
-                return Get-YardstickWin32App -ID $app.id
+                # The app is complete from here on. A failed read-back must not reach
+                # the catch below, which would delete a finished upload.
+                try {
+                    return Get-YardstickWin32App -ID $app.id
+                } catch {
+                    Write-YardstickIntuneLog "Uploaded $DisplayName as $($app.id), but could not read it back: $($_.Exception.Message). Continuing with the app Intune returned when it was created." -Level Warning
+                    $app | Add-Member -NotePropertyName committedContentVersion -NotePropertyValue ([string]$contentVersion.id) -Force
+                    return $app
+                }
             } catch {
                 $failure = $_
                 if ($app -and $app.id) {
                     try { Remove-YardstickWin32App -ID $app.id -ErrorAction Stop } catch { Write-YardstickIntuneLog "Could not remove the incomplete Intune app $($app.id): $($_.Exception.Message)" -Level Warning }
                 }
-                if ($uploadAttempt -ge $uploadAttempts) { throw $failure }
+                if ($uploadAttempt -ge $uploadAttempts) {
+                    if (-not $app) { Remove-YardstickUnfinishedApp -DisplayName $DisplayName -UploadToken $uploadToken }
+                    throw $failure
+                }
                 Write-YardstickIntuneLog "Intune upload failed (attempt $uploadAttempt/$uploadAttempts): $failure. Starting over with a fresh app in $UploadRetryDelaySeconds seconds." -Level Warning
                 # Give a busy storage account a moment before asking it for more.
                 Start-Sleep -Seconds $UploadRetryDelaySeconds
+                # The create itself failed, so there is no id to remove - but Intune
+                # may have made the app before the error. Name lookups lag a new app,
+                # so this is checked after the wait.
+                if (-not $app) { Remove-YardstickUnfinishedApp -DisplayName $DisplayName -UploadToken $uploadToken }
             }
         }
     } finally {

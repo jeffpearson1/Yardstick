@@ -422,70 +422,100 @@ function Invoke-YardstickAppMaintenance {
     The id of the app this run just uploaded. Omitted on a maintenance sweep,
     where the newest version already in Intune takes its place.
 
+    .PARAMETER NewApp
+    The uploaded app as the publish wait last read it by id. Read again by id
+    when omitted.
+
+    .PARAMETER ExistingApps
+    The app's family as the caller already read it (Get-SameAppAllVersions).
+    After an upload this is the lookup made before the upload: nothing Yardstick
+    does in between changes those apps, and a fresh name lookup both lags a new
+    app by 30-50 s and is one more chance for Intune to time out - which is what
+    left calibre 9.19.0 uploaded but unassigned on 2026-11-23. Each member is
+    re-read by id instead, so one deleted meanwhile is dropped.
+
     .OUTPUTS
     A summary object, or $null when a sweep could not read the app list. Throws
-    when the app list cannot be read after an upload, so the caller fails the recipe.
+    when the new app cannot be read back after an upload, so the caller fails the
+    recipe. StepErrors names the steps that failed and were skipped.
     #>
     param(
-        [string]$NewAppId
+        [string]$NewAppId,
+        $NewApp,
+        [AllowNull()][AllowEmptyCollection()]
+        [object[]]$ExistingApps
     )
 
-    # Refresh the version list from Intune (retry in case a new upload has not
-    # yet propagated to Get-YardstickWin32App list results).
-    Write-Log "Refreshing the list of versions in Intune..." -Level Detail
-    if ($NewAppId) { Start-Sleep -Seconds 4 }
-    # After an upload the lookup before it already settled whether the app is new,
-    # so an empty result needs no full-list check: the new app is spliced in by id.
-    $familyLookup = @{
-        MinGenerations = [Math]::Max(2, [int]$Script:NumVersionsToKeep)
-        NoAbsenceProof = [bool]$NewAppId
-    }
-    try {
-        $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName @familyLookup
-        if ($NewAppId -and !($AllMatchingApps | Where-Object id -eq $NewAppId)) {
-            Write-Log "The new app is not in the version list yet. Retrying in 5 seconds..." -Level Detail
-            Start-Sleep -Seconds 5
-            $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName @familyLookup
-        }
-        if ($NewAppId -and !($AllMatchingApps | Where-Object id -eq $NewAppId)) {
-            # The list endpoint lags behind creation. Fetch the new app directly
-            # by id and splice it in - skipping here would leave a freshly
-            # uploaded app with no assignments and no supersedence, and the next
-            # run would consider the version already published and skip it.
-            Write-Log "The new app is still not in the version list. Fetching it directly by id." -Level Detail
-            $DirectApp = Get-YardstickWin32App -Id $NewAppId -ErrorAction Stop
-            if (-not $DirectApp) {
-                throw "Intune returned no application for id $NewAppId"
-            }
-            $AllMatchingApps = @($DirectApp) + @($AllMatchingApps)
-        }
-    } catch {
-        if (-not $NewAppId) {
-            # Nothing was published this run, so there is no half-finished app to
-            # protect. Give up on this recipe rather than the whole run.
-            Write-Log "Could not fetch the existing versions of $($Script:DisplayName) for the maintenance sweep: $_" -Level Error
-            return $null
-        }
-        # Fail this recipe, not the run: every recipe shares one process, so an
-        # exit here would skip every recipe after this one. The new app is left
-        # without the old version's assignments or supersedence, and a normal run
-        # will see its version as already published, so the message says how to
-        # finish the job. The caller's finally drains the queued backup.
-        throw "Uploaded $($Script:DisplayName) as $NewAppId, but could not fetch its existing versions to move assignments and supersedence: $_ Run .\Yardstick.ps1 -AppId $AppId_Processing -Repair to finish."
-    }
+    $stepErrors = [System.Collections.Generic.List[string]]::new()
 
     if ($NewAppId) {
-        $CurrentApp = $AllMatchingApps | Where-Object id -eq $NewAppId | Select-Object -First 1
+        if (-not $NewApp -or [string]$NewApp.id -ne $NewAppId) {
+            $readError = $null
+            try {
+                $NewApp = Get-YardstickWin32App -Id $NewAppId -ErrorAction Stop
+            } catch {
+                $NewApp = $null
+                $readError = $_
+            }
+            if (-not $NewApp) {
+                # Fail this recipe, not the run. The new app is left without the old
+                # version's assignments or supersedence, so the message says how to
+                # finish the job. The caller's finally drains the queued backup.
+                throw "Uploaded $($Script:DisplayName) as $NewAppId, but could not read it back from Intune: $(if ($readError) { $readError } else { 'Intune returned nothing' }). Run .\Yardstick.ps1 -AppId $AppId_Processing -Repair to finish."
+            }
+        }
+        if (-not $PSBoundParameters.ContainsKey('ExistingApps')) {
+            # Callers outside the runner: read the family, without the full-list
+            # check (the new app is added by id below).
+            try {
+                $ExistingApps = Get-SameAppAllVersions $Script:DisplayName -MinGenerations ([Math]::Max(2, [int]$Script:NumVersionsToKeep)) -NoAbsenceProof
+            } catch {
+                throw "Uploaded $($Script:DisplayName) as $NewAppId, but could not fetch its existing versions to move assignments and supersedence: $_ Run .\Yardstick.ps1 -AppId $AppId_Processing -Repair to finish."
+            }
+        }
+        $others = foreach ($member in @($ExistingApps | Where-Object { $_ -and $_.id -and $_.id -ne $NewAppId })) {
+            try {
+                $fresh = Get-YardstickWin32App -Id $member.id -AllowMissing -ErrorAction Stop
+                if ($fresh) {
+                    $fresh
+                } else {
+                    Write-Log "$($member.displayName) ($($member.id)) is no longer in Intune; leaving it out." -Level Warning
+                }
+            } catch {
+                Write-Log "Could not re-read $($member.displayName) ($($member.id)); using the copy read before the upload: $_" -Level Detail
+                $member
+            }
+        }
+        $AllMatchingApps = @($NewApp) + @($others)
+        $CurrentApp = $NewApp
     }
     else {
+        if ($PSBoundParameters.ContainsKey('ExistingApps')) {
+            $AllMatchingApps = @($ExistingApps)
+        } else {
+            Write-Log "Refreshing the list of versions in Intune..." -Level Detail
+            try {
+                $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName -MinGenerations ([Math]::Max(2, [int]$Script:NumVersionsToKeep))
+            } catch {
+                # Nothing was published this run, so there is no half-finished app to
+                # protect. Give up on this recipe rather than the whole run.
+                Write-Log "Could not fetch the existing versions of $($Script:DisplayName) for the maintenance sweep: $_" -Level Error
+                return $null
+            }
+        }
         # The current version is the one holding the bare display name; every
         # other kept version is numbered (N-x) and the anchor holds the reserved
         # Ω DETECT - name. Fall back to the highest version when naming is broken,
-        # which is exactly the state a sweep is meant to repair.
+        # which is exactly the state a sweep is meant to repair. Only a published
+        # app can be current: an unpublished copy left by a failed upload has no
+        # content, and moving required assignments onto it would break installs.
         $anchorNameForPick = Get-DetectAnchorName -DisplayName $Script:DisplayName
-        $CurrentApp = $AllMatchingApps | Where-Object DisplayName -eq $Script:DisplayName | Select-Object -First 1
+        $published = @($AllMatchingApps | Where-Object { Test-YardstickAppPublished $_ })
+        $CurrentApp = $published | Where-Object DisplayName -eq $Script:DisplayName |
+            Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true}, @{Expression = 'createdDateTime'; Descending = $false} |
+            Select-Object -First 1
         if (-not $CurrentApp) {
-            $CurrentApp = $AllMatchingApps |
+            $CurrentApp = $published |
                 Where-Object DisplayName -ne $anchorNameForPick |
                 Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true} |
                 Select-Object -First 1
@@ -494,6 +524,11 @@ function Invoke-YardstickAppMaintenance {
             Write-Log "No published version of $($Script:DisplayName) to maintain."
             return $null
         }
+        $unpublished = @($AllMatchingApps | Where-Object { -not (Test-YardstickAppPublished $_) })
+        foreach ($app in $unpublished) {
+            Write-Log "$($app.displayName) $($app.displayVersion) ($($app.id)) is not published, so it is left alone. If a failed upload left it behind, delete it." -Level Warning
+        }
+        $AllMatchingApps = $published
         Write-Log "Sweeping the versions of $($Script:DisplayName) against $($CurrentApp.DisplayName) $($CurrentApp.displayVersion)..."
     }
 
@@ -529,14 +564,20 @@ function Invoke-YardstickAppMaintenance {
         if ($OtherApps.Count -gt 0) {
             # First run under the new model - pin the oldest surviving version.
             $AnchorCandidate = $OtherApps | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}} | Select-Object -First 1
-            Set-DetectAnchor -App $AnchorCandidate -DisplayName $Script:DisplayName
-            # Re-fetch so the object reflects the new name. Fall back to the
-            # candidate if Intune has not caught up yet - otherwise the app we
-            # just pinned would be renamed straight back to (N-x) below.
-            $Anchor = Get-DetectAnchor -DisplayName $Script:DisplayName
-            if (-not $Anchor) { $Anchor = $AnchorCandidate }
-            $anchorStatus = "pinned ($($Anchor.displayVersion))"
-            $anchorPinned = $true
+            try {
+                Set-DetectAnchor -App $AnchorCandidate -DisplayName $Script:DisplayName
+                # Use the candidate with its new name rather than looking the anchor
+                # up by name: name lookups lag a rename, and only .id and .DisplayName
+                # are read from here on. Otherwise the app just pinned would be
+                # renamed straight back to (N-x) below.
+                $AnchorCandidate.displayName = $anchorName
+                $Anchor = $AnchorCandidate
+                $anchorStatus = "pinned ($($Anchor.displayVersion))"
+                $anchorPinned = $true
+            } catch {
+                Write-Log "Could not pin $($AnchorCandidate.DisplayName) as the detection anchor: $_" -Level Error
+                $stepErrors.Add('anchor') | Out-Null
+            }
         } else {
             $anchorStatus = "n/a (no prior versions)"
         }
@@ -577,6 +618,17 @@ function Invoke-YardstickAppMaintenance {
         $ToKeep  = @($Sorted | Select-Object -First $ToKeepCount)
         $ToPrune = @($Sorted | Select-Object -Skip $ToKeepCount)
     }
+    # Two older apps at the same version (one made by hand beside Yardstick's, for
+    # example) cannot be told apart by version, so sort order alone would decide
+    # which is deleted. Keep both and say so; a person has to choose.
+    $tiedVersions = @($Sorted | Group-Object { [string]$_.displayVersion } | Where-Object Count -gt 1 | ForEach-Object Name)
+    if ($tiedVersions.Count -gt 0) {
+        $tied = @($ToPrune | Where-Object { $tiedVersions -contains [string]$_.displayVersion })
+        foreach ($app in $tied) {
+            Write-Log "Not removing $($app.DisplayName) $($app.displayVersion) ($($app.id)): another older app has the same version, and Yardstick will not choose between them. Delete the one you do not want." -Level Warning
+        }
+        $ToPrune = @($ToPrune | Where-Object { $tiedVersions -notcontains [string]$_.displayVersion })
+    }
     # Duplicates of the current version always get retired, regardless of retention.
     $ToPrune = @($SameVersionApps) + @($ToPrune)
     $ToPruneIds = @($ToPrune | Select-Object -ExpandProperty id)
@@ -592,6 +644,7 @@ function Invoke-YardstickAppMaintenance {
                 $renamedCount++
             } catch {
                 Write-Log "Could not rename $($ToKeep[$i].DisplayName) to ${targetName}: $_" -Level Error
+                $stepErrors.Add('rename') | Out-Null
             }
         }
     }
@@ -663,9 +716,17 @@ function Invoke-YardstickAppMaintenance {
                 -SkipDependencies:$isAnchor
         } catch {
             Write-Log "Could not move the required assignments from $($old.DisplayName): $_" -Level Error
+            $stepErrors.Add('required assignments') | Out-Null
         }
 
-        $availOnOld = @(Get-YardstickAppAssignment -Id $old.id | Where-Object Intent -eq 'available')
+        try {
+            $availOnOld = @(Get-YardstickAppAssignment -Id $old.id | Where-Object Intent -eq 'available')
+        } catch {
+            # One unreadable version must not stop the rest of maintenance.
+            Write-Log "Could not read the assignments of $($old.DisplayName): $_" -Level Error
+            $stepErrors.Add('available assignments') | Out-Null
+            continue
+        }
         if ($availOnOld.Count -gt 0) {
             # A pruned app is never a supersedence target - step 9 only supersedes
             # the versions that survive - so there is no auto-update path to
@@ -680,6 +741,7 @@ function Invoke-YardstickAppMaintenance {
                     -IntentFilter 'available' -CopyOnly:$willBeSuperseded -SkipDependencies
             } catch {
                 Write-Log "Could not migrate the available assignments from $($old.DisplayName): $_" -Level Error
+                $stepErrors.Add('available assignments') | Out-Null
             }
         }
     }
@@ -687,13 +749,18 @@ function Invoke-YardstickAppMaintenance {
     # 7. Default deployments (unchanged behavior). Adds default groups as
     #    available-intent assignments if not already present.
     if ($Script:DefaultDeploymentGroups) {
-        $ID = $CurrentApp.Id
-        $CurrentlyDeployedIDs = (Get-YardstickAppAssignment -Id $ID).GroupID
-        foreach ($DeploymentGroupID in $Script:DefaultDeploymentGroups) {
-            if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
-                Write-Log "Deploying $($CurrentApp.DisplayName) to default group $DeploymentGroupID."
-                Add-YardstickWin32AppAssignmentGroup -Include -ID $ID -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
+        try {
+            $ID = $CurrentApp.Id
+            $CurrentlyDeployedIDs = (Get-YardstickAppAssignment -Id $ID).GroupID
+            foreach ($DeploymentGroupID in $Script:DefaultDeploymentGroups) {
+                if (!($CurrentlyDeployedIDs -Contains $DeploymentGroupID)) {
+                    Write-Log "Deploying $($CurrentApp.DisplayName) to default group $DeploymentGroupID."
+                    Add-YardstickWin32AppAssignmentGroup -Include -ID $ID -GroupID $DeploymentGroupID -Intent "available" -Notification "hideAll" | Out-Null
+                }
             }
+        } catch {
+            Write-Log "Could not add the default deployment groups to $($CurrentApp.DisplayName): $_" -Level Error
+            $stepErrors.Add('default groups') | Out-Null
         }
     }
 
@@ -713,6 +780,7 @@ function Invoke-YardstickAppMaintenance {
                 $Pruned += $old.id
             } catch {
                 Write-Log "Could not remove $($old.DisplayName) ($($old.id)): $_" -Level Error
+                $stepErrors.Add('prune') | Out-Null
             }
         }
     }
@@ -737,6 +805,7 @@ function Invoke-YardstickAppMaintenance {
                 -UpdateOnlyIds @(if ($Anchor) { $Anchor.id })
         } catch {
             Write-Log "Could not configure supersedence for $($CurrentApp.DisplayName): $_" -Level Error
+            $stepErrors.Add('supersedence') | Out-Null
         }
     } else {
         Write-Log "Supersedence is disabled for this recipe." -Level Detail
@@ -751,6 +820,7 @@ function Invoke-YardstickAppMaintenance {
                 -SkipGroupIds $Script:GroupsSkipAutoUpdates
         } catch {
             Write-Log "Could not enable auto-update on the assignments of $($CurrentApp.DisplayName): $_" -Level Error
+            $stepErrors.Add('auto-update') | Out-Null
         }
     }
 
@@ -765,6 +835,7 @@ function Invoke-YardstickAppMaintenance {
         # anything was wrong. Only the state changes an operator would want to
         # read about in a report count here.
         ChangedSomething  = (@($Pruned).Count -gt 0) -or ($renamedCount -gt 0) -or $anchorPinned
+        StepErrors        = @($stepErrors | Select-Object -Unique)
     }
 }
 
@@ -788,9 +859,15 @@ function Invoke-YardstickSkip {
 
     .PARAMETER Reason
     Sentence explaining why nothing is being published, ending in a period.
+
+    .PARAMETER ExistingApps
+    The app's family as the caller already read it. The sweep starts from it
+    instead of reading Intune again.
     #>
     param(
-        [Parameter(Mandatory)][string]$Reason
+        [Parameter(Mandatory)][string]$Reason,
+        [AllowNull()][AllowEmptyCollection()]
+        [object[]]$ExistingApps
     )
 
     if (-not $Repair) {
@@ -800,7 +877,9 @@ function Invoke-YardstickSkip {
 
     Write-Log "$Reason Running maintenance sweep."
     try {
-        $Sweep = Invoke-YardstickAppMaintenance
+        $sweepArgs = @{}
+        if ($null -ne $ExistingApps) { $sweepArgs.ExistingApps = $ExistingApps }
+        $Sweep = Invoke-YardstickAppMaintenance @sweepArgs
         if ($Sweep -and $Sweep.ChangedSomething) {
             $sweepParts = @()
             if ($Sweep.PrunedCount -gt 0)     { $sweepParts += "pruned $($Sweep.PrunedCount)" }
@@ -1551,6 +1630,11 @@ while ($RecipePass.Count -gt 0) {
         # finally block still fires on those paths, so without this the previous
         # recipe's cleanup hook would run against this one.
         $Script:PostRunScript = $null
+        # Per-recipe Intune state. A recipe that fails before reading its own must
+        # never act on the previous recipe's.
+        $ExistingVersions = $null
+        $RepairFamily = $null
+        $LiveWin32App = $null
 
         try {
             # Refresh token if necessary
@@ -1671,16 +1755,34 @@ while ($RecipePass.Count -gt 0) {
 
 
             if ($Repair) {
-                # Correct any naming discrepancies before we continue.
-                # Skip the Ω DETECT - anchor - it deliberately holds a different name.
+                # Read the family once for the whole repair. The renames below are
+                # applied to these same objects, and the version check and the sweep
+                # reuse them: a name lookup straight after a rename can lag behind it
+                # and lose the renamed app.
+                Set-YardstickWatchdogStage -Stage 'Intune Lookup'
+                try {
+                    # One generation deeper than retention, so leftovers from a higher
+                    # retention setting are renumbered too.
+                    $RepairFamily = Get-SameAppAllVersions $Script:DisplayName -MinGenerations ([Math]::Max(3, [int]$Script:NumVersionsToKeep + 1))
+                } catch {
+                    Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" -ErrorMessage "$_" -FailureStage "Intune Lookup"
+                    continue
+                }
+                # Correct any naming discrepancies before we continue. Skip the
+                # Ω DETECT - anchor (it deliberately holds a different name) and any
+                # unpublished copy, which must never be numbered ahead of a real version.
                 $anchorName = Get-DetectAnchorName -DisplayName $Script:DisplayName
-                # Read one generation deeper than retention, so leftovers from a
-                # higher retention setting are renumbered too.
-                $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName -MinGenerations ([Math]::Max(3, [int]$Script:NumVersionsToKeep + 1)) | Where-Object DisplayName -ne $anchorName)
+                $CurrentApps = @($RepairFamily | Where-Object { $_.DisplayName -ne $anchorName -and (Test-YardstickAppPublished $_) })
                 for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
-                    if ($CurrentApps[$i].DisplayName -ne "$($Script:DisplayName) (N-$i)") {
-                        Write-Log "Renaming $($CurrentApps[$i].DisplayName) to $($Script:DisplayName) (N-$i)..."
-                        Set-YardstickWin32App -Id $CurrentApps[$i].Id -DisplayName "$($Script:DisplayName) (N-$i)" | Out-Null
+                    $targetName = "$($Script:DisplayName) (N-$i)"
+                    if ($CurrentApps[$i].DisplayName -ne $targetName) {
+                        Write-Log "Renaming $($CurrentApps[$i].DisplayName) to $targetName..."
+                        try {
+                            Set-YardstickWin32App -Id $CurrentApps[$i].Id -DisplayName $targetName | Out-Null
+                            $CurrentApps[$i].displayName = $targetName
+                        } catch {
+                            Write-Log "Could not rename $($CurrentApps[$i].DisplayName) to ${targetName}: $_" -Level Error
+                        }
                     }
                 }
             }
@@ -1707,7 +1809,7 @@ while ($RecipePass.Count -gt 0) {
                     continue
                 }
                 if (-not $DropboxPayload) {
-                    Invoke-YardstickSkip -Reason "Nothing staged in the software dropbox for $($Script:Id)."
+                    Invoke-YardstickSkip -Reason "Nothing staged in the software dropbox for $($Script:Id)." -ExistingApps $RepairFamily
                     continue
                 }
                 $dropboxPath = $DropboxPayload.Path
@@ -1723,7 +1825,7 @@ while ($RecipePass.Count -gt 0) {
             if ($Script:MinRunInterval -gt 0 -and -not $IsDeferredReplay) {
                 $runDue = Test-YardstickRecipeRunDue -Path $RecipeRunHistoryPath -Id $AppId_Processing -Days $Script:MinRunInterval
                 if (-not $runDue.IsDue -and -not $Force) {
-                    Invoke-YardstickSkip -Reason "Last run $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm')); minRunInterval is $($Script:MinRunInterval) day(s), so the next run is on or after $($runDue.NextRun.ToString('yyyy-MM-dd'))."
+                    Invoke-YardstickSkip -Reason "Last run $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm')); minRunInterval is $($Script:MinRunInterval) day(s), so the next run is on or after $($runDue.NextRun.ToString('yyyy-MM-dd'))." -ExistingApps $RepairFamily
                     continue
                 }
                 if (-not $runDue.IsDue) {
@@ -1772,10 +1874,15 @@ while ($RecipePass.Count -gt 0) {
             # older versions are, so the lookup stops after that one read. -Force and
             # -Repair go on to change the family, so they always read all of it.
             $lookupStopVersion = if (-not $Force -and -not $Repair -and $null -ne $Script:Version) { "$($Script:Version)".Trim() } else { $null }
+            Set-YardstickWatchdogStage -Stage 'Intune Lookup'
             try {
-                $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName `
-                    -MinGenerations ([Math]::Max(2, [int]$Script:NumVersionsToKeep)) `
-                    -StopWhenVersion $lookupStopVersion
+                $ExistingVersions = if ($null -ne $RepairFamily) {
+                    $RepairFamily
+                } else {
+                    Get-SameAppAllVersions $Script:DisplayName `
+                        -MinGenerations ([Math]::Max(2, [int]$Script:NumVersionsToKeep)) `
+                        -StopWhenVersion $lookupStopVersion
+                }
             } catch {
                 Write-Log "$_" -Level Error
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
@@ -1839,7 +1946,7 @@ while ($RecipePass.Count -gt 0) {
             }
 
             if ($SkipReason) {
-                Invoke-YardstickSkip -Reason $SkipReason
+                Invoke-YardstickSkip -Reason $SkipReason -ExistingApps $RepairFamily
                 continue
             }
 
@@ -2057,10 +2164,28 @@ while ($RecipePass.Count -gt 0) {
                 }
             }
 
-            # The payload is published, so retire it out of the dropbox. Leaving the
-            # dropbox empty is what makes the next run skip this recipe rather than
-            # republishing the same build. A failure here must not fail the app - the
-            # operator just has to clear the folder by hand.
+
+            ###################################################
+            # SUPERSEDENCE, RETENTION, AUTO-UPDATE
+            ###################################################
+
+            Set-YardstickWatchdogStage -Stage 'Post-Upload Maintenance'
+            try {
+                # From the family read before the upload and the new app as the
+                # publish wait read it by id - no name lookup after an upload.
+                $Maintenance = Invoke-YardstickAppMaintenance -NewAppId $Win32App.id -NewApp $LiveWin32App -ExistingApps $ExistingVersions
+            } catch {
+                Write-Log "$_" -Level Error
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
+                continue
+            }
+
+            # The payload is published and maintained, so retire it out of the
+            # dropbox. Leaving the dropbox empty is what makes the next run skip this
+            # recipe rather than republishing the same build. It is archived only
+            # now: if maintenance had failed, the drop stays staged so the next run
+            # reaches the version check again. A failure here must not fail the app -
+            # the operator just has to clear the folder by hand.
             if ($Script:ManualDownload) {
                 try {
                     Complete-YardstickDropbox -DropboxPath $dropboxPath -ArchiveRoot $Script:SoftwareArchive `
@@ -2069,29 +2194,23 @@ while ($RecipePass.Count -gt 0) {
                     Write-Log "Could not archive the manual drop: $_" -Level Warning
                 }
             }
-
-
-            ###################################################
-            # SUPERSEDENCE, RETENTION, AUTO-UPDATE
-            ###################################################
-
-            try {
-                $Maintenance = Invoke-YardstickAppMaintenance -NewAppId $Win32App.id
-            } catch {
-                Write-Log "$_" -Level Error
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
-                continue
-            }
             $CurrentApp        = $Maintenance.CurrentApp
             $supersededCount   = $Maintenance.SupersededCount
             $autoUpdateApplied = $Maintenance.AutoUpdateApplied
             $anchorStatus      = $Maintenance.AnchorStatus
+            $maintenanceGaps   = @($Maintenance.StepErrors)
 
             $ActionPerformed = if ($Force) { "Force Updated" } elseif ($Repair) { "Repaired" } else { "Updated" }
             $autoStatusParts = @()
             if ($supersededCount -gt 0)   { $autoStatusParts += "supersedes $supersededCount" }
             if ($autoUpdateApplied -gt 0) { $autoStatusParts += "auto-update on $autoUpdateApplied assignment(s)" }
             if ($anchorStatus)            { $autoStatusParts += "anchor: $anchorStatus" }
+            if ($maintenanceGaps.Count -gt 0) {
+                # Published, but part of the follow-up did not happen. Say so in the
+                # report instead of letting it pass as a clean update.
+                Write-Log "Maintenance of $($Script:DisplayName) $($Script:Version) is incomplete ($($maintenanceGaps -join ', ')). Run .\Yardstick.ps1 -AppId $AppId_Processing -Repair to finish." -Level Warning
+                $autoStatusParts += "incomplete: $($maintenanceGaps -join ', ')"
+            }
             $autoStatus = if ($autoStatusParts.Count -gt 0) { $autoStatusParts -join ', ' } else { $null }
             Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -Action $ActionPerformed -Dependents $DependentUpdateStatus -AutoUpdateStatus $autoStatus -MissingIcon $missingIcon
 

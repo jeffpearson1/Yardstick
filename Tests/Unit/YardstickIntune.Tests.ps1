@@ -756,6 +756,78 @@ Describe 'Yardstick Intune content upload' {
                 Should -Invoke Remove-YardstickWin32App -Times 2 -Exactly
             }
         }
+
+        It 'stamps an upload token in the notes and does not resend the create after a server error' {
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -like '*contentVersions') { return [pscustomobject]@{ id = 'v1' } }
+                    [pscustomobject]@{ id = 'new-1' }
+                }
+                Mock Send-YardstickIntuneContentBlob {}
+                $null = Add-YardstickWin32App -FilePath $Payload `
+                    -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                    -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                    -DetectionRule @{} -RequirementRule @{}
+                Should -Invoke Invoke-YardstickGraphRequest -Times 1 -Exactly -ParameterFilter {
+                    $Resource -eq 'deviceAppManagement/mobileApps' -and $Method -eq 'Post' -and $NoRetryOnServerError -and
+                    $Body.notes -match '^Created by Yardstick, upload \S+ [0-9a-f]{8}$'
+                }
+            }
+        }
+
+        It 'keeps a finished upload when only the final read-back fails' {
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -like '*contentVersions') { return [pscustomobject]@{ id = 'v1' } }
+                    [pscustomobject]@{ id = 'new-1' }
+                }
+                Mock Send-YardstickIntuneContentBlob {}
+                Mock Get-YardstickWin32App { throw 'Response status code does not indicate success: 504 (Gateway Timeout).' }
+                $app = Add-YardstickWin32App -FilePath $Payload `
+                    -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                    -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                    -DetectionRule @{} -RequirementRule @{}
+                $app.id | Should -Be 'new-1'
+                $app.committedContentVersion | Should -Be 'v1'
+                Should -Invoke Remove-YardstickWin32App -Times 0 -Exactly
+            }
+        }
+
+        It 'removes an app Intune created even though the create request failed' {
+            InModuleScope YardstickIntune -Parameters @{ Payload = $Payload } {
+                param($Payload)
+                $Script:creates = 0
+                $Script:firstToken = $null
+                Mock Invoke-YardstickGraphRequest {
+                    if ($Resource -eq 'deviceAppManagement/mobileApps') {
+                        $Script:creates++
+                        if ($Script:creates -eq 1) {
+                            $Script:firstToken = $Body.notes
+                            throw 'Response status code does not indicate success: 504 (Gateway Timeout).'
+                        }
+                        return [pscustomobject]@{ id = 'new-2' }
+                    }
+                    if ($Resource -like '*contentVersions') { return [pscustomobject]@{ id = 'v1' } }
+                    [pscustomobject]@{ id = 'file-1' }
+                }
+                Mock Send-YardstickIntuneContentBlob {}
+                Mock Get-YardstickWin32App -ParameterFilter { $DisplayName } {
+                    @(
+                        [pscustomobject]@{ id = 'ghost'; displayName = 'App'; notes = $Script:firstToken },
+                        [pscustomobject]@{ id = 'other'; displayName = 'App'; notes = 'Created by Yardstick, upload 2026-01-01T00:00:00Z aaaaaaaa' }
+                    )
+                }
+                $app = Add-YardstickWin32App -FilePath $Payload `
+                    -DisplayName 'App' -Description 'd' -Publisher 'p' `
+                    -InstallCommandLine 'i' -UninstallCommandLine 'u' `
+                    -DetectionRule @{} -RequirementRule @{}
+                $app.id | Should -Be 'app-1'
+                Should -Invoke Remove-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $ID -eq 'ghost' }
+                Should -Invoke Remove-YardstickWin32App -Times 0 -Exactly -ParameterFilter { $ID -eq 'other' }
+            }
+        }
     }
 
     Context 'categories' {

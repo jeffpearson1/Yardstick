@@ -123,6 +123,30 @@ Describe "Set-YardstickSupersedence" {
         Set-YardstickSupersedence -NewApp $new -SupersededApps @($old) | Should -Be 0
     }
 
+    It "skips a target deleted since it was read and attaches the rest" {
+        Mock -ModuleName YardstickSupport New-YardstickWin32AppSupersedence {
+            if ($ID -eq 'gone') { return $null }
+            [ordered]@{ 'targetId' = $ID; 'supersedenceType' = $SupersedenceType.ToLower() }
+        }
+        $new = [PSCustomObject]@{ id = 'new'; DisplayName = 'App'; displayVersion = '3.0' }
+        $targets = @(
+            [PSCustomObject]@{ id = 'old1'; DisplayName = 'App (N-1)'; displayVersion = '2.0' },
+            [PSCustomObject]@{ id = 'gone'; DisplayName = 'App (N-2)'; displayVersion = '1.0' }
+        )
+        Set-YardstickSupersedence -NewApp $new -SupersededApps $targets | Should -Be 1
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship -Times 0 -Exactly -ParameterFilter { $Id -eq 'gone' }
+    }
+
+    It "leaves existing links alone when no target resolves" {
+        Mock -ModuleName YardstickSupport New-YardstickWin32AppSupersedence { $null }
+        Mock -ModuleName YardstickSupport Get-YardstickSupersedenceRelationship { @([pscustomobject]@{ targetId = 'x' }) }
+        $new = [PSCustomObject]@{ id = 'new'; DisplayName = 'App'; displayVersion = '3.0' }
+        $old = [PSCustomObject]@{ id = 'old'; DisplayName = 'App (N-1)'; displayVersion = '2.0' }
+        Set-YardstickSupersedence -NewApp $new -SupersededApps @($old) | Should -Be 0
+        Should -Invoke -ModuleName YardstickSupport Remove-YardstickWin32AppSupersedence -Times 0 -Exactly
+        Should -Invoke -ModuleName YardstickSupport Add-YardstickWin32AppSupersedence -Times 0 -Exactly
+    }
+
     It "returns 0 and skips Add when there are no targets" {
         $new = [PSCustomObject]@{ id = 'new'; DisplayName = 'App'; displayVersion = '3.0' }
         $count = Set-YardstickSupersedence -NewApp $new -SupersededApps @() -Type 'Update'
@@ -797,21 +821,26 @@ Describe "Get-SameAppAllVersions" {
 
     It "reads each family name exactly and never the full list when the app exists" {
         $null = Get-SameAppAllVersions 'App'
-        # Bare name, anchor, (N-1), (N-2): (N-2) is the first miss at the default floor of 2.
-        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 4 -Exactly
-        foreach ($name in 'App', 'Ω DETECT - App', 'App (N-1)', 'App (N-2)') {
+        # Bare name, anchor, (N-1), then (N-2) and (N-3): two misses in a row past the floor of 2.
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 5 -Exactly
+        foreach ($name in 'App', 'Ω DETECT - App', 'App (N-1)', 'App (N-2)', 'App (N-3)') {
             Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $DisplayName -ceq $name }
         }
         Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 0 -Exactly -ParameterFilter { -not $DisplayName }
     }
 
-    It "keeps reading while (N-k) versions exist, then stops at the first miss" {
+    It "keeps reading while (N-k) versions exist, then stops after two misses in a row" {
         $script:tenant += [PSCustomObject]@{ id = '6'; DisplayName = 'App (N-2)'; displayVersion = '1.9'; createdDateTime = (Get-Date) }
         $script:tenant += [PSCustomObject]@{ id = '7'; DisplayName = 'App (N-3)'; displayVersion = '1.8'; createdDateTime = (Get-Date) }
         $all = Get-SameAppAllVersions 'App'
         $all.id | Should -Contain '7'
-        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $DisplayName -ceq 'App (N-4)' }
-        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 0 -Exactly -ParameterFilter { $DisplayName -ceq 'App (N-5)' }
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $DisplayName -ceq 'App (N-5)' }
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 0 -Exactly -ParameterFilter { $DisplayName -ceq 'App (N-6)' }
+    }
+
+    It "finds a version behind one missing generation past the floor" {
+        $script:tenant += [PSCustomObject]@{ id = '8'; DisplayName = 'App (N-3)'; displayVersion = '1.8'; createdDateTime = (Get-Date) }
+        (Get-SameAppAllVersions 'App').id | Should -Contain '8'
     }
 
     It "finds (N-2) behind a missing (N-1) up to MinGenerations" {
