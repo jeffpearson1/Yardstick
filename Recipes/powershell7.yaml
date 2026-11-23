@@ -93,10 +93,36 @@ powerShellInstallScript: |
     throw "The PowerShell MSIX was not found at '$package'."
   }
 
+  # Remove any legacy PowerShell 7 MSI (7.0-7.6) first. Intune only uninstalls it through
+  # 'Replace' supersedence of a kept version whose exact ProductCode is on the device; the
+  # DETECT anchor is always superseded with 'Update', and any other 7.x build is invisible
+  # to the chain, so without this the MSI stays beside the MSIX and wins on the machine PATH.
+  # Every stable MSI since 7.0 shares one UpgradeCode per platform (x86 and arm64 share
+  # one); PowerShell Preview uses {39243D76-...} and is deliberately not listed.
+  $legacyUpgradeCodes = @(
+    '{31AB5147-9A97-4452-8443-D9709F0516E1}'  # PowerShell 7-x64
+    '{1D00683B-0F84-4DB8-A64F-2F98AD42FE06}'  # PowerShell 7-x86 / PowerShell 7-arm64
+  )
+  $exitCode = 0
+  $msi = New-Object -ComObject WindowsInstaller.Installer
+  foreach ($upgradeCode in $legacyUpgradeCodes) {
+    $productCodes = @($msi.GetType().InvokeMember('RelatedProducts', 'GetProperty', $null, $msi, @($upgradeCode)))
+    foreach ($productCode in $productCodes | Where-Object { $_ -match '^\{[0-9A-Fa-f\-]{36}\}$' }) {
+      $log = Join-Path $env:TEMP "PowerShell7-legacy-msi-uninstall-$($productCode.Trim('{}')).log"
+      $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" `
+        -ArgumentList "/x $productCode /qn /norestart /l*v `"$log`"" -Wait -PassThru
+      if ($process.ExitCode -in 1641, 3010) { $exitCode = 3010 }
+      elseif ($process.ExitCode -notin 0, 1605, 1614) {
+        throw "Removing the legacy PowerShell 7 MSI $productCode failed with exit code $($process.ExitCode) (log: $log)."
+      }
+    }
+  }
+
   # Provision machine-wide rather than registering only the SYSTEM account, so every
   # user, including those who sign in later, receives PowerShell.
   Add-AppxProvisionedPackage -Online -PackagePath $package -SkipLicense -Regions 'all' | Out-Null
-  exit 0
+  # 3010 when a legacy MSI removal left files pending a reboot (e.g. an open pwsh session).
+  exit $exitCode
 powerShellUninstallScript: |
   $ErrorActionPreference = 'Stop'
 
@@ -129,6 +155,17 @@ detectionScript: |
   # (7.7.0.0). A registered copy counts too, so a machine where a user already installed
   # PowerShell from the Store or winget is not reinstalled over or removed by this app.
   $expected = [version]'<version>'
+
+  # A legacy PowerShell 7 MSI still on the device means the migration is not finished
+  # (it would shadow the MSIX on PATH), so report Not Detected and let the install remove it.
+  $msi = New-Object -ComObject WindowsInstaller.Installer
+  foreach ($upgradeCode in '{31AB5147-9A97-4452-8443-D9709F0516E1}', '{1D00683B-0F84-4DB8-A64F-2F98AD42FE06}') {
+    if (@($msi.GetType().InvokeMember('RelatedProducts', 'GetProperty', $null, $msi, @($upgradeCode)) | Where-Object { $_ }).Count -gt 0) {
+      Write-Output 'Not Detected'
+      exit 1
+    }
+  }
+
   $installed = @(
     Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq 'Microsoft.PowerShell' | ForEach-Object { $_.Version }
     Get-AppxPackage -AllUsers -Name 'Microsoft.PowerShell' | ForEach-Object { $_.Version }
@@ -144,6 +181,7 @@ detectionScript: |
   }
   Write-Output 'Not Detected'
   exit 1
-# Replace (not in-place Update): devices still on the 7.6.x MSI have it uninstalled first, so they
-# do not end up with an MSI and an MSIX copy side by side, and MSIX-to-MSIX upgrades start clean.
+# Replace (not in-place Update) so kept MSI versions are uninstalled by Intune first. That alone
+# does not cover the DETECT anchor (always 'Update') or MSI builds outside the kept versions, so the
+# install script also removes any legacy PowerShell 7 MSI and detection fails while one remains.
 uninstallPreviousVersion: true
