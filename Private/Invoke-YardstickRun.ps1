@@ -434,12 +434,18 @@ function Invoke-YardstickAppMaintenance {
     # yet propagated to Get-YardstickWin32App list results).
     Write-Log "Refreshing the list of versions in Intune..." -Level Detail
     if ($NewAppId) { Start-Sleep -Seconds 4 }
+    # After an upload the lookup before it already settled whether the app is new,
+    # so an empty result needs no full-list check: the new app is spliced in by id.
+    $familyLookup = @{
+        MinGenerations = [Math]::Max(2, [int]$Script:NumVersionsToKeep)
+        NoAbsenceProof = [bool]$NewAppId
+    }
     try {
-        $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
+        $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName @familyLookup
         if ($NewAppId -and !($AllMatchingApps | Where-Object id -eq $NewAppId)) {
             Write-Log "The new app is not in the version list yet. Retrying in 5 seconds..." -Level Detail
             Start-Sleep -Seconds 5
-            $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName
+            $AllMatchingApps = Get-SameAppAllVersions $Script:DisplayName @familyLookup
         }
         if ($NewAppId -and !($AllMatchingApps | Where-Object id -eq $NewAppId)) {
             # The list endpoint lags behind creation. Fetch the new app directly
@@ -1667,7 +1673,9 @@ while ($RecipePass.Count -gt 0) {
                 # Correct any naming discrepancies before we continue.
                 # Skip the Ω DETECT - anchor - it deliberately holds a different name.
                 $anchorName = Get-DetectAnchorName -DisplayName $Script:DisplayName
-                $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName | Where-Object DisplayName -ne $anchorName)
+                # Read one generation deeper than retention, so leftovers from a
+                # higher retention setting are renumbered too.
+                $CurrentApps = @(Get-SameAppAllVersions $Script:DisplayName -MinGenerations ([Math]::Max(3, [int]$Script:NumVersionsToKeep + 1)) | Where-Object DisplayName -ne $anchorName)
                 for ($i = 1; $i -lt $CurrentApps.Count; $i++) {
                     if ($CurrentApps[$i].DisplayName -ne "$($Script:DisplayName) (N-$i)") {
                         Write-Log "Renaming $($CurrentApps[$i].DisplayName) to $($Script:DisplayName) (N-$i)..."
@@ -1758,8 +1766,15 @@ while ($RecipePass.Count -gt 0) {
             }
 
             # Validate the extracted version before proceeding
+            # Most recipes have nothing new. When the app holding the bare name already
+            # has this version, the decision below is "already in Intune" whatever its
+            # older versions are, so the lookup stops after that one read. -Force and
+            # -Repair go on to change the family, so they always read all of it.
+            $lookupStopVersion = if (-not $Force -and -not $Repair -and $null -ne $Script:Version) { "$($Script:Version)".Trim() } else { $null }
             try {
-                $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName
+                $ExistingVersions = Get-SameAppAllVersions $Script:DisplayName `
+                    -MinGenerations ([Math]::Max(2, [int]$Script:NumVersionsToKeep)) `
+                    -StopWhenVersion $lookupStopVersion
             } catch {
                 Write-Log "$_" -Level Error
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"

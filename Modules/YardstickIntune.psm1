@@ -254,21 +254,20 @@ function Get-YardstickWin32App {
     }
     $win32Filter = "isof('microsoft.graph.win32LobApp')"
     if ($PSCmdlet.ParameterSetName -eq 'DisplayName') {
-        # Filter by name in Graph rather than downloading every Win32 app in the
-        # tenant (about 3 MB of icons and scripts for ~1000 apps) on each lookup.
-        # contains() also returns the (N-x) renames and the Ω DETECT - anchor.
+        # One exact name per request. Graph answers displayName eq like an indexed
+        # lookup (about a second, even while Intune is degraded), whereas
+        # contains(), startswith(), OR-chained names and unpaged lists make Intune
+        # read its whole catalog and time out with 504 when it is slow. Exact
+        # matching is case-sensitive; Get-SameAppAllVersions covers casing drift.
         $quotedName = [uri]::EscapeDataString($DisplayName.Replace("'", "''"))
-        $apps = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter and contains(displayName,'$quotedName')")
-        if ($apps.Count -eq 0) {
-            # Graph's contains() is case-sensitive, unlike the -like below. Before
-            # reporting that no version exists - which leads to a fresh upload -
-            # make sure an app cased differently from the recipe is not missed.
-            Write-YardstickIntuneLog "No application name in Intune contains '$DisplayName' with that exact casing. Checking the full application list." -Level Detail
-            $apps = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter")
-        }
-        return @($apps | Where-Object { $_.displayName -like "*$DisplayName*" })
+        $apps = @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter and displayName eq '$quotedName'")
+        # $filter on mobileApps is not documented by Microsoft, so never rely on it
+        # having been applied: keep only the exact name.
+        return @($apps | Where-Object { $_.displayName -ceq $DisplayName })
     }
-    return @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter")
+    # The whole Win32 list. Pages of 100 keep each request well inside the gateway
+    # timeout; a single page of ~1000 apps (about 3 MB) failed with 504 under load.
+    return @(Invoke-YardstickGraphRequest -ApiVersion beta -Resource "deviceAppManagement/mobileApps?`$filter=$win32Filter&`$top=100")
 }
 
 function Set-YardstickWin32App {
