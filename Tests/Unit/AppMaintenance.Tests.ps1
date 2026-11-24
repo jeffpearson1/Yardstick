@@ -9,7 +9,7 @@ BeforeAll {
     # the extracted functions resolve it however Pester scopes this file.
     $versionPro = (Get-Content "$PSScriptRoot\..\..\Modules\VersionPro.psm1" -Raw) -replace '(?m)^\s*Export-ModuleMember.*$', ''
     . ([scriptblock]::Create($versionPro))
-    foreach ($name in 'Invoke-YardstickAppMaintenance', 'Invoke-YardstickSkip') {
+    foreach ($name in 'Invoke-YardstickAppMaintenance', 'Invoke-YardstickSkip', 'Invoke-YardstickInterruptedUploadHeal') {
         $fn = $ast.Find({ param($n)
             $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
         if (-not $fn) { throw "$name not found in $runnerPath" }
@@ -32,6 +32,13 @@ BeforeAll {
     function Set-YardstickSupersedence { param($NewApp, $SupersededApps, $Type, $UpdateOnlyIds) @($SupersededApps).Count }
     function Set-AssignmentAutoUpdate { param($AppId, $Enabled, $IntentFilter, $SkipGroupIds) 0 }
     function Add-SuccessfulApplication { param($ApplicationId, $DisplayName, $Version, $Action, $Dependents, $AutoUpdateStatus) }
+    function Add-FailedApplication { param($ApplicationId, $DisplayName, $Version, $ErrorMessage, $FailureStage) }
+    function Set-YardstickWatchdogStage { param($AppId, $Stage) }
+    $supportPath = "$PSScriptRoot\..\..\Modules\YardstickSupport.psm1"
+    $supportAst = [System.Management.Automation.Language.Parser]::ParseFile($supportPath, [ref]$null, [ref]$null)
+    $fn = $supportAst.Find({ param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-YardstickInterruptedUpload' }, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
     function Test-YardstickAppPublished {
         param($App)
         if ($null -eq $App) { return $false }
@@ -219,5 +226,96 @@ Describe 'Invoke-YardstickSkip' {
         $Repair = $true
         Invoke-YardstickSkip -Reason 'Nothing new.'
         Should -Invoke Invoke-YardstickAppMaintenance -Times 1 -Exactly -ParameterFilter { $null -eq $ExistingApps }
+    }
+}
+
+Describe 'Invoke-YardstickInterruptedUploadHeal' {
+    BeforeEach {
+        $Script:DisplayName = 'calibre'
+        $Script:Version = '9.19.0'
+        $Script:NumVersionsToKeep = 2
+        $Script:AutoHealInterruptedUploads = $true
+        $AppId_Processing = 'calibre'
+        $CurrentDisplayName = 'calibre'
+        $DependentUpdateStatus = [ordered]@{}
+
+        $script:newest = New-App '5366c25d' 'calibre' '9.19.0'
+        $script:newest | Add-Member -NotePropertyName isAssigned -NotePropertyValue $false
+        $script:older = New-App '9d828d0f' 'calibre' '9.18.0'
+        $script:older | Add-Member -NotePropertyName isAssigned -NotePropertyValue $true
+        $script:bare = @($script:newest, $script:older)
+
+        Mock Write-Log {}
+        Mock Get-SameAppAllVersions { @($script:newest, $script:older) }
+        Mock Invoke-YardstickAppMaintenance {
+            [pscustomobject]@{ CurrentApp = $script:newest; SupersededCount = 2; PrunedCount = 1; RenamedCount = 1; AnchorStatus = $null; StepErrors = @() }
+        }
+        Mock Add-SuccessfulApplication {}
+        Mock Add-FailedApplication {}
+    }
+
+    It 'finishes calibre on a normal run and reports it as an update' {
+        Invoke-YardstickInterruptedUploadHeal -Reason 'calibre 9.19.0 is already in Intune.' -ExistingApps $script:bare | Should -BeTrue
+        Should -Invoke Get-SameAppAllVersions -Times 1 -Exactly
+        Should -Invoke Invoke-YardstickAppMaintenance -Times 1 -Exactly -ParameterFilter { @($ExistingApps).Count -eq 2 }
+        Should -Invoke Add-SuccessfulApplication -Times 1 -Exactly -ParameterFilter {
+            $Action -eq 'Updated' -and $Version -eq '9.19.0' -and $AutoUpdateStatus -like 'finished an interrupted upload*'
+        }
+        # The log report keys a sweep off this wording.
+        Should -Invoke Write-Log -Times 1 -Exactly -ParameterFilter { $Content -like '*an earlier update did not finish. Running maintenance sweep.' }
+    }
+
+    It 'reports Maintained when the newer app already had assignments but is Yardstick''s' {
+        $script:newest.isAssigned = $true
+        $script:newest | Add-Member -NotePropertyName notes -NotePropertyValue 'Created by Yardstick, upload 2026-11-24T14:00:00Z 1a2b3c4d'
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps $script:bare | Should -BeTrue
+        Should -Invoke Add-SuccessfulApplication -Times 1 -Exactly -ParameterFilter { $Action -eq 'Maintained' }
+    }
+
+    It 'leaves an assigned app that Yardstick did not create to a person' {
+        $script:newest.isAssigned = $true
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps $script:bare | Should -BeFalse
+        Should -Invoke Invoke-YardstickAppMaintenance -Times 0 -Exactly
+        Should -Invoke Write-Log -Times 1 -Exactly -ParameterFilter { $Level -eq 'Warning' -and $Content -like '*-Repair*' }
+    }
+
+    It 'does nothing when the newer app is not the version found upstream' {
+        $Script:Version = '9.18.0'
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps $script:bare | Should -BeFalse
+        Should -Invoke Invoke-YardstickAppMaintenance -Times 0 -Exactly
+    }
+
+    It 'does nothing when autoHealInterruptedUploads is off' {
+        $Script:AutoHealInterruptedUploads = $false
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps $script:bare | Should -BeFalse
+        Should -Invoke Invoke-YardstickAppMaintenance -Times 0 -Exactly
+    }
+
+    It 'does nothing for a healthy family' {
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps @($script:newest) | Should -BeFalse
+        Should -Invoke Write-Log -Times 0 -Exactly
+    }
+
+    It 'reports two apps at the same version for a person to resolve, without a sweep' {
+        $twin = New-App 'f087d401' 'calibre' '9.19.0'
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps @($script:newest, $twin) | Should -BeTrue
+        Should -Invoke Invoke-YardstickAppMaintenance -Times 0 -Exactly
+        Should -Invoke Add-FailedApplication -Times 1 -Exactly -ParameterFilter { $FailureStage -eq 'Duplicate Versions' -and $ErrorMessage -like '*f087d401*' }
+    }
+
+    It 'records a Post-Upload Maintenance failure with the -Repair command when finishing fails' {
+        Mock Get-SameAppAllVersions { throw 'Could not retrieve the versions of calibre from Intune: 504' }
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps $script:bare | Should -BeTrue
+        Should -Invoke Add-FailedApplication -Times 1 -Exactly -ParameterFilter {
+            $FailureStage -eq 'Post-Upload Maintenance' -and $ErrorMessage -like 'Intune was changed:*-AppId calibre -Repair*'
+        }
+    }
+
+    It 'reports what is still incomplete' {
+        Mock Invoke-YardstickAppMaintenance {
+            [pscustomobject]@{ CurrentApp = $script:newest; SupersededCount = 0; PrunedCount = 0; RenamedCount = 1; AnchorStatus = $null; StepErrors = @('supersedence') }
+        }
+        Invoke-YardstickInterruptedUploadHeal -Reason 'r' -ExistingApps $script:bare | Should -BeTrue
+        Should -Invoke Add-SuccessfulApplication -Times 1 -Exactly -ParameterFilter { $AutoUpdateStatus -like '*incomplete: supersedence*' }
     }
 }

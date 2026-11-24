@@ -2962,6 +2962,47 @@ function Get-DetectAnchor {
 }
 
 
+function Get-YardstickInterruptedUpload {
+    <#
+    .SYNOPSIS
+    Reads an app's family for the trace of an upload that did not finish.
+
+    .DESCRIPTION
+    After an upload, maintenance renames the previous version to (N-1). When that
+    never ran - the run failed between the upload and maintenance, as calibre's
+    did on 2026-11-23 - two published apps hold the bare display name. Makes no
+    Graph calls.
+
+    .OUTPUTS
+    $null when at most one published app holds the bare name. Otherwise an object
+    with Kind 'Ambiguous' (two of them share a version, so neither is clearly the
+    newer: a person has to choose) or 'Interrupted' (Newest, and the Older ones).
+    #>
+    param(
+        [AllowNull()][AllowEmptyCollection()]
+        [object[]]$ExistingApps,
+        [Parameter(Mandatory)][string]$DisplayName
+    )
+    $bare = @($ExistingApps | Where-Object { $_ -and ([string]$_.displayName -ceq $DisplayName) -and (Test-YardstickAppPublished $_) })
+    if ($bare.Count -lt 2) { return $null }
+
+    $tie = @($bare | Group-Object { [string]$_.displayVersion } | Where-Object Count -gt 1 | Select-Object -First 1)
+    if ($tie.Count -gt 0) {
+        return [pscustomobject]@{
+            Kind    = 'Ambiguous'
+            Version = $tie[0].Name
+            Apps    = @($tie[0].Group)
+        }
+    }
+    $sorted = @($bare | Sort-Object @{Expression = {[VersionPro]$_.displayVersion}; Descending = $true})
+    return [pscustomobject]@{
+        Kind   = 'Interrupted'
+        Newest = $sorted[0]
+        Older  = @($sorted | Select-Object -Skip 1)
+    }
+}
+
+
 function Test-YardstickAppPublished {
     <#
     .SYNOPSIS

@@ -210,7 +210,7 @@ Describe "Get-YardstickFailureStage" {
 
     It "maps Intune lookup failures to Intune Lookup, not Version Validation" {
         Get-YardstickFailureStage -ErrorMessage 'Could not retrieve the versions of WinSCP from Intune: Response status code does not indicate success: 504 (Gateway Timeout).' | Should -Be 'Intune Lookup'
-        Get-YardstickFailureStage -ErrorMessage 'Could not fetch the existing versions of paint.net after uploading 31add7f6-c324-46f6-bdae-6262351abe3a. Exiting: x' | Should -Be 'Intune Lookup'
+        Get-YardstickFailureStage -ErrorMessage 'Could not fetch the existing versions of paint.net after uploading 31add7f6-c324-46f6-bdae-6262351abe3a. Exiting: x' | Should -Be 'Post-Upload Maintenance'
     }
 }
 
@@ -228,5 +228,34 @@ LOGGING STARTED AT 11/23/2026 08:00:06
         $failure = @($apps[0].Failures)[0]
         $failure.Stage | Should -Be 'Intune Lookup'
         $failure.ErrorMessage | Should -BeLike 'Could not retrieve the versions of WinSCP*'
+    }
+
+    It "files the 2026-11-23 calibre orphan as Post-Upload Maintenance, not Intune Lookup" {
+        $apps = ConvertFrom-Fixture @'
+#######################################################
+LOGGING STARTED AT 11/23/2026 08:00:06
+#######################################################
+11/23/2026 08:14:24 - Starting update for calibre...
+11/23/2026 08:14:24 - [calibre] Retrieving all versions of application with display name: calibre
+11/23/2026 08:19:32 - [calibre] ERROR: Intune Lookup failed: Uploaded calibre as 5366c25d-2b33-49ff-a1c4-c3703285330c, but could not fetch its existing versions to move assignments and supersedence: Could not retrieve the versions of calibre from Intune: Response status code does not indicate success: 504 (Gateway Timeout). Run .\Yardstick.ps1 -AppId calibre -Repair to finish.
+'@
+        @($apps[0].Failures)[0].Stage | Should -Be 'Post-Upload Maintenance'
+    }
+
+    It "reads a finished interrupted upload and an incomplete maintenance" {
+        $apps = ConvertFrom-Fixture @'
+#######################################################
+LOGGING STARTED AT 11/24/2026 08:00:06
+#######################################################
+11/24/2026 08:14:24 - Starting update for calibre...
+11/24/2026 08:14:24 - [calibre] Retrieving all versions of application with display name: calibre
+11/24/2026 08:14:25 - [calibre] Checking if calibre 9.19.0 is a new version...
+11/24/2026 08:14:25 - [calibre] WARNING: calibre 9.19.0 is already in Intune. Two published apps are named calibre (9.19.0 5366c25d; 9.18.0 9d828d0f): an earlier update did not finish. Running maintenance sweep.
+11/24/2026 08:14:40 - [calibre] WARNING: Maintenance of calibre 9.19.0 is incomplete (supersedence). Run .\Yardstick.ps1 -AppId calibre -Repair to finish.
+11/24/2026 08:14:41 - [calibre] Done: calibre 9.19.0 (Updated).
+'@
+        $apps[0].Action | Should -Be 'Updated'
+        $apps[0].AutoParts | Should -Contain 'finished an interrupted upload'
+        $apps[0].AutoParts | Should -Contain 'incomplete: supersedence'
     }
 }

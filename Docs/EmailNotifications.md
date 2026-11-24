@@ -107,6 +107,9 @@ Failed applications are categorized by failure stage:
 - **Download Script**: Custom download script failures
 - **Post-Download Script**: Post-download script failures
 - **Intune Upload**: Failures during upload to Microsoft Intune
+- **Intune Lookup**: Intune did not answer when Yardstick read the app's versions. Nothing was changed in Intune; the next run tries again
+- **Post-Upload Maintenance**: The new version was uploaded, but its assignments, supersedence or renames could not be finished. Intune *was* changed. A later run finishes it automatically (see `autoHealInterruptedUploads`), or run the `-Repair` command in the message
+- **Duplicate Versions**: Two published apps share the app's display name and version. A person has to delete one; the message names both
 - **General Processing**: Unexpected errors during processing
 
 ## Usage

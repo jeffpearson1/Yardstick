@@ -840,6 +840,98 @@ function Invoke-YardstickAppMaintenance {
 }
 
 
+function Invoke-YardstickInterruptedUploadHeal {
+    <#
+    .SYNOPSIS
+    Finishes an upload an earlier run left half-done, on a normal run.
+
+    .DESCRIPTION
+    Called when a recipe is about to be skipped because its version is already in
+    Intune. If that version is the newer of two published apps holding the bare
+    display name, an earlier run uploaded it but never renamed the old version,
+    moved its assignments or attached supersedence (calibre on 2026-11-23). Left
+    alone, every later run skips the version as already published, so it would
+    stay unassigned until someone ran -Repair.
+
+    Only acts when the stranded app has the version this run found upstream and
+    is unassigned or carries Yardstick's upload token, so a build a person added
+    by hand, or one a version lock rejects, is never promoted. Two apps at the
+    same version are reported for a person to resolve.
+
+    .OUTPUTS
+    $true when the recipe has been handled (finished, or recorded as failed);
+    $false when the caller should go on with the normal skip.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reason,
+        [AllowNull()][AllowEmptyCollection()]
+        [object[]]$ExistingApps
+    )
+
+    $state = Get-YardstickInterruptedUpload -ExistingApps $ExistingApps -DisplayName $Script:DisplayName
+    if (-not $state) { return $false }
+
+    if ($state.Kind -eq 'Ambiguous') {
+        $ids = (@($state.Apps) | ForEach-Object { $_.id }) -join ', '
+        Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $state.Version `
+            -ErrorMessage "$(@($state.Apps).Count) published apps are named $($Script:DisplayName) at version $($state.Version) ($ids). Yardstick will not choose between them: delete the one you do not want, then run .\Yardstick.ps1 -AppId $AppId_Processing -Repair." `
+            -FailureStage 'Duplicate Versions'
+        return $true
+    }
+
+    $newest = $state.Newest
+    $older = (@($state.Older) | ForEach-Object { "$($_.displayVersion) $($_.id)" }) -join ', '
+    $found = "Two published apps are named $($Script:DisplayName) ($($newest.displayVersion) $($newest.id); $older)"
+    $isOurs = [string]$newest.notes -like 'Created by Yardstick, upload *'
+    $unassigned = $null -ne $newest.PSObject.Properties['isAssigned'] -and $newest.isAssigned -eq $false
+    $why = if (-not $Script:AutoHealInterruptedUploads) {
+        'autoHealInterruptedUploads is off'
+    } elseif ([string]$newest.displayVersion -ne "$($Script:Version)".Trim()) {
+        "the newer one is not the version found upstream ($($Script:Version))"
+    } elseif (-not ($isOurs -or $unassigned)) {
+        'the newer one is assigned and was not created by Yardstick'
+    } else { $null }
+    if ($why) {
+        Write-Log "$found. Not finishing it automatically because $why; run .\Yardstick.ps1 -AppId $AppId_Processing -Repair once you have checked it." -Level Warning
+        return $false
+    }
+
+    # The trailing wording is what the log report matches for a sweep.
+    Write-Log "$Reason $found`: an earlier update did not finish. Running maintenance sweep." -Level Warning
+    Set-YardstickWatchdogStage -Stage 'Post-Upload Maintenance'
+    try {
+        # The version check may have read only the bare name; the sweep needs the
+        # whole family.
+        $family = Get-SameAppAllVersions $Script:DisplayName -MinGenerations ([Math]::Max(2, [int]$Script:NumVersionsToKeep))
+        $sweep = Invoke-YardstickAppMaintenance -ExistingApps $family
+        if (-not $sweep) { throw 'Intune returned no published version to maintain.' }
+    } catch {
+        Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $newest.displayVersion `
+            -ErrorMessage "Intune was changed: $($Script:DisplayName) $($newest.displayVersion) ($($newest.id)) was uploaded by an earlier run that did not finish, and finishing it failed: $_ Run .\Yardstick.ps1 -AppId $AppId_Processing -Repair to finish." `
+            -FailureStage 'Post-Upload Maintenance'
+        return $true
+    }
+
+    $parts = @('finished an interrupted upload')
+    if ($sweep.SupersededCount -gt 0) { $parts += "supersedes $($sweep.SupersededCount)" }
+    if ($sweep.PrunedCount -gt 0)     { $parts += "pruned $($sweep.PrunedCount)" }
+    if ($sweep.RenamedCount -gt 0)    { $parts += "renamed $($sweep.RenamedCount)" }
+    if ($sweep.AnchorStatus)          { $parts += "anchor: $($sweep.AnchorStatus)" }
+    $gaps = @($sweep.StepErrors)
+    if ($gaps.Count -gt 0) {
+        Write-Log "Maintenance of $($Script:DisplayName) $($sweep.CurrentApp.displayVersion) is incomplete ($($gaps -join ', ')). Run .\Yardstick.ps1 -AppId $AppId_Processing -Repair to finish." -Level Warning
+        $parts += "incomplete: $($gaps -join ', ')"
+    }
+    # An app that had no assignments reaches users only now, so report it as an
+    # update: the general email lists updates, not maintenance.
+    $action = if ($unassigned) { 'Updated' } else { 'Maintained' }
+    Add-SuccessfulApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName `
+        -Version $sweep.CurrentApp.displayVersion -Action $action `
+        -Dependents $DependentUpdateStatus -AutoUpdateStatus ($parts -join ', ')
+    return $true
+}
+
+
 function Invoke-YardstickSkip {
     <#
     .SYNOPSIS
@@ -1169,6 +1261,10 @@ function Set-ScriptVariables {
 
     $Script:UseDetectAnchor = if ($null -ne $Preferences.useDetectAnchor) {
         [bool]$Preferences.useDetectAnchor
+    } else { $true }
+
+    $Script:AutoHealInterruptedUploads = if ($null -ne $Preferences.autoHealInterruptedUploads) {
+        [bool]$Preferences.autoHealInterruptedUploads
     } else { $true }
 
     # Handle PowerShell Script batch handoff.
@@ -1884,7 +1980,7 @@ while ($RecipePass.Count -gt 0) {
                         -StopWhenVersion $lookupStopVersion
                 }
             } catch {
-                Write-Log "$_" -Level Error
+                # Nothing has changed in Intune for this recipe.
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
                 continue
             }
@@ -1933,12 +2029,14 @@ while ($RecipePass.Count -gt 0) {
         
             # Check various conditions to determine if we should proceed
             $SkipReason = $null
+            $AlreadyInIntune = $false
             if ($Force) {
                 Write-Log "-Force is set: updating $($Script:DisplayName) $($Script:Version) regardless of the versions in Intune."
             } elseif (Test-VersionExcluded -Version $Script:Version -VersionLock $Script:VersionLock) {
                 $SkipReason = "Version is locked to $($Script:VersionLock)."
             } elseif (@($ExistingVersions.displayVersion) -contains $Script:Version) {
                 $SkipReason = "$($Script:DisplayName) $($Script:Version) is already in Intune."
+                $AlreadyInIntune = $true
             } elseif ($VersionCompareResult -eq 1) {
                 Write-Log "$($Script:DisplayName) $($Script:Version) is newer than $NewestExistingVersion. Updating."
             } elseif ($VersionCompareResult -eq -1) {
@@ -1946,6 +2044,12 @@ while ($RecipePass.Count -gt 0) {
             }
 
             if ($SkipReason) {
+                # A version already in Intune may be one an earlier run uploaded but
+                # never finished. -Repair sweeps every skipped recipe anyway.
+                if ($AlreadyInIntune -and -not $Repair -and
+                    (Invoke-YardstickInterruptedUploadHeal -Reason $SkipReason -ExistingApps $ExistingVersions)) {
+                    continue
+                }
                 Invoke-YardstickSkip -Reason $SkipReason -ExistingApps $RepairFamily
                 continue
             }
@@ -2175,8 +2279,11 @@ while ($RecipePass.Count -gt 0) {
                 # publish wait read it by id - no name lookup after an upload.
                 $Maintenance = Invoke-YardstickAppMaintenance -NewAppId $Win32App.id -NewApp $LiveWin32App -ExistingApps $ExistingVersions
             } catch {
-                Write-Log "$_" -Level Error
-                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
+                # Unlike a lookup failure, Intune has changed: the new version is
+                # published but not yet assigned or superseding the old one.
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version `
+                    -ErrorMessage "Intune was changed: $_ A later run finishes it automatically once Intune answers." `
+                    -FailureStage "Post-Upload Maintenance"
                 continue
             }
 

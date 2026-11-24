@@ -107,6 +107,7 @@ function Get-YardstickDefaultPreferences {
         defaultUninstallPreviousVersion             = $false
         defaultAutoUpdate                           = $true
         useDetectAnchor                             = $true
+        autoHealInterruptedUploads                  = $true
         defaultMaximumInstallationTimeInMinutes     = 60
         defaultMinOSVersion                         = 'W10_20H2'
         defaultInstallExperience                    = 'system'

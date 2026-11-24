@@ -916,6 +916,49 @@ Describe "Get-SameAppAllVersions" {
     }
 }
 
+Describe "Get-YardstickInterruptedUpload" {
+    BeforeAll {
+        function New-App([string]$Id, [string]$Name, [string]$Version, [string]$State = 'published') {
+            [PSCustomObject]@{ id = $Id; displayName = $Name; displayVersion = $Version; publishingState = $State }
+        }
+    }
+
+    It "finds calibre's interrupted upload (2026-11-23)" {
+        $family = @(
+            (New-App '5366c25d' 'calibre' '9.19.0'),
+            (New-App '9d828d0f' 'calibre' '9.18.0'),
+            (New-App 'd28e7fe0' 'calibre (N-1)' '9.17.0'),
+            (New-App '34d9517f' 'Ω DETECT - calibre' '9.14.0')
+        )
+        $state = Get-YardstickInterruptedUpload -ExistingApps $family -DisplayName 'calibre'
+        $state.Kind | Should -Be 'Interrupted'
+        $state.Newest.id | Should -Be '5366c25d'
+        @($state.Older).id | Should -Be @('9d828d0f')
+    }
+
+    It "reports two apps at the same version as ambiguous (ActiLife)" {
+        $family = @((New-App 'a' 'ActiLife' '7.3.3'), (New-App 'b' 'ActiLife' '7.3.3'))
+        $state = Get-YardstickInterruptedUpload -ExistingApps $family -DisplayName 'ActiLife'
+        $state.Kind | Should -Be 'Ambiguous'
+        $state.Version | Should -Be '7.3.3'
+    }
+
+    It "returns nothing for a healthy family" {
+        $family = @((New-App '1' 'App' '2.0'), (New-App '2' 'App (N-1)' '1.0'), (New-App '3' 'Ω DETECT - App' '0.9'))
+        Get-YardstickInterruptedUpload -ExistingApps $family -DisplayName 'App' | Should -BeNullOrEmpty
+    }
+
+    It "ignores an unpublished copy" {
+        $family = @((New-App '1' 'App' '2.0'), (New-App 'ghost' 'App' '3.0' 'notPublished'))
+        Get-YardstickInterruptedUpload -ExistingApps $family -DisplayName 'App' | Should -BeNullOrEmpty
+    }
+
+    It "does not mix in variants or other casing" {
+        $family = @((New-App '1' '7-Zip' '26.06'), (New-App '2' '7-Zip (ARM64)' '26.06'), (New-App '3' '7-zip' '26.05'))
+        Get-YardstickInterruptedUpload -ExistingApps $family -DisplayName '7-Zip' | Should -BeNullOrEmpty
+    }
+}
+
 Describe "Move-AssignmentsAndDependencies intent split" {
     BeforeEach {
         Mock -ModuleName YardstickSupport Get-YardstickWin32AppAssignment {

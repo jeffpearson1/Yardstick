@@ -146,6 +146,12 @@ defaultGroupsSkipAutoUpdates: []
 # continues to detect long-abandoned installs. The anchor is always a
 # supersedence target of the newest version, always with type "Update".
 useDetectAnchor: true
+# When an earlier run uploaded a version but failed before giving it the previous
+# version's assignments and supersedence, two published apps hold the same display
+# name. With this on, the next run that finds the same version upstream finishes
+# the job (as -Repair would) when that app is unassigned or was created by
+# Yardstick. Turn it off to leave every such case to .\Yardstick.ps1 -Repair.
+autoHealInterruptedUploads: true
 # Shown as the Owner field on every app Yardstick creates in Intune.
 defaultOwner:
 defaultMaximumInstallationTimeInMinutes: 60
