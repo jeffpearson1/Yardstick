@@ -756,20 +756,31 @@ Describe "Get-YardstickSupersedenceRelationship" {
 
 Describe "Get-SameAppAllVersions" {
     BeforeEach {
+        # A fake tenant. The exact-name read (-DisplayName) returns apps whose name
+        # matches exactly, as Graph's displayName eq does; the no-argument read is
+        # the paged full list.
+        $script:tenant = @(
+            [PSCustomObject]@{ id = '1'; DisplayName = 'App';            displayVersion = '3.0'; createdDateTime = (Get-Date) },
+            [PSCustomObject]@{ id = '2'; DisplayName = 'App (N-1)';      displayVersion = '2.0'; createdDateTime = (Get-Date) },
+            [PSCustomObject]@{ id = '3'; DisplayName = 'Ω DETECT - App'; displayVersion = '1.0'; createdDateTime = (Get-Date) },
+            [PSCustomObject]@{ id = '4'; DisplayName = 'App Companion';  displayVersion = '9.0'; createdDateTime = (Get-Date) },
+            [PSCustomObject]@{ id = '5'; DisplayName = 'App (Common)';   displayVersion = '9.0'; createdDateTime = (Get-Date) }
+        )
         Mock -ModuleName YardstickSupport Get-YardstickWin32App {
-            @(
-                [PSCustomObject]@{ id = '1'; DisplayName = 'App';           displayVersion = '3.0'; createdDateTime = (Get-Date) },
-                [PSCustomObject]@{ id = '2'; DisplayName = 'App (N-1)';     displayVersion = '2.0'; createdDateTime = (Get-Date) },
-                [PSCustomObject]@{ id = '3'; DisplayName = 'Ω DETECT - App';  displayVersion = '1.0'; createdDateTime = (Get-Date) },
-                [PSCustomObject]@{ id = '4'; DisplayName = 'App Companion'; displayVersion = '9.0'; createdDateTime = (Get-Date) }
-            )
+            if ($DisplayName) {
+                $name = $DisplayName
+                return @($script:tenant | Where-Object { $_.DisplayName -ceq $name })
+            }
+            return @($script:tenant)
         }
+        Mock -ModuleName YardstickSupport Write-Log {}
     }
 
     It "includes the anchor and excludes look-alike apps" {
         $all = Get-SameAppAllVersions 'App'
         $all.Count | Should -Be 3
         $all.id | Should -Not -Contain '4'
+        $all.id | Should -Not -Contain '5'
         $all.DisplayName | Should -Contain 'Ω DETECT - App'
     }
 
@@ -778,22 +789,101 @@ Describe "Get-SameAppAllVersions" {
     }
 
     It "always returns an array even for a single match" {
-        Mock -ModuleName YardstickSupport Get-YardstickWin32App {
-            @([PSCustomObject]@{ id = '1'; DisplayName = 'App'; displayVersion = '3.0'; createdDateTime = (Get-Date) })
-        }
+        $script:tenant = @([PSCustomObject]@{ id = '1'; DisplayName = 'App'; displayVersion = '3.0'; createdDateTime = (Get-Date) })
         $all = Get-SameAppAllVersions 'App'
         $all -is [array] | Should -BeTrue
         $all[0].displayVersion | Should -Be '3.0'
     }
 
-    It "queries Intune once, without a second retry layer" {
+    It "reads each family name exactly and never the full list when the app exists" {
         $null = Get-SameAppAllVersions 'App'
+        # Bare name, anchor, (N-1), (N-2): (N-2) is the first miss at the default floor of 2.
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 4 -Exactly
+        foreach ($name in 'App', 'Ω DETECT - App', 'App (N-1)', 'App (N-2)') {
+            Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $DisplayName -ceq $name }
+        }
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 0 -Exactly -ParameterFilter { -not $DisplayName }
+    }
+
+    It "keeps reading while (N-k) versions exist, then stops at the first miss" {
+        $script:tenant += [PSCustomObject]@{ id = '6'; DisplayName = 'App (N-2)'; displayVersion = '1.9'; createdDateTime = (Get-Date) }
+        $script:tenant += [PSCustomObject]@{ id = '7'; DisplayName = 'App (N-3)'; displayVersion = '1.8'; createdDateTime = (Get-Date) }
+        $all = Get-SameAppAllVersions 'App'
+        $all.id | Should -Contain '7'
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly -ParameterFilter { $DisplayName -ceq 'App (N-4)' }
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 0 -Exactly -ParameterFilter { $DisplayName -ceq 'App (N-5)' }
+    }
+
+    It "finds (N-2) behind a missing (N-1) up to MinGenerations" {
+        $script:tenant = @(
+            [PSCustomObject]@{ id = '1'; DisplayName = 'App';       displayVersion = '3.0'; createdDateTime = (Get-Date) },
+            [PSCustomObject]@{ id = '6'; DisplayName = 'App (N-2)'; displayVersion = '1.9'; createdDateTime = (Get-Date) }
+        )
+        (Get-SameAppAllVersions 'App').id | Should -Contain '6'
+    }
+
+    It "stops after the bare name when it already holds the version being checked" {
+        $all = Get-SameAppAllVersions 'App' -StopWhenVersion '3.0'
+        @($all).id | Should -Be @('1')
         Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly
     }
 
-    It "throws instead of exiting when Intune cannot be reached" {
-        Mock -ModuleName YardstickSupport Get-YardstickWin32App { throw 'Response status code does not indicate success: 504 (Gateway Timeout).' }
-        { Get-SameAppAllVersions 'App' } | Should -Throw '*Could not retrieve the versions of App from Intune*504*'
+    It "reads the whole family when the bare name holds a different version" {
+        $all = Get-SameAppAllVersions 'App' -StopWhenVersion '4.0'
+        $all.Count | Should -Be 3
+    }
+
+    It "reads the full list only when no app holds the bare name, and finds one cased differently" {
+        $script:tenant = @(
+            [PSCustomObject]@{ id = '1'; DisplayName = 'APP';       displayVersion = '3.0'; createdDateTime = (Get-Date) },
+            [PSCustomObject]@{ id = '2'; DisplayName = 'App (N-1)'; displayVersion = '2.0'; createdDateTime = (Get-Date) }
+        )
+        $all = Get-SameAppAllVersions 'App'
+        $all.id | Should -Be @('1', '2')
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 1 -Exactly -ParameterFilter { -not $DisplayName }
+        Should -Invoke -ModuleName YardstickSupport Write-Log -Times 1 -Exactly -ParameterFilter { $Level -eq 'Warning' -and $Content -like "*'APP'*" }
+    }
+
+    It "skips the full-list check with -NoAbsenceProof" {
+        $script:tenant = @()
+        $all = Get-SameAppAllVersions 'App' -NoAbsenceProof
+        $all.Count | Should -Be 0
+        Should -Invoke -ModuleName YardstickSupport Get-YardstickWin32App -Times 0 -Exactly -ParameterFilter { -not $DisplayName }
+    }
+
+    It "returns an empty array and says so when the app is new" {
+        $script:tenant = @([PSCustomObject]@{ id = '9'; DisplayName = 'Other'; displayVersion = '1.0'; createdDateTime = (Get-Date) })
+        $all = Get-SameAppAllVersions 'App'
+        $all -is [array] | Should -BeTrue
+        $all.Count | Should -Be 0
+        Should -Invoke -ModuleName YardstickSupport Write-Log -ParameterFilter { $Content -eq 'No applications found with the name App.' }
+    }
+
+    It "returns an app found under two names only once" {
+        Mock -ModuleName YardstickSupport Get-YardstickWin32App {
+            @([PSCustomObject]@{ id = '1'; DisplayName = 'App'; displayVersion = '3.0'; createdDateTime = (Get-Date) })
+        }
+        @(Get-SameAppAllVersions 'App').Count | Should -Be 1
+    }
+
+    It "escapes wildcard characters in the name when filtering the family" {
+        $script:tenant = @(
+            [PSCustomObject]@{ id = '1'; DisplayName = 'Tool [x64]';       displayVersion = '3.0'; createdDateTime = (Get-Date) },
+            [PSCustomObject]@{ id = '2'; DisplayName = 'Tool [x64] (N-1)'; displayVersion = '2.0'; createdDateTime = (Get-Date) }
+        )
+        (Get-SameAppAllVersions 'Tool [x64]').id | Should -Be @('1', '2')
+    }
+
+    It "throws instead of treating a failed read as a miss, and keeps the HTTP error" {
+        Mock -ModuleName YardstickSupport Get-YardstickWin32App {
+            if ($DisplayName -ceq 'App (N-1)') { throw 'Response status code does not indicate success: 504 (Gateway Timeout).' }
+            @()
+        }
+        $err = $null
+        try { Get-SameAppAllVersions 'App' } catch { $err = $_ }
+        $err | Should -Not -BeNullOrEmpty
+        "$err" | Should -BeLike '*Could not retrieve the versions of App from Intune*504*'
+        $err.Exception.InnerException | Should -Not -BeNullOrEmpty
     }
 }
 

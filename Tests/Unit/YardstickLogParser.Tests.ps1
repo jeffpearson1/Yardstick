@@ -207,4 +207,26 @@ Describe "Get-YardstickFailureStage" {
         Get-YardstickFailureStage -ErrorMessage 'Failed to upload application to Intune: 500' | Should -Be 'Intune Upload'
         Get-YardstickFailureStage -ErrorMessage 'Something else' | Should -Be 'Processing'
     }
+
+    It "maps Intune lookup failures to Intune Lookup, not Version Validation" {
+        Get-YardstickFailureStage -ErrorMessage 'Could not retrieve the versions of WinSCP from Intune: Response status code does not indicate success: 504 (Gateway Timeout).' | Should -Be 'Intune Lookup'
+        Get-YardstickFailureStage -ErrorMessage 'Could not fetch the existing versions of paint.net after uploading 31add7f6-c324-46f6-bdae-6262351abe3a. Exiting: x' | Should -Be 'Intune Lookup'
+    }
+}
+
+Describe "Intune Lookup failure lines" {
+    It "reads the stage the runner logged (2026-11-23 run)" {
+        $apps = ConvertFrom-Fixture @'
+#######################################################
+LOGGING STARTED AT 11/23/2026 08:00:06
+#######################################################
+11/23/2026 10:07:34 - Starting update for winscp...
+11/23/2026 10:07:35 - [winscp] Retrieving all versions of application with display name: WinSCP
+11/23/2026 10:10:22 - [winscp] ERROR: Could not retrieve the versions of WinSCP from Intune: Response status code does not indicate success: 504 (Gateway Timeout).
+11/23/2026 10:10:22 - [winscp] ERROR: Intune Lookup failed: Could not retrieve the versions of WinSCP from Intune: Response status code does not indicate success: 504 (Gateway Timeout).
+'@
+        $failure = @($apps[0].Failures)[0]
+        $failure.Stage | Should -Be 'Intune Lookup'
+        $failure.ErrorMessage | Should -BeLike 'Could not retrieve the versions of WinSCP*'
+    }
 }

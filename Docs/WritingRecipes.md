@@ -23,7 +23,7 @@ The recipe filename (without `.yaml`) becomes the application ID. The filename m
 The following fields are **always required** by the recipe schema validator (`Test-RecipeSchema`):
 
 - `id` - Must match the YAML filename without extension
-- `displayName` - Human-readable name shown in Intune
+- `displayName` - Human-readable name shown in Intune. Yardstick finds the app's versions by this exact name, so it must match the Intune app name exactly, including capitalisation
 - `detectionType` - One of: `msi`, `file`, `registry`, `script`
 - `iconFile` - Icon filename in the `Icons/` folder (PNG or JPG, max 512x512)
 - `description` - Brief description of the application

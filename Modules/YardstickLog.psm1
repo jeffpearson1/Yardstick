@@ -187,7 +187,7 @@ $script:FailureStages = @(
     'Configuration', 'Recipe Validation', 'Manual Drop', 'Pre-Download Script',
     'Version Validation', 'Download', 'Download Script', 'Post-Download Script',
     'MSI Product Code Retrieval', 'Placeholder Replacement', 'Intune Upload',
-    'Post-Run Script', 'General Processing', 'Processing'
+    'Intune Lookup', 'Post-Run Script', 'General Processing', 'Processing'
 )
 $script:FailureLinePattern = '^ERROR: (' + (($script:FailureStages | ForEach-Object { [regex]::Escape($_) }) -join '|') + ') failed: ([\s\S]+)$'
 
@@ -293,6 +293,8 @@ function Get-YardstickFailureStage {
         'Unable to open parameters file|Failed to resolve base recipe' { return 'Configuration' }
         'Recipe validation failed|schema'                              { return 'Recipe Validation' }
         'pre-download PowerShell script'                               { return 'Pre-Download Script' }
+        # Ahead of the 'version' row, which would otherwise claim these.
+        'Could not retrieve the versions of|Could not fetch the existing versions of' { return 'Intune Lookup' }
         'Version validation failed|Version contains|version'           { return 'Version Validation' }
         'staged payload|dropbox'                                       { return 'Manual Drop' }
         'post download PowerShell script'                              { return 'Post-Download Script' }

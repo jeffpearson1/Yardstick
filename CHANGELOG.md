@@ -3,6 +3,35 @@
 All notable changes to Yardstick are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Intune lookups no longer time out while Intune is slow.** Each lookup asked
+  Intune for every app whose name *contains* the recipe's name (and, when none
+  did, for the whole app list in one request). Intune answers both by reading its
+  whole catalog of about 1,100 apps, and on 2026-11-23 those reads ran past
+  Graph's 30-second limit: 8 recipes failed at **Intune Lookup** after about 3.5
+  minutes of retries each, and calibre was left uploaded but unassigned.
+  Yardstick now asks for each name in the app's family exactly - the display
+  name, `<name> (N-1)`, `(N-2)`, ... and `Ω DETECT - <name>` - which Intune
+  answers in about a second even when degraded. When the app holding the display
+  name already has the version being checked, that one request settles it. The
+  full list is read, in pages of 100, only when no app holds the display name, to
+  find an app whose name Intune capitalises differently before treating the app as
+  new; that case is logged as a warning.
+- **Log replay reports Intune lookup failures as Intune Lookup.**
+  `Send-YardstickLogReport.ps1` labelled them "Version Validation".
+
+### Changed
+
+- A recipe's `displayName` must match the Intune app name exactly, including
+  capitalisation. All shipped recipes already do. A mismatch still works (it is
+  found through the full list and logged as a warning), but costs a full-list read
+  on every run until the recipe or the app is renamed.
+- `Get-YardstickWin32App -DisplayName` (and `Remove-YardstickWin32AppAssignment
+  -DisplayName`) now match the exact name instead of every name containing it.
+
 ## [1.2.0] - 2026-11-20
 
 ### Added

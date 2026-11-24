@@ -2651,48 +2651,121 @@ function Get-SameAppAllVersions {
     <#
     .SYNOPSIS
     Retrieves all versions of an application sorted from newest to oldest.
-    
+
     .DESCRIPTION
-    This function finds all applications with the same display name (including
-    versioned names with N- prefix) and returns them sorted by version in
-    descending order. Accounts for edge cases where application names might
-    be similar to others.
-    
+    Finds the application's whole family in Intune - the current app holding the
+    bare display name, the "<name> (N-k)" versions kept by retention, and the
+    "Ω DETECT - <name>" anchor - and returns it sorted by version, newest first.
+
+    Every read asks Intune for one exact name (displayName eq). Graph serves an
+    exact name like an indexed lookup, in about a second even while Intune is
+    degraded. contains(), startswith(), OR-chained names and an unpaged list all
+    make Intune read its whole catalog, and on 2026-11-23 those scans ran past
+    Graph's ~30 s gateway limit and failed with 504 for one recipe after another.
+
+    Exact names are case-sensitive. When no app holds the bare name exactly - a
+    brand-new app, or one whose name Intune cases differently - the full Win32
+    list is read in pages of 100 and matched without regard to case before the
+    app is treated as new. A lookup that fails throws; a miss is never assumed.
+
     .PARAMETER DisplayName
     The display name of the application to search for.
-    
+
+    .PARAMETER MinGenerations
+    How many "(N-k)" names to read even when an earlier one is missing. Reading
+    continues past this while each (N-k) exists, up to (N-10), so leftovers kept
+    from an older retention setting are still found.
+
+    .PARAMETER StopWhenVersion
+    When the app holding the bare name already has this version, return just the
+    bare-name apps without reading the rest of the family. The version check only
+    needs to know that version is already in Intune, and this saves three or more
+    reads for the large majority of recipes, which have nothing new.
+
+    .PARAMETER NoAbsenceProof
+    Skip the full-list check when no app holds the bare name. Used straight after
+    an upload, where the earlier lookup already established what exists.
+
     .OUTPUTS
     Array of application objects sorted by version (newest first).
     #>
     param(
-        [Parameter(Mandatory=$true)]
-        [String]$DisplayName
+        [Parameter(Mandatory=$true, Position=0)]
+        [String]$DisplayName,
+
+        [ValidateRange(1, 10)]
+        [int]$MinGenerations = 2,
+
+        [AllowNull()][AllowEmptyString()]
+        [string]$StopWhenVersion,
+
+        [switch]$NoAbsenceProof
     )
 
     # The log report reads the display name from this line; keep its wording.
     Write-Log "Retrieving all versions of application with display name: $DisplayName" -Level Detail
 
-    # Invoke-YardstickGraphRequest already retries transient failures (5xx, 429,
-    # timeouts) with backoff, so this call is not wrapped in another retry layer:
-    # nesting the two multiplied a gateway timeout into up to 18 slow requests.
-    # A failure throws so the caller fails this recipe and the run carries on;
-    # all recipes share one process, so exiting here would end the whole run.
-    try {
-        $AllSimilarApps = Get-YardstickWin32App -DisplayName "$DisplayName" -ErrorAction Stop
-    } catch {
-        throw "Could not retrieve the versions of $DisplayName from Intune: $($_.Exception.Message)"
+    $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
+    $byId = [ordered]@{}
+    $addApps = {
+        param($Apps)
+        foreach ($app in @($Apps)) {
+            if ($app -and $app.id -and -not $byId.Contains([string]$app.id)) { $byId[[string]$app.id] = $app }
+        }
     }
 
-    if (-not $AllSimilarApps) {
+    # Invoke-YardstickGraphRequest already retries transient failures (5xx, 429,
+    # timeouts) with backoff, so these reads are not wrapped in another retry
+    # layer. A failure throws so the caller fails this recipe and the run carries
+    # on; the inner exception keeps the HTTP status for callers that need it.
+    try {
+        $bare = @(Get-YardstickWin32App -DisplayName $DisplayName -ErrorAction Stop)
+        & $addApps $bare
+
+        $bareVersions = @($bare | ForEach-Object { [string]$_.displayVersion })
+        if ($StopWhenVersion -and ($bareVersions -contains $StopWhenVersion)) {
+            Write-Log "$DisplayName $StopWhenVersion is the current app in Intune; not reading its older versions." -Level Detail
+        }
+        else {
+            & $addApps (Get-YardstickWin32App -DisplayName $anchorName -ErrorAction Stop)
+            for ($k = 1; $k -le 10; $k++) {
+                $generation = @(Get-YardstickWin32App -DisplayName "$DisplayName (N-$k)" -ErrorAction Stop)
+                & $addApps $generation
+                if ($generation.Count -eq 0 -and $k -ge $MinGenerations) { break }
+            }
+
+            if ($bare.Count -eq 0 -and -not $NoAbsenceProof) {
+                # Exact names are case-sensitive. Before reporting that the current
+                # app does not exist - which leads to a fresh upload beside it -
+                # check the whole list without regard to case.
+                Write-Log "No application in Intune is named exactly '$DisplayName'. Checking the full application list for one cased differently." -Level Detail
+                $familyPattern = [WildcardPattern]::Escape($DisplayName) + ' (N-*'
+                $found = @(Get-YardstickWin32App -ErrorAction Stop | Where-Object {
+                    ($_.displayName -eq $DisplayName) -or
+                    ($_.displayName -like $familyPattern) -or
+                    ($_.displayName -eq $anchorName)
+                })
+                foreach ($app in @($found | Where-Object { -not $byId.Contains([string]$_.id) })) {
+                    Write-Log "Intune names an app '$($app.displayName)', cased differently from the recipe's display name '$DisplayName'. Yardstick treats it as the same app; change the recipe's displayName to match Intune." -Level Warning
+                }
+                & $addApps $found
+            }
+        }
+    } catch {
+        throw [System.Exception]::new("Could not retrieve the versions of $DisplayName from Intune: $($_.Exception.Message)", $_.Exception)
+    }
+
+    $AllSimilarApps = @($byId.Values)
+    if ($AllSimilarApps.Count -eq 0) {
         Write-Log "No applications found with the name $DisplayName." -Level Detail
         return , @()
     }
-    
+
     # Include the current name, any (N-x) rename, and the Ω DETECT - anchor for the same app.
-    $anchorName = Get-DetectAnchorName -DisplayName $DisplayName
+    $familyPattern = [WildcardPattern]::Escape($DisplayName) + ' (N-*'
     $sortable = ($AllSimilarApps | Where-Object {
         ($_.DisplayName -eq $DisplayName) -or
-        ($_.DisplayName -like "$DisplayName (N-*") -or
+        ($_.DisplayName -like $familyPattern) -or
         ($_.DisplayName -eq $anchorName)
     })
     # Sort by version descending, then by createdDateTime descending. The unary
