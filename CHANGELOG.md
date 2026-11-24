@@ -85,6 +85,19 @@ All notable changes to Yardstick are recorded here. Versions follow
   sat inside the error handler that deletes an incomplete app.
 - A lookup now reads past one missing `(N-k)` name and stops after two in a row,
   so a version numbered after a gap is still found.
+- **Failure messages show the HTTP status and a readable server answer.** A
+  failed web request was reported as just its response body, so a vendor's HTML
+  outage page (hxd on 2026-11-23: mh-nexus.de answering 502) appeared as an empty
+  message. The report now leads with the status line, followed by the page text
+  with tags stripped, on one line of bounded length.
+- **A vendor answering 502, 503, 504 or 408 is retried** in the pre-download
+  stage after 5 and 15 seconds, like a dropped connection already was. Other HTTP
+  errors still fail at once.
+- **Uploads wait out Azure's signature propagation for about 45 seconds**
+  (five replays) instead of 9, without using up the block's retry budget, and
+  the expected first rejection is logged at Detail instead of as a warning.
+  Azure documents up to 30 seconds for a stored access policy to take effect;
+  on 2026-11-23 one block needed both of the two replays it had.
 - **Graph retries are logged.** A retried Graph request writes the status, how long
   the attempt took, the attempt number, and the `request-id` / `client-request-id`
   pair Microsoft support asks for (the first retry at Detail, later ones and giving

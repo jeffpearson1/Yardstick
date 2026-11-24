@@ -1061,7 +1061,10 @@ function Invoke-YardstickBlobRequestWithRetry {
         # instead is what put the 2026-09-29 firefox.arm64 upload into a state
         # it could never be renewed out of.
         [timespan]$SasPropagationWindow = [timespan]::FromSeconds(90),
-        [int]$MaximumSasReplays = 2,
+        # Azure documents up to 30 s for a stored access policy to take effect.
+        # Five replays wait 3+6+9+12+15 = 45 s in all; two (9 s) was not always
+        # enough - grammarly's block 9 needed both on 2026-11-23.
+        [int]$MaximumSasReplays = 5,
         # Deliberately generous. Unlike a GET, a PUT sends its whole body before
         # response headers arrive, so this timeout does bound the upload itself -
         # 10 minutes for an 8 MB block is a floor of roughly 0.1 Mbps, which no
@@ -1091,15 +1094,22 @@ function Invoke-YardstickBlobRequestWithRetry {
                 throw "$Label failed after $($attempt + 1) attempt(s): $detail"
             }
             $statusText = if ($status) { "HTTP $status" } else { 'no response' }
-            Write-YardstickIntuneLog "$Label failed (attempt $($attempt + 1)/$($MaximumRetryCount + 1), $statusText): $detail" -Level Warning
+            # IssuedAt is read defensively: an upload URI built before this
+            # field existed, or by a caller that hand-rolls the object, just
+            # falls through to the renewal path as it always did.
+            $issuedAt = Get-YardstickPropertyValue $UploadUri 'IssuedAt'
+            $age = if ($issuedAt) { [datetime]::UtcNow - $issuedAt } else { $null }
+            $propagating = $sasRejected -and $age -and $age -lt $SasPropagationWindow -and $sasReplays -lt $MaximumSasReplays
+            # A rejection of a just-minted signature is expected and handled, so it
+            # is not worth a warning in the run log.
+            $level = if ($propagating) { 'Detail' } else { 'Warning' }
+            Write-YardstickIntuneLog "$Label failed (attempt $($attempt + 1)/$($MaximumRetryCount + 1), $statusText): $detail" -Level $level
             if ($sasRejected) {
-                # IssuedAt is read defensively: an upload URI built before this
-                # field existed, or by a caller that hand-rolls the object, just
-                # falls through to the renewal path as it always did.
-                $issuedAt = Get-YardstickPropertyValue $UploadUri 'IssuedAt'
-                $age = if ($issuedAt) { [datetime]::UtcNow - $issuedAt } else { $null }
-                if ($age -and $age -lt $SasPropagationWindow -and $sasReplays -lt $MaximumSasReplays) {
+                if ($propagating) {
                     $sasReplays++
+                    # Waiting out propagation is bounded by MaximumSasReplays, not by
+                    # the retry budget, which is for real failures.
+                    $attempt--
                     $pause = 3 * $sasReplays
                     Write-YardstickIntuneLog "The upload signature is only $([int]$age.TotalSeconds)s old, so this is most likely a stored access policy that has not propagated. Replaying $Label in $pause second(s) without renewing." -Level Detail
                     Start-Sleep -Seconds $pause

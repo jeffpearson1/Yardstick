@@ -533,8 +533,32 @@ Describe 'Yardstick Intune content upload' {
                     -Query 'comp=block&blockid=AAA' -Body ([byte[]](1, 2, 3)) -Label 'Block 1 of 2'
 
                 $result.Uri | Should -Be 'https://blob/renewed?sig=new'
-                # Two replays of the original signature, then a renewal.
+                # Five replays of the original signature, then a renewal.
                 Should -Invoke Update-YardstickIntuneUploadUri -Times 1 -Exactly
+            }
+        }
+
+        It 'waits out propagation for about 45 seconds without using up the retry budget' {
+            InModuleScope YardstickIntune -Parameters @{ SasBody = $Script:SasRejectionBody } {
+                param($SasBody)
+                $Script:calls = 0
+                Mock Invoke-WebRequest {
+                    $Script:calls++
+                    if ($Script:calls -le 5) { throw (New-HttpErrorRecord -StatusCode 403 -Body $SasBody) }
+                }
+                Mock Update-YardstickIntuneUploadUri { throw 'should not have renewed' }
+                Mock Write-YardstickIntuneLog {}
+                Mock Start-Sleep {}
+
+                $fresh = [pscustomobject]@{ Uri = 'https://blob/fresh?sig=x'; ExpiresAt = $null; IssuedAt = [datetime]::UtcNow }
+                $result = Invoke-YardstickBlobRequestWithRetry -Method Put -UploadUri $fresh -FileResource 'files/1' `
+                    -Query 'comp=block&blockid=AAA' -Body ([byte[]](1, 2, 3)) -Label 'Block 9 of 11' -MaximumRetryCount 2
+
+                $result.Uri | Should -Be 'https://blob/fresh?sig=x'
+                $Script:calls | Should -Be 6
+                Should -Invoke Start-Sleep -Times 5 -Exactly
+                # Expected propagation lag is logged quietly, not as a warning.
+                Should -Invoke Write-YardstickIntuneLog -Times 0 -Exactly -ParameterFilter { $Level -eq 'Warning' }
             }
         }
     }
