@@ -2,13 +2,15 @@ url: https://github.com/qzind/tray
 urlRedirects: false
 preDownloadScript: |
   using module .\Modules\Custom\GithubDownloader.psm1
-  $downloadFileRegex = "qz-tray-([0-9]\.{0,1}){3}-x86_64\.exe"
+  # QZ re-spins a release by appending "+N" to the file name (v2.3.0 became
+  # qz-tray-2.3.0+1-x86_64.exe on 2026-11-19), and GitHub URL-encodes the "+".
+  $downloadFileRegex = 'qz-tray-\d+\.\d+\.\d+(?:(?:\+|%2B)\d+)?-x86_64\.exe$'
   $versionRegex = "(\.{0,1}[0-9]{1,2}){2,4}"
   $Script:downloader = [GithubDownloader]::new($URL, $downloadFileRegex, $versionRegex)
   $downloader.Update()
   $Version = $downloader.LatestVersion
   $URL = $downloader.URL
-  $filename = $downloader.filename
+  $filename = [Uri]::UnescapeDataString($downloader.filename)
   $registryDetectionValue = $Version
 installScript: <filename> /S
 uninstallScript: C:\Program Files (x86)\QZ Tray\uninstall.exe /S
