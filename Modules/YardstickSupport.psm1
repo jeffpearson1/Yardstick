@@ -2672,9 +2672,9 @@ function Get-SameAppAllVersions {
     The display name of the application to search for.
 
     .PARAMETER MinGenerations
-    How many "(N-k)" names to read even when an earlier one is missing. Reading
-    continues past this while each (N-k) exists, up to (N-10), so leftovers kept
-    from an older retention setting are still found.
+    How many "(N-k)" names to read even when an earlier one is missing. Past this,
+    reading stops after two missing generations in a row, up to (N-10), so
+    leftovers kept from an older retention setting are still found.
 
     .PARAMETER StopWhenVersion
     When the app holding the bare name already has this version, return just the
@@ -2728,10 +2728,15 @@ function Get-SameAppAllVersions {
         }
         else {
             & $addApps (Get-YardstickWin32App -DisplayName $anchorName -ErrorAction Stop)
+            # Stop after two missing generations in a row once past the floor, so
+            # a single gap (a pruned version kept behind a dependent) does not hide
+            # the versions numbered after it.
+            $misses = 0
             for ($k = 1; $k -le 10; $k++) {
                 $generation = @(Get-YardstickWin32App -DisplayName "$DisplayName (N-$k)" -ErrorAction Stop)
                 & $addApps $generation
-                if ($generation.Count -eq 0 -and $k -ge $MinGenerations) { break }
+                $misses = if ($generation.Count -eq 0) { $misses + 1 } else { 0 }
+                if ($misses -ge 2 -and $k -ge $MinGenerations) { break }
             }
 
             if ($bare.Count -eq 0 -and -not $NoAbsenceProof) {
@@ -2954,6 +2959,23 @@ function Get-DetectAnchor {
     $candidates = Get-YardstickWin32App -DisplayName $anchorName -ErrorAction SilentlyContinue
     if (-not $candidates) { return $null }
     return ($candidates | Where-Object DisplayName -eq $anchorName | Select-Object -First 1)
+}
+
+
+function Test-YardstickAppPublished {
+    <#
+    .SYNOPSIS
+    True when an app is published, or its state is unknown (objects built in tests).
+
+    .DESCRIPTION
+    One rule for every place that picks the current version or renumbers versions:
+    an app a failed upload left 'notPublished' or 'processing' has no usable
+    content, so it must never become current or be numbered ahead of a real version.
+    #>
+    param($App)
+    if ($null -eq $App) { return $false }
+    $state = [string]$App.publishingState
+    return (-not $state) -or ($state -eq 'published')
 }
 
 
@@ -3316,8 +3338,28 @@ function Set-YardstickSupersedence {
         $targets = @($fill) + @($reserved)
     }
 
-    # Strip stale forward links off every target so the newest app is the only parent.
+    # Resolve every target before changing anything. A target deleted since it was
+    # read (pruned by an operator, or by this run) is skipped here. The strip below
+    # used to run first, so a target that then failed to resolve left the old
+    # versions with no supersedence at all.
+    $supersedence = [System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]]::new()
+    $resolvedTargets = [System.Collections.Generic.List[object]]::new()
     foreach ($target in $targets) {
+        $targetType = if ($updateOnly.Contains($target.id)) { 'Update' } else { $Type }
+        # New-SupersedenceObject returns its array whole (unary comma), so do not
+        # wrap the call in @(): that would nest the array inside another.
+        $built = New-SupersedenceObject -TargetIds @($target.id) -Type $targetType
+        if (@($built).Count -gt 0) { $resolvedTargets.Add($target) | Out-Null }
+        foreach ($object in $built) { $supersedence.Add($object) | Out-Null }
+    }
+
+    if ($supersedence.Count -eq 0) {
+        Write-Log "No resolvable supersedence targets for $($NewApp.DisplayName). Skipping supersedence and leaving the existing links in place." -Level Warning
+        return 0
+    }
+
+    # Strip stale forward links off every target so the newest app is the only parent.
+    foreach ($target in $resolvedTargets) {
         try {
             if (@(Get-YardstickSupersedenceRelationship -Id $target.id -Direction Forward).Count -gt 0) {
                 Write-Log "Clearing stale supersedence on $($target.DisplayName) ($($target.id))." -Level Detail
@@ -3326,18 +3368,6 @@ function Set-YardstickSupersedence {
         } catch {
             Write-Log "Could not clear the existing supersedence on $($target.DisplayName) ($($target.id)): $_" -Level Warning
         }
-    }
-
-    $supersedence = [System.Collections.Generic.List[System.Collections.Specialized.OrderedDictionary]]::new()
-    foreach ($target in $targets) {
-        $targetType = if ($updateOnly.Contains($target.id)) { 'Update' } else { $Type }
-        $built = New-SupersedenceObject -TargetIds @($target.id) -Type $targetType
-        foreach ($object in $built) { $supersedence.Add($object) | Out-Null }
-    }
-
-    if ($supersedence.Count -eq 0) {
-        Write-Log "No resolvable supersedence targets for $($NewApp.DisplayName). Skipping supersedence." -Level Warning
-        return 0
     }
 
     # The log report matches this line; keep its wording (and no trailing period).

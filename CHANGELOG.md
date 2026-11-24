@@ -20,6 +20,41 @@ All notable changes to Yardstick are recorded here. Versions follow
   full list is read, in pages of 100, only when no app holds the display name, to
   find an app whose name Intune capitalises differently before treating the app as
   new; that case is logged as a warning.
+- **An upload is finished from what the run already knows.** After uploading, the
+  run looked the app's versions up by name again before moving assignments and
+  supersedence. That lookup lags a new app by 30-50 seconds and is one more call
+  that can time out: on 2026-11-23 it did, and calibre 9.19.0 was left with no
+  assignments and no supersedence. Maintenance now starts from the versions read
+  before the upload and the new app as the publish wait read it, re-reading each
+  older version by id (one deleted in the meantime is left out). The 4- and
+  5-second waits after each upload are gone.
+- **`-Repair` reads an app's versions once.** The renames it makes are carried
+  in memory into the version check and the sweep, instead of looking the app up
+  again right after renaming it.
+- **Supersedence is never left half-changed.** Targets are now resolved before any
+  old link is removed; a target deleted in the meantime is skipped, and if none
+  resolve the existing links are left alone. Before, a failure after the old links
+  were removed left the older versions with no supersedence at all.
+- **A step that fails during maintenance no longer stops the rest**, and the
+  report shows it: the app is listed with `incomplete: <steps>` and the log names
+  the `-Repair` command that finishes it. Reading an old version's assignments and
+  adding the default groups used to abort maintenance part-way.
+- **Pinning a new detection anchor no longer looks the anchor up by name**, which
+  could lag the rename and number the anchor back to (N-x).
+- **A manual drop stays in the dropbox until its upload is fully maintained**, so
+  a run that fails after the upload reaches the version check again next time.
+- **An unpublished app is never made the current version or numbered ahead of a
+  real one** by `-Repair` or a sweep; it is reported so it can be deleted.
+- **Two older versions at the same version are never deleted by sort order.** Both
+  are kept and a warning asks a person to choose.
+- **App creation is not resent after a server error.** A 5xx or a timeout can come
+  back after Intune created the app, so resending it made a duplicate. Each app
+  Yardstick creates now carries `Created by Yardstick, upload <time> <id>` in its
+  notes; when a create fails, the copy carrying that attempt's token is removed.
+- **A finished upload is kept when only the final read-back fails.** That read
+  sat inside the error handler that deletes an incomplete app.
+- A lookup now reads past one missing `(N-k)` name and stops after two in a row,
+  so a version numbered after a gap is still found.
 - **Graph retries are logged.** A retried Graph request writes the status, how long
   the attempt took, the attempt number, and the `request-id` / `client-request-id`
   pair Microsoft support asks for (the first retry at Detail, later ones and giving
