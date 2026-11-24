@@ -17,6 +17,15 @@ All notable changes to Yardstick are recorded here. Versions follow
   users for the first time). Anything else - a newer build someone uploaded by
   hand, or a version a lock rejects - is left alone with a warning. Turn it off
   with `autoHealInterruptedUploads: false`.
+- **A circuit breaker for Intune outages.** After two version lookups in a row fail
+  with a timeout, 408, 429 or 5xx, recipes are failed at once ("Not checked ...
+  nothing was changed in Intune") instead of each spending about 3.5 minutes on
+  retries - which would turn a full Intune outage into a run of many hours. Every
+  10 minutes one single-attempt exact-name lookup checks whether Intune is back,
+  and the next run picks up whatever was skipped. The check comes after the
+  dropbox and `minRunInterval` checks and before the run is recorded, so a recipe
+  that was not due is still skipped, and a throttled vendor's interval is not
+  used up. The end of the run says how many times the breaker opened.
 - **New failure stages separate "Intune changed" from "nothing changed".**
   **Intune Lookup** means Intune did not answer and nothing was changed.
   **Post-Upload Maintenance** means the new version is in Intune but its

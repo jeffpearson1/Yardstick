@@ -840,6 +840,102 @@ function Invoke-YardstickAppMaintenance {
 }
 
 
+function Test-YardstickTransientIntuneError {
+    <#
+    .SYNOPSIS
+    True when a failed Intune read is worth waiting out: no response at all (a
+    timeout or dropped connection), 408, 429 or a 5xx. Looks through wrapped
+    exceptions, since Get-SameAppAllVersions keeps the HTTP error as the inner one.
+    #>
+    param($ErrorRecord)
+    $exception = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } else { $ErrorRecord }
+    while ($exception) {
+        $responseProperty = $exception.PSObject.Properties['Response']
+        if ($responseProperty -and $null -ne $responseProperty.Value) {
+            $status = $null
+            try { $status = [int]$responseProperty.Value.StatusCode } catch { $status = $null }
+            if ($null -eq $status) { return $true }
+            return ($status -in 408, 429) -or ($status -ge 500 -and $status -le 599)
+        }
+        if ($exception -is [System.TimeoutException] -or $exception -is [System.Threading.Tasks.TaskCanceledException] -or
+            $exception -is [System.Net.Http.HttpRequestException]) {
+            return $true
+        }
+        $exception = $exception.InnerException
+    }
+    # A thrown string (no HTTP details at all) is treated as transient only when
+    # it names a gateway or availability failure.
+    return "$ErrorRecord" -match '\b(408|429|50[0-9])\b|timed out|Gateway Timeout|Service Unavailable'
+}
+
+function Register-YardstickIntuneLookupResult {
+    <#
+    .SYNOPSIS
+    Feeds one Intune version lookup's outcome to the circuit breaker.
+
+    .DESCRIPTION
+    $IntuneBreaker opens after Threshold transient failures in a row. While it is
+    open, recipes are failed at once without calling Intune (Test-YardstickIntuneBreaker),
+    instead of each spending about 3.5 minutes on retries the way 7 recipes did on
+    2026-11-23. A successful lookup closes it.
+    #>
+    param(
+        [switch]$Succeeded,
+        $ErrorRecord
+    )
+    if ($Succeeded) {
+        if ($IntuneBreaker.OpenUntil) {
+            Write-Log "Intune is answering version lookups again."
+        }
+        $IntuneBreaker.Consecutive = 0
+        $IntuneBreaker.OpenUntil = $null
+        return
+    }
+    if (-not (Test-YardstickTransientIntuneError -ErrorRecord $ErrorRecord)) { return }
+    $IntuneBreaker.Consecutive++
+    if ($IntuneBreaker.Consecutive -ge $IntuneBreaker.Threshold -and -not $IntuneBreaker.OpenUntil) {
+        $IntuneBreaker.OpenUntil = (Get-Date).AddMinutes($IntuneBreaker.CoolDownMinutes)
+        $IntuneBreaker.Opened++
+        Write-Log "Intune did not answer $($IntuneBreaker.Consecutive) version lookups in a row. Recipes are failed without calling Intune until $($IntuneBreaker.OpenUntil.ToString('HH:mm:ss')), when one lookup tests whether it is back. Nothing is changed in Intune for them; the next run picks them up." -Level Warning
+    }
+}
+
+function Test-YardstickIntuneBreaker {
+    <#
+    .SYNOPSIS
+    True when this recipe may call Intune; false when the breaker is open.
+
+    .DESCRIPTION
+    Once the cool-down has passed, one single-attempt exact-name lookup (the
+    cheapest read there is) decides: if it answers, the breaker closes; if not,
+    it stays open for another cool-down.
+    #>
+    if (-not $IntuneBreaker.OpenUntil) { return $true }
+    if ((Get-Date) -lt $IntuneBreaker.OpenUntil) { return $false }
+    if (Test-YardstickIntuneAvailable -DisplayName $Script:DisplayName) {
+        Write-Log "Intune is answering version lookups again."
+        $IntuneBreaker.Consecutive = 0
+        $IntuneBreaker.OpenUntil = $null
+        return $true
+    }
+    $IntuneBreaker.OpenUntil = (Get-Date).AddMinutes($IntuneBreaker.CoolDownMinutes)
+    Write-Log "Intune is still not answering. Trying again at $($IntuneBreaker.OpenUntil.ToString('HH:mm:ss'))." -Level Warning
+    return $false
+}
+
+function Test-YardstickIntuneAvailable {
+    param([Parameter(Mandatory)][string]$DisplayName)
+    $quotedName = [uri]::EscapeDataString($DisplayName.Replace("'", "''"))
+    try {
+        $null = Invoke-YardstickGraphRequest -ApiVersion beta -MaxAttempts 1 `
+            -Resource "deviceAppManagement/mobileApps?`$filter=isof('microsoft.graph.win32LobApp') and displayName eq '$quotedName'"
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+
 function Invoke-YardstickInterruptedUploadHeal {
     <#
     .SYNOPSIS
@@ -1698,6 +1794,18 @@ $GitHubDeferral = @{
     Recipes        = [System.Collections.Generic.List[object]]::new()
 }
 
+# When Intune stops answering, every recipe would otherwise spend about 3.5
+# minutes retrying its lookup before failing (7 recipes in a row on 2026-11-23).
+# After Threshold transient failures in a row the breaker opens, and recipes fail
+# at once with nothing changed until a single lookup shows Intune is back.
+$IntuneBreaker = @{
+    Threshold       = 2
+    CoolDownMinutes = 10
+    Consecutive     = 0
+    OpenUntil       = $null
+    Opened          = 0
+}
+
 # Main processing loop
 Reset-YardstickGraphStatistics
 Write-Log "Processing $(@($Applications).Count) recipe(s)."
@@ -1927,6 +2035,21 @@ while ($RecipePass.Count -gt 0) {
                 if (-not $runDue.IsDue) {
                     Write-Log "-Force is set: running despite minRunInterval ($($Script:MinRunInterval) day(s)); the last run was $($runDue.LastRun.ToString('yyyy-MM-dd HH:mm'))."
                 }
+            }
+
+            # While Intune is not answering, fail the recipe before it contacts the
+            # vendor or Intune. This sits after the due checks, so a recipe that was
+            # not going to run anyway is still skipped rather than failed, and
+            # before the run is recorded, so a throttled vendor's interval is not
+            # used up by a run that never happened.
+            if (-not (Test-YardstickIntuneBreaker)) {
+                Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version "Unknown" `
+                    -ErrorMessage "Not checked: Intune did not answer $($IntuneBreaker.Consecutive) version lookups in a row. Nothing was changed in Intune; Yardstick tries Intune again at $($IntuneBreaker.OpenUntil.ToString('HH:mm:ss')), and the next run picks this recipe up." `
+                    -FailureStage "Intune Lookup"
+                continue
+            }
+
+            if ($Script:MinRunInterval -gt 0 -and -not $IsDeferredReplay) {
                 try {
                     Set-YardstickRecipeLastRun -Path $RecipeRunHistoryPath -Id $AppId_Processing
                 } catch {
@@ -1981,9 +2104,11 @@ while ($RecipePass.Count -gt 0) {
                 }
             } catch {
                 # Nothing has changed in Intune for this recipe.
+                Register-YardstickIntuneLookupResult -ErrorRecord $_
                 Add-FailedApplication -ApplicationId $AppId_Processing -DisplayName $CurrentDisplayName -Version $Script:Version -ErrorMessage "$_" -FailureStage "Intune Lookup"
                 continue
             }
+            Register-YardstickIntuneLookupResult -Succeeded
 
             # Get-SameAppAllVersions returns newest first, but do not reach for
             # $ExistingVersions.displayVersion[0]: PowerShell unrolls a single-element
@@ -2368,6 +2493,9 @@ Write-Log "Finished processing $(@($Applications).Count) recipe(s)."
 $graphStats = Get-YardstickGraphStatistics
 $graphLevel = if ($graphStats.GaveUp -gt 0) { 'Warning' } else { 'Info' }
 Write-Log "Graph: $($graphStats.Requests) request(s); $($graphStats.Retried) retried ($($graphStats.RetrySleepSecs) s waiting); $($graphStats.GaveUp) gave up." -Level $graphLevel
+if ($IntuneBreaker.Opened -gt 0) {
+    Write-Log "Intune stopped answering version lookups $($IntuneBreaker.Opened) time(s) this run; the recipes failed meanwhile were not checked and nothing was changed for them." -Level Warning
+}
 
 # The watchdog stops at the end of the loop, not at the end of the script. What
 # follows is the email report, which can sit on a Read-Host waiting for an
