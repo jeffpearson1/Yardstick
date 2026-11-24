@@ -20,6 +20,20 @@ All notable changes to Yardstick are recorded here. Versions follow
   full list is read, in pages of 100, only when no app holds the display name, to
   find an app whose name Intune capitalises differently before treating the app as
   new; that case is logged as a warning.
+- **Graph retries are logged.** A retried Graph request writes the status, how long
+  the attempt took, the attempt number, and the `request-id` / `client-request-id`
+  pair Microsoft support asks for (the first retry at Detail, later ones and giving
+  up as warnings). Before, retries were silent: on 2026-11-23 about 58 minutes of
+  retried 504s looked like slow lookups. The run ends with a
+  `Graph: N request(s); N retried (N s waiting); N gave up.` line.
+- **An expiring token is refreshed between retries**, not only when a request
+  starts, and a 401 triggers one forced refresh.
+- **A Retry-After over 120 seconds is capped at 120**, so a single request cannot
+  stall the run for as long as Graph asks.
+- **A DELETE retried after a timeout no longer fails when the first attempt
+  already worked** (the retry's 404 counts as done).
+- Graph requests time out after 60 seconds instead of 120; Graph's own gateway
+  gives up at about 30.
 - **Log replay reports Intune lookup failures as Intune Lookup.**
   `Send-YardstickLogReport.ps1` labelled them "Version Validation".
 

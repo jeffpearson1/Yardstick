@@ -1524,6 +1524,7 @@ $GitHubDeferral = @{
 }
 
 # Main processing loop
+Reset-YardstickGraphStatistics
 Write-Log "Processing $(@($Applications).Count) recipe(s)."
 $RecipePass = @($Applications)
 while ($RecipePass.Count -gt 0) {
@@ -2136,6 +2137,11 @@ while ($RecipePass.Count -gt 0) {
     $RecipePass = @(Get-YardstickDeferredRecipe)
 }
 Write-Log "Finished processing $(@($Applications).Count) recipe(s)."
+# How hard Graph was to talk to this run. Retries are logged one by one as they
+# happen; this line makes a bad Intune day visible at a glance.
+$graphStats = Get-YardstickGraphStatistics
+$graphLevel = if ($graphStats.GaveUp -gt 0) { 'Warning' } else { 'Info' }
+Write-Log "Graph: $($graphStats.Requests) request(s); $($graphStats.Retried) retried ($($graphStats.RetrySleepSecs) s waiting); $($graphStats.GaveUp) gave up." -Level $graphLevel
 
 # The watchdog stops at the end of the loop, not at the end of the script. What
 # follows is the email report, which can sit on a Read-Host waiting for an
