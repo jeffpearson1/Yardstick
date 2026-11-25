@@ -1,0 +1,67 @@
+# TestDisk and PhotoRec ship together in CGSecurity's portable ZIP (no installer),
+# so the recipe copies the extracted folder to Program Files and adds Start Menu shortcuts for both.
+url: https://www.cgsecurity.org/wiki/TestDisk_Download
+urlRedirects: false
+preDownloadScript: |
+  $page = (Invoke-WebRequest -Uri 'https://www.cgsecurity.org/wiki/TestDisk_Download' -UseBasicParsing).Content
+  $stable = [regex]::Matches($page, 'testdisk-(\d+(?:\.\d+)+)\.win64\.zip') |
+    ForEach-Object { [version]$_.Groups[1].Value } | Sort-Object -Descending -Unique | Select-Object -First 1
+  if (-not $stable) { throw 'Could not find a stable TestDisk win64 ZIP on the CGSecurity download page.' }
+  $version = $stable.ToString()
+  $fileName = "testdisk-$version.win64.zip"
+  $url = "https://www.cgsecurity.org/$fileName"
+  $fileDetectionVersion = $version
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'TestDisk & PhotoRec'
+  $extractDir = Join-Path (Get-Location) 'testdisk-extract'
+  if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [System.IO.Compression.ZipFile]::ExtractToDirectory((Join-Path (Get-Location) '<filename>'), $extractDir)
+  $exe = Get-ChildItem -Path $extractDir -Filter photorec_win.exe -Recurse | Select-Object -First 1
+  if (-not $exe) { throw 'Could not locate photorec_win.exe in the downloaded ZIP.' }
+  if (-not (Test-Path (Join-Path $exe.DirectoryName 'testdisk_win.exe'))) { throw 'Could not locate testdisk_win.exe in the downloaded ZIP.' }
+  # Remove the old PhotoRec-only package location if present
+  $oldDir = Join-Path $env:ProgramFiles 'PhotoRec'
+  if (Test-Path $oldDir) { Remove-Item $oldDir -Recurse -Force }
+  $oldMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\PhotoRec'
+  if (Test-Path $oldMenu) { Remove-Item $oldMenu -Recurse -Force }
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $exe.DirectoryName '*') -Destination $installDir -Recurse -Force
+  $menuDir = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\TestDisk & PhotoRec'
+  New-Item -ItemType Directory -Path $menuDir -Force | Out-Null
+  $shell = New-Object -ComObject WScript.Shell
+  foreach ($item in @(@('TestDisk (Console)', 'testdisk_win.exe'), @('PhotoRec (GUI)', 'qphotorec_win.exe'), @('PhotoRec (Console)', 'photorec_win.exe'))) {
+    $link = $shell.CreateShortcut((Join-Path $menuDir "$($item[0]).lnk"))
+    $link.TargetPath = Join-Path $installDir $item[1]
+    $link.WorkingDirectory = $installDir
+    $link.Save()
+  }
+  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'TestDisk & PhotoRec'
+  $menuDir = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\TestDisk & PhotoRec'
+  Get-Process -Name photorec_win, qphotorec_win, testdisk_win -ErrorAction SilentlyContinue | Stop-Process -Force
+  if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+  if (Test-Path $menuDir) { Remove-Item $menuDir -Recurse -Force }
+iconFile: testdiskphotorec.png
+id: testdiskphotorec
+displayName: TestDisk & PhotoRec
+publisher: CGSecurity
+description: TestDisk recovers lost partitions and repairs boot sectors, and PhotoRec recovers lost files from hard disks, memory cards and other media. This package installs the 64-bit TestDisk and PhotoRec toolset together.
+fileType: zip
+detectionType: file
+fileDetectionPath: 'C:\Program Files\TestDisk & PhotoRec'
+fileDetectionName: photorec_win.exe
+fileDetectionMethod: version
+fileDetectionOperator: greaterThanOrEqual
+additionalDetectionRules:
+  - detectionType: file
+    fileDetectionPath: 'C:\Program Files\TestDisk & PhotoRec'
+    fileDetectionName: testdisk_win.exe
+    fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

@@ -1,0 +1,123 @@
+# The Sleuth Kit ships for Windows only as a portable ZIP of command-line tools (no installer,
+# no embedded version info), published on the project's official GitHub releases. The recipe
+# expands it to Program Files, adds it to the machine PATH and publishes its own ARP entry,
+# like sysinternals. The ZIP holds 32-bit binaries, which run on 64-bit Windows.
+url: https://github.com/sleuthkit/sleuthkit
+urlRedirects: false
+preDownloadScript: |
+  using module .\Modules\Custom\GithubDownloader.psm1
+  $Script:downloader = [GithubDownloader]::new($url, 'sleuthkit-\d+(\.\d+)+-win32\.zip$', '\d+(\.\d+)+')
+  $downloader.Update()
+  $version = $downloader.LatestVersion
+  $url = $downloader.URL
+  $fileName = $downloader.filename
+fileType: zip
+powerShellInstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Sleuth Kit'
+  $extractDir = Join-Path (Get-Location) 'sleuthkit-extract'
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [System.IO.Compression.ZipFile]::ExtractToDirectory((Join-Path (Get-Location) '<filename>'), $extractDir)
+
+  $fls = Get-ChildItem -Path $extractDir -Filter fls.exe -Recurse | Select-Object -First 1
+  if (-not $fls) { throw 'Expanded Sleuth Kit ZIP does not contain fls.exe.' }
+  $root = Split-Path -Parent $fls.DirectoryName
+
+  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $root '*') -Destination $installDir -Recurse -Force
+
+  $binDir = Join-Path $installDir 'bin'
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if (($machinePath -split ';') -notcontains $binDir) {
+    [Environment]::SetEnvironmentVariable('Path', (($machinePath.TrimEnd(';'), $binDir) -join ';'), 'Machine')
+  }
+
+  $arpKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SleuthKit'
+  New-Item -Path $arpKey -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayName' -Value 'The Sleuth Kit' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'DisplayVersion' -Value '<version>' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'Publisher' -Value 'Brian Carrier' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'InstallLocation' -Value $installDir -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoModify' -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $arpKey -Name 'NoRepair' -Value 1 -PropertyType DWord -Force | Out-Null
+
+  $menuDir = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'The Sleuth Kit'
+  if (Test-Path -LiteralPath $menuDir) { Remove-Item -LiteralPath $menuDir -Recurse -Force }
+  New-Item -ItemType Directory -Path $menuDir -Force | Out-Null
+  $shell = New-Object -ComObject WScript.Shell
+  $link = $shell.CreateShortcut((Join-Path $menuDir 'Sleuth Kit Command Prompt.lnk'))
+  $link.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+  $link.Arguments = '/k "set PATH=' + $binDir + ';%PATH%"'
+  $link.WorkingDirectory = $installDir
+  $link.Description = 'Command prompt with The Sleuth Kit tools on the PATH'
+  $link.IconLocation = (Join-Path $binDir 'fls.exe') + ',0'
+  $link.Save()
+  $link = $shell.CreateShortcut((Join-Path $menuDir 'Sleuth Kit Tools Folder.lnk'))
+  $link.TargetPath = $binDir
+  $link.Save()
+  foreach ($doc in 'README.txt', 'README-win32.txt', 'NEWS.txt') {
+    $docPath = Join-Path $installDir $doc
+    if (Test-Path -LiteralPath $docPath) {
+      $link = $shell.CreateShortcut((Join-Path $menuDir ([IO.Path]::GetFileNameWithoutExtension($doc) + '.lnk')))
+      $link.TargetPath = $docPath
+      $link.Save()
+    }
+  }
+
+  Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+powerShellUninstallScript: |
+  $installDir = Join-Path $env:ProgramFiles 'Sleuth Kit'
+  $binDir = Join-Path $installDir 'bin'
+
+  Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($installDir, [StringComparison]::OrdinalIgnoreCase) } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 1
+
+  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+  $menuDir = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'The Sleuth Kit'
+  Remove-Item -LiteralPath $menuDir -Recurse -Force -ErrorAction SilentlyContinue
+
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $newPath = (($machinePath -split ';') | Where-Object { $_ -and ($_ -ne $binDir) }) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+
+  Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SleuthKit' -Recurse -Force -ErrorAction SilentlyContinue
+iconFile: sleuthkit.png
+id: sleuthkit
+displayName: The Sleuth Kit
+publisher: Brian Carrier
+description: The Sleuth Kit is a library and collection of command-line digital forensics tools (such as fls, icat, mmls and tsk_recover) for analysing disk images and recovering files from file systems.
+detectionType: script
+detectionScript: |
+  $expectedText = '<version>'
+  $expected = $null
+  if (-not [version]::TryParse($expectedText, [ref]$expected)) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $props = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SleuthKit' -ErrorAction SilentlyContinue
+  if (-not $props) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  if (-not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Sleuth Kit\bin\fls.exe'))) {
+    Write-Output 'Not Detected'
+    exit 1
+  }
+
+  $found = $null
+  if ([version]::TryParse(([string]$props.DisplayVersion), [ref]$found) -and $found -ge $expected) {
+    Write-Output 'Detected'
+    exit 0
+  }
+  Write-Output 'Not Detected'
+  exit 1
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2
