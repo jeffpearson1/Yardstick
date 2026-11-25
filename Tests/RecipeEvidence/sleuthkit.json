@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "sleuthkit",
+  "recipePath": "Recipes/sleuthkit.yaml",
+  "recipeSha256": "5216c3d4cf0b051efd4d5c175fb288db316f3403cbad98ef5fce5807ca0ae80a",
+  "validated": true,
+  "verdict": "ValidatedWithWarnings",
+  "reason": "",
+  "testedAt": "2026-11-25T19:52:14Z",
+  "studioVersion": "0.12.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "sleuthkit-4.15.0-win32.zip",
+    "version": "4.15.0",
+    "sha256": "C2EBAB8105B893D97BD8CE35B88E01985E2A106EFC97F03ADF95840A631B20CE",
+    "signer": ""
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Warn",
+      "detail": "sleuthkit-4.15.0-win32.zip v4.15.0 signature=UnknownError"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (script: exit=1 stdout='Not Detected')"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=0 stdout='Detected'"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "script: exit=1 stdout='Not Detected'"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}

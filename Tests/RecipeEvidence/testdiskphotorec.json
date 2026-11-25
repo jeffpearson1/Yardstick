@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "testdiskphotorec",
+  "recipePath": "Recipes/testdiskphotorec.yaml",
+  "recipeSha256": "76beff7c1725c605667ba222d825b95b924de017a571c83fade8deb9b03780a3",
+  "validated": true,
+  "verdict": "ValidatedWithWarnings",
+  "reason": "",
+  "testedAt": "2026-11-25T19:33:30Z",
+  "studioVersion": "0.12.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "testdisk-7.2.win64.zip",
+    "version": "7.2",
+    "sha256": "E97E203CE77B6B1A3A37D01BECCF069DC6C4632B579FFBB82AE739CDDA229F38",
+    "signer": ""
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Warn",
+      "detail": "testdisk-7.2.win64.zip v7.2 signature=UnknownError"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (file/version + file/exists: FAIL 'C:\\Program Files\\TestDisk & PhotoRec\\photorec_win.exe' does not exist | FAIL 'C:\\Program Files\\TestDisk & PhotoRec\\testdisk_win.exe' does not exist)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "file/version + file/exists: PASS 'C:\\Program Files\\TestDisk & PhotoRec\\photorec_win.exe' version '7.2' greaterThanOrEqual '7.2' | PASS 'C:\\Program Files\\TestDisk & PhotoRec\\testdisk_win.exe' exists"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "file/version + file/exists: FAIL 'C:\\Program Files\\TestDisk & PhotoRec\\photorec_win.exe' does not exist | FAIL 'C:\\Program Files\\TestDisk & PhotoRec\\testdisk_win.exe' does not exist"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
