@@ -31,7 +31,44 @@ powerShellInstallScript: |
   if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
   New-Item -ItemType Directory -Path $target -Force | Out-Null
   [System.IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $PWD '<filename>'), $target)
+
+  # Godot has no installer, so create the all-users Start Menu shortcut ourselves. There is one shortcut,
+  # "Godot Engine", always pointing at the version installed last (versions live side by side under
+  # Program Files\Godot\<version>). The release asset is <exe>.zip, so the exe is the filename minus .zip.
+  $exePath = Join-Path $target ('<filename>' -replace '\.zip$', '')
+  if (-not (Test-Path -LiteralPath $exePath)) { throw "Godot executable not found after extraction: $exePath" }
+  $shell = New-Object -ComObject WScript.Shell
+  $lnk = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Godot Engine.lnk'))
+  $lnk.TargetPath = $exePath
+  $lnk.WorkingDirectory = $target
+  $lnk.Description = 'Godot Engine'
+  $lnk.IconLocation = "$exePath,0"
+  $lnk.Save()
+
+  # The same ZIP ships a console build (<name>_win64_console.exe) that keeps a console window open for
+  # log output. Give it its own shortcut, repointed on each install like the main one.
+  $consoleName = ('<filename>' -replace '\.exe\.zip$', '') + '_console.exe'
+  $consolePath = Join-Path $target $consoleName
+  if (-not (Test-Path -LiteralPath $consolePath)) { throw "Godot console executable not found after extraction: $consolePath" }
+  $consoleLnk = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Godot Engine (Console).lnk'))
+  $consoleLnk.TargetPath = $consolePath
+  $consoleLnk.WorkingDirectory = $target
+  $consoleLnk.Description = 'Godot Engine (Console)'
+  $consoleLnk.IconLocation = "$consolePath,0"
+  $consoleLnk.Save()
 powerShellUninstallScript: |
+  # Remove each Start Menu shortcut only if it points into this version. When a newer version has already
+  # been installed (supersedence), the shortcut belongs to it and must stay.
+  foreach ($shortcutName in 'Godot Engine.lnk', 'Godot Engine (Console).lnk') {
+    $shortcutPath = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) $shortcutName
+    if (Test-Path -LiteralPath $shortcutPath) {
+      $shortcutTarget = $null
+      try { $shortcutTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath).TargetPath } catch { }
+      if (-not $shortcutTarget -or $shortcutTarget -like 'C:\Program Files\Godot\<version>\*') {
+        Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
   Remove-Item -LiteralPath 'C:\Program Files\Godot\<version>' -Recurse -Force -ErrorAction SilentlyContinue
   # Remove the shared parent only once the last version has been uninstalled.
   $root = 'C:\Program Files\Godot'
