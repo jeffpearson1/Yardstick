@@ -1,0 +1,84 @@
+# Portable-ZIP pattern (no vendor installer exists), same as Recipes\godotengine.yaml, but for the
+# .NET (C#/Mono) editor build, which ships as a ZIP containing a folder with the exe and GodotSharp.
+url: https://github.com/godotengine/godot
+urlRedirects: false
+preDownloadScript: |
+  # Godot publishes 3.x maintenance releases after 4.x ones, so pick the highest stable version.
+  $godotReleases = @(Invoke-YardstickGitHubApi 'repos/godotengine/godot/releases' |
+    Where-Object { -not $_.prerelease -and -not $_.draft -and $_.tag_name -match '^([0-9]+(?:\.[0-9]+){1,2})-stable$' } |
+    ForEach-Object {
+      $text = ($_.tag_name -replace '-stable$', '')
+      $parts = @($text -split '\.')
+      if ($parts.Count -lt 3) { $parts += '0' }
+      [pscustomobject]@{ Release = $_; Ver = [version]($parts -join '.'); Text = $text }
+    } | Sort-Object Ver -Descending)
+  if (-not $godotReleases) { throw 'No stable Godot release found.' }
+  $godotAsset = @($godotReleases[0].Release.assets | Where-Object { $_.name -match '^Godot_v.*_mono_win64\.zip$' })
+  if ($godotAsset.Count -ne 1) { throw "Release $($godotReleases[0].Text) must have exactly one mono win64 zip; found $($godotAsset.Count)." }
+  $version = $godotReleases[0].Text
+  $url = $godotAsset[0].browser_download_url
+  $fileName = $godotAsset[0].name
+  $fileDetectionPath = "C:\Program Files\Godot .NET\$version"
+  # fileDetectionName is NOT placeholder-expanded by Yardstick, so derive it here.
+  # The exe inside the ZIP is named after the ZIP.
+  $fileDetectionName = $fileName -replace '\.zip$', '.exe'
+powerShellInstallScript: |
+  $target = 'C:\Program Files\Godot .NET\<version>'
+  $baseName = '<filename>' -replace '\.zip$', ''
+  $temp = Join-Path $env:TEMP ('godotnet_' + [guid]::NewGuid().ToString('N'))
+  # Extract with .NET directly: Expand-Archive in Windows PowerShell 5.1 can bind to the PowerShell 7
+  # Archive module via an inherited PSModulePath and fail.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [System.IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $PWD '<filename>'), $temp)
+  # The ZIP wraps everything in a folder named after the ZIP; install its contents directly.
+  $source = Join-Path $temp $baseName
+  if (-not (Test-Path -LiteralPath $source)) { $source = $temp }
+  if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+  New-Item -ItemType Directory -Path $target -Force | Out-Null
+  Copy-Item -Path (Join-Path $source '*') -Destination $target -Recurse -Force
+  Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+
+  # One all-users Start Menu shortcut per entry, always pointing at the version installed last
+  # (versions live side by side under Program Files\Godot .NET\<version>).
+  $shell = New-Object -ComObject WScript.Shell
+  $programs = [Environment]::GetFolderPath('CommonPrograms')
+  foreach ($entry in @(@{ Name = 'Godot Engine - .NET'; Exe = "$baseName.exe" }, @{ Name = 'Godot Engine - .NET (Console)'; Exe = "${baseName}_console.exe" })) {
+    $exePath = Join-Path $target $entry.Exe
+    if (-not (Test-Path -LiteralPath $exePath)) { throw "Godot executable not found after extraction: $exePath" }
+    $lnk = $shell.CreateShortcut((Join-Path $programs ($entry.Name + '.lnk')))
+    $lnk.TargetPath = $exePath
+    $lnk.WorkingDirectory = $target
+    $lnk.Description = $entry.Name
+    $lnk.IconLocation = "$exePath,0"
+    $lnk.Save()
+  }
+powerShellUninstallScript: |
+  # Remove each shortcut only if it points into this version; a newer version owns it otherwise.
+  foreach ($shortcutName in 'Godot Engine - .NET.lnk', 'Godot Engine - .NET (Console).lnk') {
+    $shortcutPath = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) $shortcutName
+    if (Test-Path -LiteralPath $shortcutPath) {
+      $shortcutTarget = $null
+      try { $shortcutTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath).TargetPath } catch { }
+      if (-not $shortcutTarget -or $shortcutTarget -like 'C:\Program Files\Godot .NET\<version>\*') {
+        Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+  Remove-Item -LiteralPath 'C:\Program Files\Godot .NET\<version>' -Recurse -Force -ErrorAction SilentlyContinue
+  $root = 'C:\Program Files\Godot .NET'
+  if ((Test-Path -LiteralPath $root) -and -not (Get-ChildItem -LiteralPath $root -Force)) {
+    Remove-Item -LiteralPath $root -Force -ErrorAction SilentlyContinue
+  }
+iconFile: godot.png
+id: godotenginenet
+displayName: Godot Engine - .NET
+publisher: Godot Engine
+description: Godot is a free and open-source game engine for creating 2D and 3D applications. This is the .NET (C#) build; it requires the .NET SDK to build C# projects.
+detectionType: file
+fileDetectionPath:
+fileDetectionName:
+fileDetectionMethod: exists
+architecture: x64
+installExperience: system
+restartBehavior: suppress
+minOSVersion: W10_20H2

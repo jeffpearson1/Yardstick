@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "recipeId": "godotenginenet",
+  "recipePath": "Recipes/godotenginenet.yaml",
+  "recipeSha256": "d06329ab8e29bdbf5fc074fe947b2e8d44c4ac31c3e5a8b77beb9593fdaab848",
+  "validated": true,
+  "verdict": "ValidatedWithWarnings",
+  "reason": "",
+  "testedAt": "2026-11-25T20:15:11Z",
+  "studioVersion": "0.12.0",
+  "installExperience": "system",
+  "installer": {
+    "fileName": "Godot_v4.7.2-stable_mono_win64.zip",
+    "version": "4.7.2",
+    "sha256": "A2A48473A7414C5F19FAB690518CAEBB738C09EF9601F6BD2388676A7F53B3C0",
+    "signer": ""
+  },
+  "phases": [
+    {
+      "name": "Schema",
+      "status": "Pass",
+      "detail": ""
+    },
+    {
+      "name": "Download",
+      "status": "Warn",
+      "detail": "Godot_v4.7.2-stable_mono_win64.zip v4.7.2 signature=UnknownError"
+    },
+    {
+      "name": "PreDetect",
+      "status": "Pass",
+      "detail": "Not detected (file/exists: 'C:\\Program Files\\Godot .NET\\4.7.2\\Godot_v4.7.2-stable_mono_win64.exe' does not exist)"
+    },
+    {
+      "name": "Install",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\install.ps1'"
+    },
+    {
+      "name": "PostInstallDetect",
+      "status": "Pass",
+      "detail": "file/exists: 'C:\\Program Files\\Godot .NET\\4.7.2\\Godot_v4.7.2-stable_mono_win64.exe' exists"
+    },
+    {
+      "name": "Uninstall",
+      "status": "Pass",
+      "detail": "exit=0 timedOut=False host=x86 cmd='powershell.exe -noprofile -executionpolicy bypass -file .\\uninstall.ps1'"
+    },
+    {
+      "name": "PostUninstallDetect",
+      "status": "Pass",
+      "detail": "file/exists: 'C:\\Program Files\\Godot .NET\\4.7.2\\Godot_v4.7.2-stable_mono_win64.exe' does not exist"
+    },
+    {
+      "name": "Residue",
+      "status": "Pass",
+      "detail": "0 ARP entries and 0 directories remain"
+    }
+  ]
+}
